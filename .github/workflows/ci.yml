@@ -1,0 +1,97 @@
+name: StoneOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stoneos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DATABASE_URL: postgresql://stoneos:stoneos_ci@127.0.0.1:5432/stoneos
+  SESSION_SECRET: ci-session-secret-not-for-production-use-32
+  NEXT_PUBLIC_API_URL: http://localhost:4000
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: stoneos
+          POSTGRES_PASSWORD: stoneos_ci
+          POSTGRES_DB: stoneos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stoneos -d stoneos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Validate Prisma
+        run: npm run prisma:validate --workspace=@stoneos/api
+      - name: Generate Prisma client
+        run: npm run prisma:generate --workspace=@stoneos/api
+      - name: Apply migrations
+        run: npm run prisma:migrate:deploy --workspace=@stoneos/api
+      - name: Unit and integration tests
+        run: npm test
+      - name: Typecheck
+        run: npm run typecheck
+      - name: API build
+        run: npm run build --workspace=@stoneos/api
+      - name: Web build
+        run: npm run build --workspace=@stoneos/web
+
+  images:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -f infra/docker/api.Dockerfile -t stoneos-api:ci .
+      - name: Build web image
+        run: docker build -f infra/docker/web.Dockerfile -t stoneos-web:ci --build-arg NEXT_PUBLIC_API_URL=http://localhost:4000 .
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform -chdir=infra/terraform/oci fmt -check
+      - run: terraform -chdir=infra/terraform/oci init -backend=false
+      - run: terraform -chdir=infra/terraform/oci validate
+      - run: terraform -chdir=infra/terraform/aws fmt -check
+      - run: terraform -chdir=infra/terraform/aws init -backend=false
+      - run: terraform -chdir=infra/terraform/aws validate
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"

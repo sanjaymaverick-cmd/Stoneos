@@ -1,0 +1,42 @@
+{
+  "name": "@stoneos/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start:dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json",
+    "lint": "echo 'api lint uses tsc'",
+    "test": "node --import tsx --test --test-reporter spec src/modules/auth/auth.test.ts src/modules/admin/users.test.ts src/modules/inventory/inventory.test.ts src/modules/tally/tally.test.ts test/integration.test.ts",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "prisma:migrate": "prisma migrate dev --schema prisma/schema.prisma",
+    "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "prisma:validate": "prisma validate --schema prisma/schema.prisma",
+    "bootstrap": "tsx src/bootstrap.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "10.4.22",
+    "@nestjs/core": "10.4.22",
+    "@nestjs/platform-express": "10.4.22",
+    "@nestjs/swagger": "8.1.1",
+    "@prisma/client": "5.22.0",
+    "@stoneos/auth": "0.1.0",
+    "@stoneos/contracts": "0.1.0",
+    "@stoneos/domain": "0.1.0",
+    "@stoneos/storage": "0.1.0",
+    "class-transformer": "0.5.1",
+    "class-validator": "0.14.2",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.3",
+    "@types/node": "^24.3.0",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "prisma": "5.22.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

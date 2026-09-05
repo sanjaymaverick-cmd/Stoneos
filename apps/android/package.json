@@ -1,0 +1,15 @@
+{
+  "name": "@stoneos/android",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "cap:init": "npx cap add android",
+    "cap:sync": "npx cap sync android",
+    "open": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "6.2.0",
+    "@capacitor/cli": "6.2.0",
+    "@capacitor/core": "6.2.0"
+  }
+}

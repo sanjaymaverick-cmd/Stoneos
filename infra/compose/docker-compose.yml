@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: stoneos
+      POSTGRES_PASSWORD: stoneos_dev_only
+      POSTGRES_DB: stoneos
+    ports:
+      - "5432:5432"
+    volumes:
+      - stoneos_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stoneos -d stoneos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  stoneos_pg_data:

@@ -1,0 +1,20 @@
+{
+  "name": "@stoneos/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.stoneos.desktop",
+    "productName": "StoneOS",
+    "files": ["main.cjs", "preload.cjs"],
+    "win": { "target": "nsis" }
+  }
+}

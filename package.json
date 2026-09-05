@@ -1,0 +1,31 @@
+{
+  "name": "stoneos",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Production granite factory management platform",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run start:dev --workspace=@stoneos/api",
+    "dev:web": "npm run dev --workspace=@stoneos/web",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:api": "npm run test --workspace=@stoneos/api",
+    "db:migrate": "npm run prisma:migrate --workspace=@stoneos/api",
+    "db:migrate:deploy": "npm run prisma:migrate:deploy --workspace=@stoneos/api",
+    "db:generate": "npm run prisma:generate --workspace=@stoneos/api",
+    "bootstrap": "npm run bootstrap --workspace=@stoneos/api",
+    "docker:dev": "docker compose -f infra/compose/docker-compose.yml up -d",
+    "docker:prod:smoke": "docker compose -f infra/compose/docker-compose.prod.yml up --build"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "allowScripts": {
+    "@embedded-postgres/windows-x64@18.4.0-beta.17": true
+  }
+}

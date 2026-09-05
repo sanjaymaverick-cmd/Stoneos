@@ -1,0 +1,11 @@
+node_modules
+.git
+.next
+dist
+coverage
+apps/desktop
+apps/android
+infra/terraform
+**/.env
+var
+playwright-report

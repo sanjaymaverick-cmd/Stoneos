@@ -1,0 +1,29 @@
+{
+  "name": "@stoneos/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'web lint uses tsc'",
+    "test": "node --import tsx --test lib/routePolicy.test.ts",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@stoneos/contracts": "0.1.0",
+    "@stoneos/sync-client": "0.1.0",
+    "next": "^15.5.25",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/react": "19.1.12",
+    "@types/react-dom": "19.1.9",
+    "@playwright/test": "1.55.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

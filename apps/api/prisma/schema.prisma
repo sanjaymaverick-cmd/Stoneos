@@ -1,0 +1,785 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  owner
+  manager
+  admin
+  supervisor
+  operator
+  inventory
+  sales
+  accountant
+  auditor
+}
+
+enum FactoryOperatingStatus {
+  SETUP
+  OPENING_COUNT_IN_PROGRESS
+  OPENING_PENDING_APPROVAL
+  LIVE
+  LOCKED
+}
+
+enum InventoryLocationType {
+  RAW_YARD
+  B21_QUEUE
+  B21_WIP
+  UNPOLISHED_STOCK
+  LPM_QUEUE
+  LPM_WIP
+  FINISHED_STOCK
+  HOLD
+  PACKING
+  DELIVERED
+}
+
+enum InventoryMovementType {
+  OPENING_RECEIPT
+  GOODS_RECEIPT
+  TRANSFER
+  PRODUCTION_ISSUE
+  PRODUCTION_COMPLETION
+  POLISHING_ISSUE
+  POLISHING_COMPLETION
+  SALES_RESERVATION
+  RESERVATION_RELEASE
+  PACKING
+  DELIVERY
+  RETURN
+  ADJUSTMENT
+  REVERSAL
+}
+
+enum OpeningSnapshotStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum InventoryKind {
+  RAW_BLOCK
+  UNPOLISHED_SLAB
+  POLISHED_SLAB
+}
+
+enum OwnershipType {
+  COMPANY_OWNED
+  CUSTOMER_OWNED
+  CONSIGNMENT
+}
+
+enum MachineType {
+  CUTTING
+  POLISHING
+}
+
+enum ProductionSessionStatus {
+  IN_PROGRESS
+  COMPLETED
+  ABORTED
+}
+
+enum LpmProcessType {
+  GRINDING
+  RESIN
+  POLISHING
+}
+
+enum SalesOrderStatus {
+  DRAFT
+  CONFIRMED
+  PARTIALLY_DELIVERED
+  DELIVERED
+  CANCELLED
+}
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+}
+
+enum ConflictPolicy {
+  STRICT
+  AUDITED_OVERWRITE
+}
+
+model Factory {
+  id              String                  @id @default(uuid())
+  name            String
+  location        String?
+  operatingStatus FactoryOperatingStatus  @default(SETUP) @map("operating_status")
+  goLiveDate      DateTime?               @map("go_live_date")
+  createdAt       DateTime                @default(now()) @map("created_at")
+  version         Int                     @default(0)
+
+  users              AppUser[]
+  sessions           AuthSession[]
+  auditEvents        AuditEvent[]
+  locations          InventoryLocation[]
+  suppliers          Supplier[]
+  customers          Customer[]
+  machines           Machine[]
+  vehicles           Vehicle[]
+  rawBlocks          RawBlock[]
+  slabs              Slab[]
+  movements          InventoryMovement[]
+  openingSnapshots   OpeningInventorySnapshot[]
+  cuttingSessions    CuttingSession[]
+  polishingSessions  PolishingSession[]
+  quotations         Quotation[]
+  salesOrders        SalesOrder[]
+  packingLists       PackingList[]
+  deliveries         Delivery[]
+  invoices           Invoice[]
+  payments           Payment[]
+  expenses           Expense[]
+  tallyBatches       TallyImportBatch[]
+  files              StoredFile[]
+  syncOps            SyncOperation[]
+  consumables        Consumable[]
+  maintenanceJobs    MaintenanceJob[]
+  returns            CustomerReturn[]
+
+  @@map("factory")
+}
+
+model AppUser {
+  id                 String   @id @default(uuid())
+  factoryId          String   @map("factory_id")
+  factory            Factory  @relation(fields: [factoryId], references: [id])
+  username           String   @unique
+  email              String?  @unique
+  name               String
+  role               UserRole
+  active             Boolean  @default(true)
+  passwordHash       String   @map("password_hash")
+  mustChangePassword Boolean  @default(true) @map("must_change_password")
+  tokenVersion       Int      @default(0) @map("token_version")
+  createdAt          DateTime @default(now()) @map("created_at")
+  version            Int      @default(0)
+
+  sessions AuthSession[]
+
+  @@index([factoryId])
+  @@map("app_user")
+}
+
+model AuthSession {
+  id        String   @id @default(uuid())
+  factoryId String   @map("factory_id")
+  factory   Factory  @relation(fields: [factoryId], references: [id])
+  userId    String   @map("user_id")
+  user      AppUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_session")
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid())
+  factoryId  String   @map("factory_id")
+  factory    Factory  @relation(fields: [factoryId], references: [id])
+  actorId    String?  @map("actor_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  payload    Json
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([factoryId, createdAt])
+  @@map("audit_event")
+}
+
+model BootstrapLock {
+  id          String   @id
+  usedAt      DateTime @map("used_at")
+  ownerUserId String   @map("owner_user_id")
+
+  @@map("bootstrap_lock")
+}
+
+model InventoryLocation {
+  id           String                @id @default(uuid())
+  factoryId    String                @map("factory_id")
+  factory      Factory               @relation(fields: [factoryId], references: [id])
+  code         String
+  name         String
+  locationType InventoryLocationType @map("location_type")
+  active       Boolean               @default(true)
+  createdAt    DateTime              @default(now()) @map("created_at")
+
+  rawBlocks RawBlock[]
+  slabs     Slab[]
+
+  @@unique([factoryId, code])
+  @@map("inventory_location")
+}
+
+model Supplier {
+  id          String     @id @default(uuid())
+  factoryId   String     @map("factory_id")
+  factory     Factory    @relation(fields: [factoryId], references: [id])
+  name        String
+  contactInfo String?    @map("contact_info")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  version     Int        @default(0)
+  rawBlocks   RawBlock[]
+
+  @@index([factoryId])
+  @@map("supplier")
+}
+
+model Customer {
+  id          String       @id @default(uuid())
+  factoryId   String       @map("factory_id")
+  factory     Factory      @relation(fields: [factoryId], references: [id])
+  name        String
+  contactInfo String?      @map("contact_info")
+  creditLimit Decimal?     @map("credit_limit") @db.Decimal(14, 2)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  version     Int          @default(0)
+  quotations  Quotation[]
+  salesOrders SalesOrder[]
+  invoices    Invoice[]
+
+  @@index([factoryId])
+  @@map("customer")
+}
+
+model Machine {
+  id               String      @id @default(uuid())
+  factoryId        String      @map("factory_id")
+  factory          Factory     @relation(fields: [factoryId], references: [id])
+  name             String
+  machineType      MachineType @map("machine_type")
+  bladeCount       Int?        @map("blade_count")
+  headCount        Int?        @map("head_count")
+  abrasivesPerHead Int?        @map("abrasives_per_head")
+  active           Boolean     @default(true)
+  createdAt        DateTime    @default(now()) @map("created_at")
+
+  cuttingSessions   CuttingSession[]
+  polishingSessions PolishingSession[]
+  runtimeLogs       MachineRuntimeLog[]
+  maintenanceJobs   MaintenanceJob[]
+
+  @@index([factoryId])
+  @@map("machine")
+}
+
+model RawBlock {
+  id                 String             @id @default(uuid())
+  factoryId          String             @map("factory_id")
+  factory            Factory            @relation(fields: [factoryId], references: [id])
+  serialNumber       String             @map("serial_number")
+  varietyName        String             @map("variety_name")
+  supplierId         String?            @map("supplier_id")
+  supplier           Supplier?          @relation(fields: [supplierId], references: [id])
+  quarry             String?
+  weightTons         Decimal?           @map("weight_tons") @db.Decimal(10, 3)
+  lengthFt           Decimal?           @map("length_ft") @db.Decimal(8, 2)
+  widthFt            Decimal?           @map("width_ft") @db.Decimal(8, 2)
+  heightFt           Decimal?           @map("height_ft") @db.Decimal(8, 2)
+  volumeCft          Decimal?           @map("volume_cft") @db.Decimal(10, 3)
+  qualityNote        String?            @map("quality_note")
+  purchaseDate       DateTime?          @map("purchase_date") @db.Date
+  invoicedAmount     Decimal?           @map("invoiced_amount") @db.Decimal(14, 2)
+  actualAmountPaid   Decimal?           @map("actual_amount_paid") @db.Decimal(14, 2)
+  ownershipType      OwnershipType      @default(COMPANY_OWNED) @map("ownership_type")
+  currentStatus      String             @default("in_stock") @map("current_status")
+  locationId         String?            @map("location_id")
+  location           InventoryLocation? @relation(fields: [locationId], references: [id])
+  createdAt          DateTime           @default(now()) @map("created_at")
+  version            Int                @default(0)
+
+  slabs           Slab[]
+  cuttingSessions CuttingSession[]
+  movements       InventoryMovement[]
+  openingLines    OpeningInventoryLine[]
+
+  @@unique([factoryId, serialNumber])
+  @@map("raw_block")
+}
+
+model Slab {
+  id               String             @id @default(uuid())
+  factoryId        String             @map("factory_id")
+  factory          Factory            @relation(fields: [factoryId], references: [id])
+  parentBlockId    String?            @map("parent_block_id")
+  parentBlock      RawBlock?          @relation(fields: [parentBlockId], references: [id])
+  cuttingSessionId String?            @map("cutting_session_id")
+  cuttingSession   CuttingSession?    @relation(fields: [cuttingSessionId], references: [id])
+  slabSerial       String             @map("slab_serial")
+  varietyName      String             @map("variety_name")
+  thicknessMm      Decimal            @default(18.0) @map("thickness_mm") @db.Decimal(5, 2)
+  lengthFt         Decimal?           @map("length_ft") @db.Decimal(6, 2)
+  widthFt          Decimal?           @map("width_ft") @db.Decimal(6, 2)
+  finish           String?
+  qualityNote      String?            @map("quality_note")
+  salesStatus      String             @default("in_stock") @map("sales_status")
+  locationId       String?            @map("location_id")
+  location         InventoryLocation? @relation(fields: [locationId], references: [id])
+  createdAt        DateTime           @default(now()) @map("created_at")
+  version          Int                @default(0)
+
+  polishingLinks PolishingSessionSlab[]
+  movements      InventoryMovement[]
+  openingLines   OpeningInventoryLine[]
+  quotationLines QuotationLine[]
+  orderLines     SalesLineItem[]
+  packingLines   PackingLine[]
+  deliveryLines  DeliveryLine[]
+  returnLines    CustomerReturnLine[]
+
+  @@unique([factoryId, slabSerial])
+  @@map("slab")
+}
+
+model InventoryMovement {
+  id             String                 @id @default(uuid())
+  factoryId      String                 @map("factory_id")
+  factory        Factory                @relation(fields: [factoryId], references: [id])
+  movementType   InventoryMovementType  @map("movement_type")
+  rawBlockId     String?                @map("raw_block_id")
+  rawBlock       RawBlock?              @relation(fields: [rawBlockId], references: [id])
+  slabId         String?                @map("slab_id")
+  slab           Slab?                  @relation(fields: [slabId], references: [id])
+  quantity       Decimal                @default(1) @db.Decimal(12, 3)
+  idempotencyKey String                 @map("idempotency_key")
+  actorId        String?                @map("actor_id")
+  notes          String?
+  createdAt      DateTime               @default(now()) @map("created_at")
+
+  @@unique([factoryId, idempotencyKey])
+  @@index([factoryId, createdAt])
+  @@map("inventory_movement")
+}
+
+model OpeningInventorySnapshot {
+  id          String                 @id @default(uuid())
+  factoryId   String                 @map("factory_id")
+  factory     Factory                @relation(fields: [factoryId], references: [id])
+  status      OpeningSnapshotStatus  @default(DRAFT)
+  enteredById String                 @map("entered_by_id")
+  approvedById String?               @map("approved_by_id")
+  rejectionReason String?            @map("rejection_reason")
+  createdAt   DateTime               @default(now()) @map("created_at")
+  version     Int                    @default(0)
+  lines       OpeningInventoryLine[]
+
+  @@index([factoryId, status])
+  @@map("opening_inventory_snapshot")
+}
+
+model OpeningInventoryLine {
+  id         String                    @id @default(uuid())
+  snapshotId String                    @map("snapshot_id")
+  snapshot   OpeningInventorySnapshot  @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  kind       InventoryKind
+  rawBlockId String?                   @map("raw_block_id")
+  rawBlock   RawBlock?                 @relation(fields: [rawBlockId], references: [id])
+  slabId     String?                   @map("slab_id")
+  slab       Slab?                     @relation(fields: [slabId], references: [id])
+  payload    Json
+
+  @@map("opening_inventory_line")
+}
+
+model CuttingSession {
+  id                 String                   @id @default(uuid())
+  factoryId          String                   @map("factory_id")
+  factory            Factory                  @relation(fields: [factoryId], references: [id])
+  rawBlockId         String                   @map("raw_block_id")
+  rawBlock           RawBlock                 @relation(fields: [rawBlockId], references: [id])
+  machineId          String                   @map("machine_id")
+  machine            Machine                  @relation(fields: [machineId], references: [id])
+  startedAt          DateTime                 @map("started_at")
+  endedAt            DateTime?                @map("ended_at")
+  status             ProductionSessionStatus  @default(IN_PROGRESS)
+  expectedSlabCount  Int?                     @map("expected_slab_count")
+  totalSlabsCut      Int?                     @map("total_slabs_cut")
+  finalGoodSlabCount Int?                     @map("final_good_slab_count")
+  damagedSlabCount   Int?                     @map("damaged_slab_count")
+  damagedCostAmount  Decimal?                 @map("damaged_cost_amount") @db.Decimal(14, 2)
+  wastageNotes       String?                  @map("wastage_notes")
+  createdAt          DateTime                 @default(now()) @map("created_at")
+  version            Int                      @default(0)
+
+  dayLogs CuttingDayLog[]
+  slabs   Slab[]
+
+  @@index([factoryId, status])
+  @@map("cutting_session")
+}
+
+model CuttingDayLog {
+  id                  String         @id @default(uuid())
+  cuttingSessionId    String         @map("cutting_session_id")
+  session             CuttingSession @relation(fields: [cuttingSessionId], references: [id])
+  operationalDate     DateTime       @map("operational_date") @db.Date
+  runtimeHours        Decimal?       @map("runtime_hours") @db.Decimal(4, 2)
+  downtimeMinutes     Int?           @map("downtime_minutes")
+  downtimeReason      String?        @map("downtime_reason")
+  powerConsumptionKwh Decimal?       @map("power_consumption_kwh") @db.Decimal(10, 2)
+  slabsProducedCount  Int?           @map("slabs_produced_count")
+  operatorId          String?        @map("operator_id")
+  notes               String?
+  createdAt           DateTime       @default(now()) @map("created_at")
+  version             Int            @default(0)
+
+  @@unique([cuttingSessionId, operationalDate])
+  @@map("cutting_day_log")
+}
+
+model PolishingSession {
+  id                  String                  @id @default(uuid())
+  factoryId           String                  @map("factory_id")
+  factory             Factory                 @relation(fields: [factoryId], references: [id])
+  machineId           String                  @map("machine_id")
+  machine             Machine                 @relation(fields: [machineId], references: [id])
+  operationalDate     DateTime                @map("operational_date") @db.Date
+  processType         LpmProcessType          @map("process_type")
+  finishType          String?                 @map("finish_type")
+  runtimeHours        Decimal?                @map("runtime_hours") @db.Decimal(4, 2)
+  downtimeMinutes     Int?                    @map("downtime_minutes")
+  operatorId          String?                 @map("operator_id")
+  notes               String?
+  status              ProductionSessionStatus @default(IN_PROGRESS)
+  createdAt           DateTime                @default(now()) @map("created_at")
+  version             Int                     @default(0)
+
+  slabs PolishingSessionSlab[]
+
+  @@index([factoryId, operationalDate])
+  @@map("polishing_session")
+}
+
+model PolishingSessionSlab {
+  id                 String           @id @default(uuid())
+  polishingSessionId String           @map("polishing_session_id")
+  session            PolishingSession @relation(fields: [polishingSessionId], references: [id])
+  slabId             String           @map("slab_id")
+  slab               Slab             @relation(fields: [slabId], references: [id])
+
+  @@unique([polishingSessionId, slabId])
+  @@map("polishing_session_slab")
+}
+
+model MachineRuntimeLog {
+  id              String   @id @default(uuid())
+  machineId       String   @map("machine_id")
+  machine         Machine  @relation(fields: [machineId], references: [id])
+  operationalDate DateTime @map("operational_date") @db.Date
+  runtimeHours    Decimal  @map("runtime_hours") @db.Decimal(4, 2)
+  downtimeMinutes Int      @default(0) @map("downtime_minutes")
+  notes           String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@unique([machineId, operationalDate])
+  @@map("machine_runtime_log")
+}
+
+model MaintenanceJob {
+  id          String    @id @default(uuid())
+  factoryId   String    @map("factory_id")
+  factory     Factory   @relation(fields: [factoryId], references: [id])
+  machineId   String    @map("machine_id")
+  machine     Machine   @relation(fields: [machineId], references: [id])
+  title       String
+  dueOn       DateTime  @map("due_on") @db.Date
+  completedAt DateTime? @map("completed_at")
+  notes       String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([factoryId, dueOn])
+  @@map("maintenance_job")
+}
+
+model Consumable {
+  id        String   @id @default(uuid())
+  factoryId String   @map("factory_id")
+  factory   Factory  @relation(fields: [factoryId], references: [id])
+  name      String
+  unit      String
+  onHand    Decimal  @default(0) @map("on_hand") @db.Decimal(12, 3)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([factoryId, name])
+  @@map("consumable")
+}
+
+model Quotation {
+  id         String          @id @default(uuid())
+  factoryId  String          @map("factory_id")
+  factory    Factory         @relation(fields: [factoryId], references: [id])
+  customerId String          @map("customer_id")
+  customer   Customer        @relation(fields: [customerId], references: [id])
+  status     QuotationStatus @default(DRAFT)
+  validUntil DateTime?       @map("valid_until") @db.Date
+  notes      String?
+  createdAt  DateTime        @default(now()) @map("created_at")
+  version    Int             @default(0)
+  lines      QuotationLine[]
+
+  @@index([factoryId])
+  @@map("quotation")
+}
+
+model QuotationLine {
+  id           String    @id @default(uuid())
+  quotationId  String    @map("quotation_id")
+  quotation    Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  slabId       String?   @map("slab_id")
+  slab         Slab?     @relation(fields: [slabId], references: [id])
+  description  String
+  quantitySqft Decimal   @map("quantity_sqft") @db.Decimal(12, 3)
+  rate         Decimal   @db.Decimal(14, 2)
+
+  @@map("quotation_line")
+}
+
+model SalesOrder {
+  id          String           @id @default(uuid())
+  factoryId   String           @map("factory_id")
+  factory     Factory          @relation(fields: [factoryId], references: [id])
+  customerId  String           @map("customer_id")
+  customer    Customer         @relation(fields: [customerId], references: [id])
+  status      SalesOrderStatus @default(DRAFT)
+  orderDate   DateTime         @map("order_date") @db.Date
+  createdAt   DateTime         @default(now()) @map("created_at")
+  version     Int              @default(0)
+  lines       SalesLineItem[]
+  packingLists PackingList[]
+  deliveries  Delivery[]
+  invoices    Invoice[]
+  returns     CustomerReturn[]
+
+  @@index([factoryId, orderDate])
+  @@map("sales_order")
+}
+
+model SalesLineItem {
+  id           String     @id @default(uuid())
+  salesOrderId String     @map("sales_order_id")
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  slabId       String?    @map("slab_id")
+  slab         Slab?      @relation(fields: [slabId], references: [id])
+  quantitySqft Decimal    @map("quantity_sqft") @db.Decimal(12, 3)
+  rate         Decimal    @db.Decimal(14, 2)
+
+  @@map("sales_line_item")
+}
+
+model PackingList {
+  id           String     @id @default(uuid())
+  factoryId    String     @map("factory_id")
+  factory      Factory    @relation(fields: [factoryId], references: [id])
+  salesOrderId String     @map("sales_order_id")
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id])
+  packedAt     DateTime   @default(now()) @map("packed_at")
+  notes        String?
+  version      Int        @default(0)
+  lines        PackingLine[]
+
+  @@map("packing_list")
+}
+
+model PackingLine {
+  id            String      @id @default(uuid())
+  packingListId String      @map("packing_list_id")
+  packingList   PackingList @relation(fields: [packingListId], references: [id], onDelete: Cascade)
+  slabId        String      @map("slab_id")
+  slab          Slab        @relation(fields: [slabId], references: [id])
+
+  @@unique([packingListId, slabId])
+  @@map("packing_line")
+}
+
+model Delivery {
+  id           String         @id @default(uuid())
+  factoryId    String         @map("factory_id")
+  factory      Factory        @relation(fields: [factoryId], references: [id])
+  salesOrderId String         @map("sales_order_id")
+  salesOrder   SalesOrder     @relation(fields: [salesOrderId], references: [id])
+  dispatchedAt DateTime       @map("dispatched_at")
+  notes        String?
+  version      Int            @default(0)
+  lines        DeliveryLine[]
+
+  @@map("delivery")
+}
+
+model DeliveryLine {
+  id         String   @id @default(uuid())
+  deliveryId String   @map("delivery_id")
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  slabId     String   @map("slab_id")
+  slab       Slab     @relation(fields: [slabId], references: [id])
+
+  @@unique([deliveryId, slabId])
+  @@map("delivery_line")
+}
+
+model Invoice {
+  id             String     @id @default(uuid())
+  factoryId      String     @map("factory_id")
+  factory        Factory    @relation(fields: [factoryId], references: [id])
+  salesOrderId   String     @map("sales_order_id")
+  salesOrder     SalesOrder @relation(fields: [salesOrderId], references: [id])
+  customerId     String     @map("customer_id")
+  customer       Customer   @relation(fields: [customerId], references: [id])
+  invoiceNumber  String     @map("invoice_number")
+  amount         Decimal    @db.Decimal(14, 2)
+  idempotencyKey String     @map("idempotency_key")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  version        Int        @default(0)
+  payments       Payment[]
+
+  @@unique([factoryId, invoiceNumber])
+  @@unique([factoryId, idempotencyKey])
+  @@map("invoice")
+}
+
+model Payment {
+  id             String   @id @default(uuid())
+  factoryId      String   @map("factory_id")
+  factory        Factory  @relation(fields: [factoryId], references: [id])
+  invoiceId      String   @map("invoice_id")
+  invoice        Invoice  @relation(fields: [invoiceId], references: [id])
+  amount         Decimal  @db.Decimal(14, 2)
+  paidAt         DateTime @map("paid_at") @db.Date
+  method         String
+  idempotencyKey String   @map("idempotency_key")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([factoryId, idempotencyKey])
+  @@map("payment")
+}
+
+model CustomerReturn {
+  id           String               @id @default(uuid())
+  factoryId    String               @map("factory_id")
+  factory      Factory              @relation(fields: [factoryId], references: [id])
+  salesOrderId String               @map("sales_order_id")
+  salesOrder   SalesOrder           @relation(fields: [salesOrderId], references: [id])
+  reason       String
+  createdAt    DateTime             @default(now()) @map("created_at")
+  lines        CustomerReturnLine[]
+
+  @@map("customer_return")
+}
+
+model CustomerReturnLine {
+  id       String         @id @default(uuid())
+  returnId String         @map("return_id")
+  parent   CustomerReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  slabId   String         @map("slab_id")
+  slab     Slab           @relation(fields: [slabId], references: [id])
+
+  @@map("customer_return_line")
+}
+
+model Vehicle {
+  id        String    @id @default(uuid())
+  factoryId String    @map("factory_id")
+  factory   Factory   @relation(fields: [factoryId], references: [id])
+  name      String
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now()) @map("created_at")
+  expenses  Expense[]
+
+  @@index([factoryId])
+  @@map("vehicle")
+}
+
+model Expense {
+  id             String               @id @default(uuid())
+  factoryId      String               @map("factory_id")
+  factory        Factory              @relation(fields: [factoryId], references: [id])
+  category       String
+  amount         Decimal              @db.Decimal(14, 2)
+  expenseDate    DateTime             @map("expense_date") @db.Date
+  vehicleId      String?              @map("vehicle_id")
+  vehicle        Vehicle?             @relation(fields: [vehicleId], references: [id])
+  toWhom         String?              @map("to_whom")
+  idempotencyKey String?              @map("idempotency_key")
+  createdAt      DateTime             @default(now()) @map("created_at")
+  version        Int                  @default(0)
+  allocations    ExpenseAllocation[]
+
+  @@unique([factoryId, idempotencyKey])
+  @@map("expense")
+}
+
+model ExpenseAllocation {
+  id               String  @id @default(uuid())
+  expenseId        String  @map("expense_id")
+  expense          Expense @relation(fields: [expenseId], references: [id])
+  rawBlockId       String? @map("raw_block_id")
+  allocatedAmount  Decimal @map("allocated_amount") @db.Decimal(14, 2)
+  allocationBatchKey String @map("allocation_batch_key")
+
+  @@unique([expenseId, allocationBatchKey, rawBlockId])
+  @@map("expense_allocation")
+}
+
+model TallyImportBatch {
+  id          String   @id @default(uuid())
+  factoryId   String   @map("factory_id")
+  factory     Factory  @relation(fields: [factoryId], references: [id])
+  kind        String
+  fileName    String   @map("file_name")
+  importedBy  String   @map("imported_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+  summary     Json
+
+  @@index([factoryId])
+  @@map("tally_import_batch")
+}
+
+model StoredFile {
+  id          String   @id @default(uuid())
+  factoryId   String   @map("factory_id")
+  factory     Factory  @relation(fields: [factoryId], references: [id])
+  key         String
+  contentType String   @map("content_type")
+  uploadedBy  String   @map("uploaded_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([factoryId, key])
+  @@map("stored_file")
+}
+
+model SyncOperation {
+  id           String         @id @default(uuid())
+  factoryId    String         @map("factory_id")
+  factory      Factory        @relation(fields: [factoryId], references: [id])
+  clientOpId   String         @map("client_op_id")
+  actorId      String         @map("actor_id")
+  method       String
+  path         String
+  requestHash  String         @map("request_hash")
+  statusCode   Int            @map("status_code")
+  response     Json
+  conflictPolicy ConflictPolicy @default(STRICT) @map("conflict_policy")
+  createdAt    DateTime       @default(now()) @map("created_at")
+
+  @@unique([factoryId, clientOpId])
+  @@map("sync_operation")
+}
