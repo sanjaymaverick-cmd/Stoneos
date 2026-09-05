@@ -1,0 +1,4 @@
+description = "Security review of StoneOS workflows, RBAC, and tenant isolation"
+default_capability_mode = "all"
+reasoning_effort = "high"
+prompt_file = ".grok/agents/security-workflows.md"

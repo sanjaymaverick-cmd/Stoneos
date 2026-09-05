@@ -1,0 +1,4 @@
+description = "UI/UX pass over every StoneOS web module and role-visible route"
+default_capability_mode = "all"
+reasoning_effort = "high"
+prompt_file = ".grok/agents/ui-ux-modules.md"

@@ -21,7 +21,8 @@
     "bootstrap": "npm run bootstrap --workspace=@stoneos/api",
     "docker:dev": "docker compose -f infra/compose/docker-compose.yml up -d",
     "docker:prod:smoke": "docker compose -f infra/compose/docker-compose.prod.yml up --build",
-    "pack:win": "npm run dist:win --workspace=@stoneos/desktop"
+    "pack:win": "npm run dist:win --workspace=@stoneos/desktop",
+    "year-run": "node .grok/skills/factory-year-run/scripts/year-run.mjs"
   },
   "engines": {
     "node": ">=22"
