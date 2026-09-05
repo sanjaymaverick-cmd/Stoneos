@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
 
 export default function ConsumablesPage() {
@@ -35,7 +36,11 @@ export default function ConsumablesPage() {
           <button type="submit">Add</button>
         </form>
       </div>
-      <ul>{items.map((i) => <li key={i.id}>{i.name} — {i.onHand} {i.unit}</li>)}</ul>
+      {items.length === 0 ? (
+        <EmptyState>No consumables recorded. Add abrasive, diamond, or other stock above.</EmptyState>
+      ) : (
+        <ul>{items.map((i) => <li key={i.id}>{i.name} — {i.onHand} {i.unit}</li>)}</ul>
+      )}
     </AppShell>
   );
 }

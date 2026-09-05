@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../../components/AppShell";
+import { EmptyState } from "../../../components/EmptyState";
 import { apiFetch } from "../../../lib/api";
 
 type Snapshot = { id: string; status: string; lines: unknown[] };
@@ -52,6 +53,9 @@ export default function OpeningInventoryPage() {
       <p>Draft counts do not move stock. Approval by a different owner/manager posts receipts and sets the factory live.</p>
       <div className="card">
         <button type="button" onClick={start}>Start count</button>
+        {snapshots.length === 0 ? (
+          <EmptyState>No opening count started. Click Start count to draft physical stock before go-live.</EmptyState>
+        ) : (
         <label>Active snapshot
           <select value={currentId} onChange={(e) => setCurrentId(e.target.value)}>
             {snapshots.map((s) => (
@@ -59,6 +63,7 @@ export default function OpeningInventoryPage() {
             ))}
           </select>
         </label>
+        )}
         <form onSubmit={addLine}>
           <label>Kind
             <select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>

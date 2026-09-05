@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
 
 export default function ExpensesPage() {
@@ -59,7 +60,11 @@ export default function ExpensesPage() {
           <button type="submit" className="secondary">Add vehicle</button>
         </form>
       </div>
-      <ul>{items.map((i) => <li key={i.id}>{i.category} — {i.amount}</li>)}</ul>
+      {items.length === 0 ? (
+        <EmptyState>No expenses yet. Record diesel, wages, or other costs above.</EmptyState>
+      ) : (
+        <ul>{items.map((i) => <li key={i.id}>{i.category} — {i.amount}</li>)}</ul>
+      )}
     </AppShell>
   );
 }

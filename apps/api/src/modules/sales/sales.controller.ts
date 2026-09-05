@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
-import { SALES_DATA_ROLES, SALES_READ_ROLES } from "@stoneos/contracts";
+import { PAYMENT_ROLES, SALES_DATA_ROLES, SALES_READ_ROLES } from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
 import { SalesService } from "./sales.service";
 
@@ -96,7 +96,7 @@ export class SalesController {
   }
 
   @Post("invoices/:id/payments")
-  @Roles(...SALES_DATA_ROLES)
+  @Roles(...PAYMENT_ROLES)
   pay(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,

@@ -23,3 +23,4 @@ export const AUTH_WINDOW_MS = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS ?? 60
 export const AUTH_MAX = Number(process.env.AUTH_RATE_LIMIT_MAX ?? 10);
 export const RATE_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60_000);
 export const RATE_MAX = Number(process.env.RATE_LIMIT_MAX ?? 120);
+export const AUTHENTICATED_RATE_MAX = Number(process.env.AUTHENTICATED_RATE_LIMIT_MAX ?? 600);

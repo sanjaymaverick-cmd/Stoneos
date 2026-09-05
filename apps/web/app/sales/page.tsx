@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
 
 type Customer = { id: string; name: string };
@@ -84,6 +85,7 @@ export default function SalesPage() {
         <form onSubmit={createOrder}>
           <label>Customer
             <select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+              {customers.length === 0 ? <option value="">No customers yet</option> : null}
               {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </label>
@@ -99,6 +101,7 @@ export default function SalesPage() {
       </div>
       <div className="card">
         <h2>Orders</h2>
+        {orders.length === 0 ? <EmptyState>No sales orders yet. Add a customer and confirm an order to populate this list.</EmptyState> : null}
         {orders.map((o) => (
           <p key={o.id}>
             {o.customer.name} — {o.status}

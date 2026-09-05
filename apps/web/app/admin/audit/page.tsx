@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "../../../components/AppShell";
+import { EmptyState } from "../../../components/EmptyState";
 import { apiFetch } from "../../../lib/api";
 
 export default function AuditPage() {
@@ -12,6 +13,9 @@ export default function AuditPage() {
   return (
     <AppShell>
       <h1>Audit log</h1>
+      {rows.length === 0 ? (
+        <EmptyState>No audit events yet. Writes to inventory, production, sales, and team appear here.</EmptyState>
+      ) : (
       <table>
         <thead><tr><th>When</th><th>Action</th><th>Entity</th></tr></thead>
         <tbody>
@@ -20,6 +24,7 @@ export default function AuditPage() {
           ))}
         </tbody>
       </table>
+      )}
     </AppShell>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
 
 export default function RecoveryPage() {
@@ -13,6 +14,9 @@ export default function RecoveryPage() {
     <AppShell>
       <h1>Recovery ratio</h1>
       <p>Sale-time sqft per ton of parent block. Benchmark is 105 sqft/ton. Production dimensions are not used.</p>
+      {rows.length === 0 ? (
+        <EmptyState>No sold blocks yet. Recovery appears after an invoice is issued against a parent block.</EmptyState>
+      ) : (
       <table>
         <thead><tr><th>Block</th><th>Sold sqft</th><th>Tons</th><th>Ratio</th></tr></thead>
         <tbody>
@@ -26,6 +30,7 @@ export default function RecoveryPage() {
           ))}
         </tbody>
       </table>
+      )}
     </AppShell>
   );
 }

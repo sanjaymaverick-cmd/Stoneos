@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
 
 export default function FilesPage() {
@@ -37,7 +38,11 @@ export default function FilesPage() {
           <button type="submit">Upload</button>
         </form>
       </div>
-      <ul>{files.map((f) => <li key={f.id}>{f.key} ({f.contentType})</li>)}</ul>
+      {files.length === 0 ? (
+        <EmptyState>No documents uploaded. Save a factory note above to create the first file.</EmptyState>
+      ) : (
+        <ul>{files.map((f) => <li key={f.id}>{f.key} ({f.contentType})</li>)}</ul>
+      )}
     </AppShell>
   );
 }

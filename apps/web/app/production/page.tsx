@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
 
 export default function ProductionPage() {
@@ -71,6 +72,9 @@ export default function ProductionPage() {
         <h2>Complete session</h2>
         <label>Total cut<input type="number" value={total} onChange={(e) => setTotal(Number(e.target.value))} /></label>
         <label>Good slabs<input type="number" value={good} onChange={(e) => setGood(Number(e.target.value))} /></label>
+        {sessions.filter((s) => s.status === "IN_PROGRESS").length === 0 ? (
+          <EmptyState>No cutting session in progress. Allocate a block to the saw first.</EmptyState>
+        ) : null}
         {sessions.filter((s) => s.status === "IN_PROGRESS").map((s) => (
           <p key={s.id}>
             {s.rawBlock.serialNumber}

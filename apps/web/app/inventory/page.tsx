@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
 
 export default function InventoryPage() {
@@ -51,17 +52,25 @@ export default function InventoryPage() {
       </div>
       <div className="card">
         <h2>Slabs</h2>
-        <ul>{slabs.map((s) => <li key={s.id}>{s.slabSerial} — {s.salesStatus}</li>)}</ul>
+        {slabs.length === 0 ? (
+          <EmptyState>No slabs yet. Complete a cutting session to stock unpolished pieces.</EmptyState>
+        ) : (
+          <ul>{slabs.map((s) => <li key={s.id}>{s.slabSerial} — {s.salesStatus}</li>)}</ul>
+        )}
       </div>
       <div className="card">
-        <table>
-          <thead><tr><th>Serial</th><th>Variety</th><th>Status</th></tr></thead>
-          <tbody>
-            {blocks.map((b) => (
-              <tr key={b.id}><td>{b.serialNumber}</td><td>{b.varietyName}</td><td>{b.currentStatus}</td></tr>
-            ))}
-          </tbody>
-        </table>
+        {blocks.length === 0 ? (
+          <EmptyState>No raw blocks on hand. Receive a block above to start the yard.</EmptyState>
+        ) : (
+          <table>
+            <thead><tr><th>Serial</th><th>Variety</th><th>Status</th></tr></thead>
+            <tbody>
+              {blocks.map((b) => (
+                <tr key={b.id}><td>{b.serialNumber}</td><td>{b.varietyName}</td><td>{b.currentStatus}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </AppShell>
   );

@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../../components/AppShell";
+import { EmptyState } from "../../../components/EmptyState";
 import { apiFetch } from "../../../lib/api";
 import { STAFF_PROVISIONABLE_ROLES } from "@stoneos/contracts";
 
@@ -43,12 +44,16 @@ export default function UsersPage() {
         </form>
         {password ? <p>One-time password: <code>{password}</code></p> : null}
       </div>
+      {users.length === 0 ? (
+        <EmptyState>No staff accounts yet. Issue a login above. Owners appear after bootstrap.</EmptyState>
+      ) : (
       <table>
         <thead><tr><th>Username</th><th>Role</th><th>Active</th></tr></thead>
         <tbody>
           {users.map((u) => <tr key={u.id}><td>{u.username}</td><td>{u.role}</td><td>{String(u.active)}</td></tr>)}
         </tbody>
       </table>
+      )}
     </AppShell>
   );
 }

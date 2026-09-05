@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
 
 export default function MaintenancePage() {
@@ -46,6 +47,9 @@ export default function MaintenancePage() {
           <button type="submit">Schedule</button>
         </form>
       </div>
+      {jobs.length === 0 ? (
+        <EmptyState>No maintenance jobs scheduled. Use the form above to add the first due date.</EmptyState>
+      ) : (
       <table>
         <thead><tr><th>Machine</th><th>Title</th><th>Due</th><th>Status</th></tr></thead>
         <tbody>
@@ -63,6 +67,7 @@ export default function MaintenancePage() {
           ))}
         </tbody>
       </table>
+      )}
     </AppShell>
   );
 }

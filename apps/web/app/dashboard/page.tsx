@@ -19,8 +19,8 @@ export default function DashboardPage() {
   }, []);
   return (
     <AppShell>
-      <h1>{factory?.name ?? "Dashboard"}</h1>
-      <p>Status: {factory?.operatingStatus ?? "—"}</p>
+      <h1>{factory?.name ?? "Factory"}</h1>
+      <p>Status: {factory?.operatingStatus ?? "loading…"}</p>
       <div className="grid">
         <div className="metric"><span>Blocks on hand</span><b>{data?.blocksOnHand ?? "—"}</b></div>
         <div className="metric"><span>Slabs on hand</span><b>{data?.slabsOnHand ?? "—"}</b></div>
