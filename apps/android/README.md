@@ -3,13 +3,19 @@
 Capacitor shell around the same PWA. The API is unchanged.
 
 ```bash
-cd apps/web && npx next build
-cd ../android
+cd apps/android
 npx cap add android
 npx cap sync android
-npx cap open android
 ```
 
-In Android Studio: Build → Generate Signed Bundle / APK.
+`capacitor.config.json` points the WebView at the factory PWA (`http://10.0.2.2:3000` for the Android emulator). Change `server.url` to the HTTPS origin before a production APK.
 
-Production builds must set `STONEOS_WEB_URL` to the HTTPS origin of the factory PWA.
+Debug APK (unsigned):
+
+```bash
+set ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk
+cd apps/android/android
+gradlew assembleDebug
+```
+
+The APK is `apps/android/android/app/build/outputs/apk/debug/app-debug.apk` (gitignored). Signed release builds stay in Android Studio.

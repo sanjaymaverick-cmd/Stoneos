@@ -20,12 +20,14 @@
     "db:generate": "npm run prisma:generate --workspace=@stoneos/api",
     "bootstrap": "npm run bootstrap --workspace=@stoneos/api",
     "docker:dev": "docker compose -f infra/compose/docker-compose.yml up -d",
-    "docker:prod:smoke": "docker compose -f infra/compose/docker-compose.prod.yml up --build"
+    "docker:prod:smoke": "docker compose -f infra/compose/docker-compose.prod.yml up --build",
+    "pack:win": "npm run dist:win --workspace=@stoneos/desktop"
   },
   "engines": {
     "node": ">=22"
   },
   "allowScripts": {
-    "@embedded-postgres/windows-x64@18.4.0-beta.17": true
+    "@embedded-postgres/windows-x64@18.4.0-beta.17": true,
+    "electron@33.2.1": true
   }
 }

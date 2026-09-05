@@ -2,10 +2,12 @@
   "name": "@stoneos/desktop",
   "version": "0.1.0",
   "private": true,
+  "description": "StoneOS Windows desktop shell",
+  "author": "StoneOS",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "dist:win": "electron-builder --win nsis"
+    "dist:win": "electron-builder --win nsis --config.win.signAndEditExecutable=false"
   },
   "devDependencies": {
     "electron": "33.2.1",
@@ -15,6 +17,8 @@
     "appId": "com.stoneos.desktop",
     "productName": "StoneOS",
     "files": ["main.cjs", "preload.cjs"],
-    "win": { "target": "nsis" }
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "win": { "target": "nsis", "signAndEditExecutable": false }
   }
 }
