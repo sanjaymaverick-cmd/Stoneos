@@ -36,9 +36,9 @@ Playwright (smoke stack `localhost:3000` / `localhost:4000`): 2 passed (no publi
 - [x] Windows NSIS installer built (`apps/desktop/dist/StoneOS Setup 0.1.0.exe`, gitignored)
 - [x] Android debug APK built (`apps/android/android/app/build/outputs/apk/debug/app-debug.apk`, gitignored)
 - [x] Terraform `init -backend=false` + `validate` for OCI (`oracle/oci` 6.37.0)
-- [ ] Terraform apply (hosting platform not chosen; AWS module skipped)
+- [ ] Terraform apply (not now: local-first; AWS / OCI / similar later)
 - [ ] Backup restore rehearsal timed
 - [x] No production credentials used in tests
 - [x] Copilot not enabled
 
-Remaining: choose a hosting platform before any `terraform apply`. Copilot stays deferred (ADR 0009).
+Remaining local work is factory-workflow testing on Compose. Cloud apply waits until a host is chosen. Copilot stays deferred (ADR 0009).

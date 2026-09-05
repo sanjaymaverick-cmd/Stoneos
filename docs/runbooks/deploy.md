@@ -1,8 +1,15 @@
 # Deploy and rollback
 
-## Staging
+## Local (current)
 
-1. `terraform apply` in `infra/terraform/oci` or `infra/terraform/aws`.
+1. `docker compose -f infra/compose/docker-compose.yml up -d` for Postgres 16, or `docker compose -p stoneos-smoke -f infra/compose/docker-compose.prod.yml up -d` for API+web images.
+2. `npx prisma migrate deploy` then one-time `npx tsx src/bootstrap.ts`.
+3. Confirm `/health/live`, `/health/ready`, owner login, and the Playwright login e2e.
+4. Keep using local disk storage. No cloud credentials.
+
+## Cloud staging (after a host is chosen)
+
+1. `terraform apply` only in the chosen module (`infra/terraform/oci`, `infra/terraform/aws`, or a later equivalent). Do not apply unused modules.
 2. Store `DATABASE_URL`, `SESSION_SECRET` (>=32 chars, not a placeholder), and `BOOTSTRAP_TOKEN` in Vault / Secrets Manager.
 3. Build and push `stoneos-api` and `stoneos-web` images from CI digests.
 4. Run `npx prisma migrate deploy` as a job against managed Postgres.

@@ -13,7 +13,7 @@ apps/desktop      Electron Windows shell
 apps/android      Capacitor Android shell
 packages/*        contracts, domain rules, auth, sync-client, storage
 infra/compose     local Postgres and production-image smoke
-infra/terraform   OCI and AWS VPC/private-DB modules
+infra/terraform   optional later AWS/OCI blueprints (hosting not chosen)
 docs/             ADRs and runbooks
 ```
 
@@ -44,12 +44,9 @@ CI runs lint/typecheck (tsc), Prisma validate + migrate deploy, unit/integration
 
 ## Deployment
 
-- Docker images: `infra/docker/`
-- OCI: `infra/terraform/oci`
-- AWS: `infra/terraform/aws`
-- Runbooks: `docs/runbooks/`
+Local first: Docker Compose (`infra/compose/`) plus `npm run dev:api` / `dev:web`, or the prod-image smoke stack. Prove health, login, and factory workflows here before any cloud.
 
-Managed PostgreSQL is preferred. Self-hosted Postgres 16 is documented as an alternative.
+Later (hosting not chosen): same images on AWS, OCI, or a similar private VPC. Terraform under `infra/terraform/` is a blueprint only — do not apply until the platform is confirmed. Runbooks: `docs/runbooks/`.
 
 ## Classification
 
