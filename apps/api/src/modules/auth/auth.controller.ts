@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Inject, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { changePasswordRequestSchema, loginRequestSchema } from "@stoneos/contracts";
 import { CurrentUser, Public, type AuthenticatedUser } from "../../common/current-user";
@@ -8,7 +8,7 @@ import { AuthService } from "./auth.service";
 @ApiTags("auth")
 @Controller("auth")
 export class AuthController {
-  constructor(private service: AuthService) {}
+  constructor(@Inject(AuthService) private service: AuthService) {}
 
   @Public()
   @Post("login")

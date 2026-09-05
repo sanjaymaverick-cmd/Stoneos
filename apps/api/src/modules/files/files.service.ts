@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { createObjectStorage } from "@stoneos/storage";
 import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
@@ -9,8 +9,8 @@ export class FilesService {
   private storage = createObjectStorage();
 
   constructor(
-    private prisma: PrismaService,
-    private audit: AuditService,
+    @Inject(PrismaService) private prisma: PrismaService,
+    @Inject(AuditService) private audit: AuditService,
   ) {}
 
   async upload(

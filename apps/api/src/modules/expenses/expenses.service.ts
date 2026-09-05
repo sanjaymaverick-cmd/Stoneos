@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 
@@ -15,7 +15,7 @@ export const EXPENSE_CATEGORIES = [
 
 @Injectable()
 export class ExpensesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
   categories() {
     return EXPENSE_CATEGORIES;

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { PRODUCTION_INPUT_ROLES } from "@stoneos/contracts";
 import { operationalDateFor } from "@stoneos/domain";
@@ -9,7 +9,7 @@ import { PrismaService } from "../../common/prisma.service";
 @ApiBearerAuth()
 @Controller("machine-logs")
 export class MachineRuntimeController {
-  constructor(private prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
   @Get()
   list(@CurrentUser() user: AuthenticatedUser) {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ROLES } from "./roles.ts";
+import { ROLES } from "./roles";
 
 export const usernameSchema = z
   .string()

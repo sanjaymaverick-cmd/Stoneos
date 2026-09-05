@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 
@@ -10,7 +10,7 @@ export function parseDaybookXml(xml: string): { vouchers: number; ledgers: strin
 
 @Injectable()
 export class TallyService {
-  constructor(private prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
   async importDaybook(user: AuthenticatedUser, fileName: string, xml: string) {
     const parsed = parseDaybookXml(xml);

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -20,8 +21,8 @@ import type { AuthenticatedUser } from "../../common/current-user";
 @Injectable()
 export class UsersService {
   constructor(
-    private prisma: PrismaService,
-    private audit: AuditService,
+    @Inject(PrismaService) private prisma: PrismaService,
+    @Inject(AuditService) private audit: AuditService,
   ) {}
 
   list(factoryId: string) {

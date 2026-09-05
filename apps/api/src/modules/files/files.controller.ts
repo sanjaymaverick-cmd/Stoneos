@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { ANY_AUTHENTICATED_ROLE, OPERATIONAL_DATA_ROLES } from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
@@ -8,7 +8,7 @@ import { FilesService } from "./files.service";
 @ApiBearerAuth()
 @Controller("files")
 export class FilesController {
-  constructor(private service: FilesService) {}
+  constructor(@Inject(FilesService) private service: FilesService) {}
 
   @Get()
   @Roles(...ANY_AUTHENTICATED_ROLE)

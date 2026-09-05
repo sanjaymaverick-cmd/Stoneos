@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { InventoryKind } from "@prisma/client";
 import { INVENTORY_DATA_ROLES } from "@stoneos/contracts";
@@ -9,7 +9,7 @@ import { InventoryService } from "./inventory.service";
 @ApiBearerAuth()
 @Controller("inventory")
 export class InventoryController {
-  constructor(private service: InventoryService) {}
+  constructor(@Inject(InventoryService) private service: InventoryService) {}
 
   @Get("locations")
   locations(@CurrentUser() user: AuthenticatedUser) {

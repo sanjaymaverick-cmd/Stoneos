@@ -1,4 +1,4 @@
-import { Controller, Get } from "@nestjs/common";
+import { Controller, Get, Inject } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { ANY_AUTHENTICATED_ROLE } from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
@@ -8,7 +8,7 @@ import { PrismaService } from "../../common/prisma.service";
 @ApiBearerAuth()
 @Controller("reports")
 export class ReportsController {
-  constructor(private prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
   @Get("dashboard")
   @Roles(...ANY_AUTHENTICATED_ROLE)

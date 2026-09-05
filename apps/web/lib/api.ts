@@ -34,7 +34,7 @@ export async function flushQueuedWrites() {
   });
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function apiFetch<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   if (typeof navigator !== "undefined" && !navigator.onLine && method !== "GET") {
     const item: OutboxItem = {

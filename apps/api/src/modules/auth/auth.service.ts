@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException } from "@nestjs/common";
+import { Inject, Injectable, UnauthorizedException, BadRequestException } from "@nestjs/common";
 import {
   DUMMY_PASSWORD_HASH,
   createSessionToken,
@@ -15,8 +15,8 @@ import type { AuthenticatedUser } from "../../common/current-user";
 @Injectable()
 export class AuthService {
   constructor(
-    private prisma: PrismaService,
-    private audit: AuditService,
+    @Inject(PrismaService) private prisma: PrismaService,
+    @Inject(AuditService) private audit: AuditService,
   ) {}
 
   async login(username: string, password: string) {

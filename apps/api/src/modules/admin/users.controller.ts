@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { USER_MANAGEMENT_ROLES, provisionUserRequestSchema } from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
@@ -10,7 +10,7 @@ import { UsersService } from "./users.service";
 @Controller("admin/users")
 @Roles(...USER_MANAGEMENT_ROLES)
 export class UsersController {
-  constructor(private service: UsersService) {}
+  constructor(@Inject(UsersService) private service: UsersService) {}
 
   @Get()
   list(@CurrentUser() user: AuthenticatedUser) {

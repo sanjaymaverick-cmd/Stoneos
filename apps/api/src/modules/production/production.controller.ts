@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Post, Query } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { PRODUCTION_INPUT_ROLES } from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
@@ -8,7 +8,7 @@ import { ProductionService } from "./production.service";
 @ApiBearerAuth()
 @Controller()
 export class ProductionController {
-  constructor(private service: ProductionService) {}
+  constructor(@Inject(ProductionService) private service: ProductionService) {}
 
   @Get("machines")
   machines(@CurrentUser() user: AuthenticatedUser) {

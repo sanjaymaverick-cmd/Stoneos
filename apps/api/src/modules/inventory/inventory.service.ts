@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -26,8 +27,8 @@ const DEFAULT_LOCATIONS: Array<{ code: string; name: string; locationType: strin
 @Injectable()
 export class InventoryService {
   constructor(
-    private prisma: PrismaService,
-    private audit: AuditService,
+    @Inject(PrismaService) private prisma: PrismaService,
+    @Inject(AuditService) private audit: AuditService,
   ) {}
 
   locations(factoryId: string) {

@@ -1,10 +1,12 @@
 node_modules
+**/node_modules
 .git
 .next
+**/.next
 dist
 coverage
-apps/desktop
-apps/android
+apps/desktop/release
+apps/android/android
 infra/terraform
 **/.env
 var

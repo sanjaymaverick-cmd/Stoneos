@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
@@ -6,8 +6,8 @@ import type { AuthenticatedUser } from "../../common/current-user";
 @Injectable()
 export class MaintenanceService {
   constructor(
-    private prisma: PrismaService,
-    private audit: AuditService,
+    @Inject(PrismaService) private prisma: PrismaService,
+    @Inject(AuditService) private audit: AuditService,
   ) {}
 
   list(factoryId: string) {

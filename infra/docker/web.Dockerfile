@@ -1,18 +1,21 @@
 FROM node:24-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
+COPY apps/desktop/package.json apps/desktop/
+COPY apps/android/package.json apps/android/
 COPY packages/contracts/package.json packages/contracts/
-COPY packages/sync-client/package.json packages/sync-client/
 COPY packages/domain/package.json packages/domain/
 COPY packages/auth/package.json packages/auth/
 COPY packages/storage/package.json packages/storage/
-RUN npm install --workspaces --if-present
+COPY packages/sync-client/package.json packages/sync-client/
+RUN npm ci --ignore-scripts --workspace=@stoneos/web --workspace=@stoneos/contracts --workspace=@stoneos/sync-client --include-workspace-root
 
 FROM node:24-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY package.json ./
+COPY package.json package-lock.json ./
 COPY packages ./packages
 COPY apps/web ./apps/web
 ARG NEXT_PUBLIC_API_URL=http://localhost:4000

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { recoveryRatio } from "@stoneos/domain";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../common/prisma.service";
@@ -8,8 +8,8 @@ import type { AuthenticatedUser } from "../../common/current-user";
 @Injectable()
 export class SalesService {
   constructor(
-    private prisma: PrismaService,
-    private audit: AuditService,
+    @Inject(PrismaService) private prisma: PrismaService,
+    @Inject(AuditService) private audit: AuditService,
   ) {}
 
   customers(factoryId: string) {
