@@ -11,8 +11,8 @@ test("owner signs in and is forced to change the bootstrap password", async ({ p
   const username = process.env.E2E_USERNAME ?? "owner";
   const password = process.env.E2E_PASSWORD ?? "ChangeMeNow!12";
   await page.goto("/login");
-  await page.getByLabel("Username").fill(username);
-  await page.getByLabel("Password").fill(password);
+  await page.getByRole("textbox", { name: "Username" }).fill(username);
+  await page.locator('input[type="password"]').fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/account\/password/);
   await expect(page.getByRole("heading", { name: "Change password" })).toBeVisible();
