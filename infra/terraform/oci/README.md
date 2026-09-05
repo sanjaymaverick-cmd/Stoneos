@@ -4,6 +4,15 @@ Creates a VCN with public (TLS proxy), private (API), and isolated DB subnets, a
 
 Managed PostgreSQL (OCI Database with PostgreSQL) should be provisioned into `db_subnet_id` using the console or a follow-up module — the network and secrets layout is the hard part this module owns.
 
+## Validate (no cloud credentials)
+
+```bash
+terraform init -backend=false
+terraform validate
+```
+
+Validated on 2026-09-05 with Terraform 1.15.8 (`oracle/oci` 6.37.0). Do not apply until the hosting platform is chosen and a tfvars file exists (never commit secrets).
+
 ## Apply
 
 ```bash

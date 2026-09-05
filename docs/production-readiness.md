@@ -2,7 +2,7 @@
 
 ## Automated test report (2026-09-05, this workstation)
 
-Command: `npm test` per workspace (`node --test`). Docker Desktop Linux engine was **not running**, so PostgreSQL integration did not execute.
+Command: `npm test` per workspace (`node --test`).
 
 | Suite | Pass | Fail | Skip |
 |---|---:|---:|---:|
@@ -12,12 +12,11 @@ Command: `npm test` per workspace (`node --test`). Docker Desktop Linux engine w
 | `@stoneos/sync-client` | 1 | 0 | 0 |
 | `@stoneos/storage` | 2 | 0 | 0 |
 | `@stoneos/api` unit | 5 | 0 | 0 |
-| `@stoneos/api` unit | 5 | 0 | 0 |
 | `@stoneos/api` postgres workflows | 8 | 0 | 0 |
 | `@stoneos/web` route policy | 3 | 0 | 0 |
 | **Total** | **30** | **0** | **0** |
 
-Embedded PostgreSQL 18.4 applied both Prisma migrations on this workstation (Docker engine still unavailable).
+Playwright (smoke stack `localhost:3000` / `localhost:4000`): 2 passed (no public signup; owner login forced to change bootstrap password).
 
 - [x] `npm test` pass/fail counts recorded (**30 pass / 0 fail**)
 - [x] Goods-receipt `clientOpId` retry does not create a second block
@@ -29,17 +28,17 @@ Embedded PostgreSQL 18.4 applied both Prisma migrations on this workstation (Doc
 - [x] Cutting damaged slabs not stocked
 - [x] Opening approval requires a different user, then factory goes LIVE
 - [x] Invoice retry idempotent; overpay rejected
-- [ ] Prisma migrate deploy on empty Postgres 16
-- [ ] Bootstrap refuses a second owner
-- [ ] Manager cannot grant owner
-- [ ] Cross-tenant raw block hidden
-- [ ] Cutting damaged slabs not stocked
-- [ ] Invoice retry idempotent; overpay rejected
-- [ ] `/health/ready` against Docker API image
-- [ ] PWA manifest served
-- [ ] Terraform validate OCI and AWS
+- [x] Prisma migrate deploy on empty Postgres 16 (Docker `postgres:16-alpine` in `stoneos-smoke`)
+- [x] Bootstrap refuses a second owner (CLI no-ops after lock; first run created Vedam Granites / `owner`)
+- [x] `/health/live` and `/health/ready` against Docker API image
+- [x] Owner login against Docker API (`mustChangePassword: true`)
+- [x] PWA manifest served (`GET /manifest.webmanifest` 200, `application/manifest+json`)
+- [x] Windows NSIS installer built (`apps/desktop/dist/StoneOS Setup 0.1.0.exe`, gitignored)
+- [x] Android debug APK built (`apps/android/android/app/build/outputs/apk/debug/app-debug.apk`, gitignored)
+- [x] Terraform `init -backend=false` + `validate` for OCI (`oracle/oci` 6.37.0)
+- [ ] Terraform apply (hosting platform not chosen; AWS module skipped)
 - [ ] Backup restore rehearsal timed
-- [ ] No production credentials used in tests
-- [ ] Copilot not enabled
+- [x] No production credentials used in tests
+- [x] Copilot not enabled
 
-Remaining product gaps: native APK/NSIS artifacts must be built on Windows/Android Studio; cloud apply is an environment gate; Copilot is deferred.
+Remaining: choose a hosting platform before any `terraform apply`. Copilot stays deferred (ADR 0009).
