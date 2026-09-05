@@ -94,11 +94,13 @@ async function main() {
       body: { username: staff.username, name: staff.name, role: staff.role },
       expected: 201,
     });
-    const temp = provisioned.body?.password;
-    if (provisioned.body?.created === false) {
-      report.events.push({ note: `${staff.username} already existed` });
+    if (provisioned.body?.created === false || !provisioned.body?.password) {
+      const session = await login(staff.username, staff.password);
+      tokens[staff.role] = session.token;
+      report.events.push({ note: `${staff.username} already existed; logged in` });
       continue;
     }
+    const temp = provisioned.body.password;
     if (!temp) {
       report.failures.push({ staff: staff.username, error: "no temp password returned" });
       continue;
@@ -134,9 +136,10 @@ async function main() {
   });
   report.auditorCannotWriteExpense = auditorExpense.status === 403;
 
-  const machines = await req("GET", "/api/v1/machines", { token: tokens.operator });
-  const cutting = (machines.body ?? []).find((m) => m.machineType === "CUTTING");
-  const polishing = (machines.body ?? []).find((m) => m.machineType === "POLISHING");
+  const machines = await req("GET", "/api/v1/machines", { token: tokens.operator ?? tokens.owner });
+  const machineList = Array.isArray(machines.body) ? machines.body : [];
+  const cutting = machineList.find((m) => m.machineType === "CUTTING");
+  const polishing = machineList.find((m) => m.machineType === "POLISHING");
   const supplier = await req("POST", "/api/v1/inventory/suppliers", {
     token: tokens.inventory,
     body: { name: "Year Run Quarry" },
@@ -150,6 +153,7 @@ async function main() {
     body: { name: "YR-TRUCK-1" },
   });
 
+  const runId = Date.now().toString(36);
   const start = new Date();
   start.setUTCMonth(start.getUTCMonth() - 11);
   start.setUTCDate(1);
@@ -157,7 +161,7 @@ async function main() {
   for (let month = 0; month < 12; month += 1) {
     const when = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + month, 12));
     const stamp = when.toISOString().slice(0, 7);
-    const serial = `YR${stamp.replace("-", "")}-${String(month + 1).padStart(2, "0")}`;
+    const serial = `YR${stamp.replace("-", "")}-${String(month + 1).padStart(2, "0")}-${runId}`;
     const monthReport = { month: stamp, serial, steps: [] };
 
     const block = await req("POST", "/api/v1/inventory/raw-blocks", {
@@ -174,7 +178,7 @@ async function main() {
       },
     });
     monthReport.steps.push({ receiveBlock: block.status });
-    const blockId = block.body?.id ?? block.body?.response?.id;
+    const blockId = block.body?.block?.id ?? block.body?.id ?? block.body?.response?.block?.id;
 
     if (blockId && cutting) {
       const session = await req("POST", "/api/v1/cutting-sessions", {
