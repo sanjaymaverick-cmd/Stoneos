@@ -33,24 +33,32 @@ export class ReportsController {
   }
 
   @Get("export/blocks.csv")
-  @Roles(...ANY_AUTHENTICATED_ROLE)
+  @Roles(...CEO_ROLES)
   async exportBlocks(@CurrentUser() user: AuthenticatedUser) {
     const blocks = await this.prisma.rawBlock.findMany({ where: { factoryId: user.factoryId } });
     const header = "serial,variety,status,weightTons,quarry";
-    const rows = blocks.map(
-      (b) => `${b.serialNumber},${b.varietyName},${b.currentStatus},${b.weightTons ?? ""},${b.quarry ?? ""}`,
+    const rows = blocks.map((b) =>
+      [b.serialNumber, b.varietyName, b.currentStatus, b.weightTons ?? "", b.quarry ?? ""]
+        .map(csvCell)
+        .join(","),
     );
     return { csv: [header, ...rows].join("\n") };
   }
 
   @Get("export/slabs.csv")
-  @Roles(...ANY_AUTHENTICATED_ROLE)
+  @Roles(...CEO_ROLES)
   async exportSlabs(@CurrentUser() user: AuthenticatedUser) {
     const slabs = await this.prisma.slab.findMany({ where: { factoryId: user.factoryId } });
     const header = "serial,variety,status,thicknessMm";
-    const rows = slabs.map(
-      (s) => `${s.slabSerial},${s.varietyName},${s.salesStatus},${s.thicknessMm}`,
+    const rows = slabs.map((s) =>
+      [s.slabSerial, s.varietyName, s.salesStatus, s.thicknessMm].map(csvCell).join(","),
     );
     return { csv: [header, ...rows].join("\n") };
   }
+}
+
+function csvCell(value: unknown): string {
+  const s = String(value ?? "");
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
 }

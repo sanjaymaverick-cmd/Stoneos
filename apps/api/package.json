@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.build.json",
     "lint": "echo 'api lint uses tsc'",
-    "test": "node --import tsx --test --test-reporter spec src/modules/auth/auth.test.ts src/modules/admin/users.test.ts src/modules/inventory/inventory.test.ts src/modules/tally/tally.test.ts test/integration.test.ts",
+    "test": "node --import tsx --test --test-reporter spec src/common/session.guard.test.ts src/modules/auth/auth.test.ts src/modules/admin/users.test.ts src/modules/inventory/inventory.test.ts src/modules/tally/tally.test.ts test/integration.test.ts",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "prisma migrate dev --schema prisma/schema.prisma",
     "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
