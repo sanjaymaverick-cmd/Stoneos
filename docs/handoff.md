@@ -1,10 +1,10 @@
 # Handoff for Grok
 
-Continue this StoneOS session from `origin/main` (`a474dcb` as of 2026-09-06). Repo: https://github.com/sanjaymaverick-cmd/Stoneos — workspace `D:\work Dir\stoneOS`.
+Continue this StoneOS session from `origin/main`. Repo: https://github.com/sanjaymaverick-cmd/Stoneos — workspace `D:\\work Dir\\stoneOS`.
 
 ## Intent
 
-Local-first granite factory platform. Build and test on this workstation. Host later on **AWS, OCI, or similar** — **do not `terraform apply`** until the user names a platform. Copilot/AI is deferred (ADR 0009).
+Local-first granite factory platform. Build and test on this workstation. Host later on **AWS, OCI, or similar** — **do not `terraform apply`** until the user names a platform. Copilot/grounded AI is deferred (ADR 0009). The CEO dashboard is **rule-based ledger math** (ADR 0010), not a model.
 
 Reference repos (`ston3gpt`, `stoneos3`) were audited and **not merged**. Reimplement rules; do not copy blindly.
 
@@ -46,13 +46,13 @@ There is **no public signup**.
 
 Login is **10/min per IP**. Year-run logs in owner + 8 staff; wait ~65s after a burst or the script retries once on 429. Authenticated API traffic is **600/min per IP+token**; anonymous **120/min**.
 
-Last live run after rebuild (2026-09-06): year-run **0 unexpected failures** / 12 months / payments **201**; security **10/10**; UI walk **pass** desktop+mobile.
+Last live run after rebuild (2026-09-06): year-run **0 unexpected failures** / 12 months / payments **201**; security **10/10**; UI walk **pass** desktop+mobile. CEO brief HTTP not yet recorded after 2026-09-06 code land.
 
 ## Architecture (do not regress)
 
 - Monorepo: NestJS API `apps/api` (`/api/v1`), Next 15 PWA `apps/web`, Electron `apps/desktop`, Capacitor `apps/android`.
 - Username + opaque session (SHA-256 of token stored). scrypt passwords. `factoryId` from session only.
-- Roles: owner, manager, supervisor, operator, inventory, sales, accountant, auditor, admin. Managers cannot grant owner. `PAYMENT_ROLES` = sales writers + accountant.
+- Roles: owner, manager, supervisor, operator, inventory, sales, accountant, auditor, admin. Managers cannot grant owner. `PAYMENT_ROLES` = sales writers + accountant. `CEO_ROLES` = owner, manager, accountant, auditor, admin.
 - `factory_id` is **TEXT**. RLS `ENABLE` not `FORCE`. Idempotency `(factoryId, clientOpId)`.
 - Operational day 07:00. Recovery 105 sqft/ton at sale. Damaged cost at raw-block cost. Damaged pieces are counts, not slab rows.
 - API image runs `tsx` + explicit `@Inject()` (tsx does not emit `design:paramtypes`). Copy `tsconfig.base.json` into the API image.
@@ -61,7 +61,7 @@ Last live run after rebuild (2026-09-06): year-run **0 unexpected failures** / 1
 
 ## Tests
 
-`npm test` workspaces: **30 pass / 0 fail** (contracts 4 after payment-role test — recount if you add more). Playwright: `apps/web/e2e/login.spec.ts` and `modules-walk.spec.ts`.
+`npm test` workspaces: last recorded **30 pass / 0 fail**. After CEO work expect contracts +1 and domain +4. Playwright: `apps/web/e2e/login.spec.ts` and `modules-walk.spec.ts`.
 
 Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=UTF8 --locale=C`. Approve `@embedded-postgres/windows-x64` scripts if hydrate fails.
 
@@ -74,6 +74,6 @@ Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=
 
 ## Useful next local work
 
+- Rebuild smoke after this pull: `up -d --build`, then `GET /api/v1/reports/ceo` as owner and operator (operator must 403).
 - Timed backup/restore rehearsal (`docs/runbooks/backup-restore.md`).
 - Opening-count SoD on the live factory (`operatingStatus` may still be `SETUP` until opening is approved).
-- Rebuild smoke after source edits: `up -d --build` (web Next build ~2–4 min once deps are cached).

@@ -21,3 +21,4 @@ Factory-operations language. Implementation details do not belong here.
 - **Opening snapshot** — the physical count that starts the books. Approval posts receipts and sets the factory live in one transaction.
 - **Reservation** — a hold for cutting, polishing, or a customer. Partial dispatch is allowed.
 - **Recovery ratio** — sale-time square feet sold per ton of parent block. Benchmark is 105 sqft/ton. Production dimensions are not the source of truth.
+- **CEO brief** — rule-based executive snapshot of on-hand stock, sale-time recovery vs 105, MTD invoice/collection/expense, outstanding AR, and exceptions. Not a language model. Commercial fields are owner/manager/accountant/auditor/admin only.
