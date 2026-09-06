@@ -32,6 +32,11 @@ describe("CEO brief rules", () => {
     assert.equal(ceoExceptions(base).length, 0);
   });
 
+  it("flags overcollection instead of clamping AR to zero", () => {
+    const ex = ceoExceptions({ ...base, outstandingAr: -500 });
+    assert.equal(ex.some((e) => e.code === "OVERCOLLECTED"), true);
+  });
+
   it("computes factory recovery only from sold tons", () => {
     assert.equal(
       factoryRecovery([

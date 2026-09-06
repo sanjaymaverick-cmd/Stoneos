@@ -41,7 +41,13 @@ export function ceoExceptions(input: CeoBriefInput): CeoException[] {
       message: `Sale-time recovery ${input.recoveryRatio.toFixed(1)} sqft/ton is below the 105 benchmark.`,
     });
   }
-  if (input.outstandingAr >= CEO_AR_CRITICAL) {
+  if (input.outstandingAr < 0) {
+    out.push({
+      code: "OVERCOLLECTED",
+      severity: "critical",
+      message: `Collections exceed invoiced by ₹${Math.round(-input.outstandingAr).toLocaleString("en-IN")}. Do not hide this as zero AR.`,
+    });
+  } else if (input.outstandingAr >= CEO_AR_CRITICAL) {
     out.push({
       code: "AR_CRITICAL",
       severity: "critical",
