@@ -11,11 +11,13 @@ export class MaintenanceController {
   constructor(@Inject(MaintenanceService) private service: MaintenanceService) {}
 
   @Get()
+  @Roles(...PRODUCTION_INPUT_ROLES)
   list(@CurrentUser() user: AuthenticatedUser) {
     return this.service.list(user.factoryId);
   }
 
   @Get("alerts")
+  @Roles(...PRODUCTION_INPUT_ROLES)
   alerts(@CurrentUser() user: AuthenticatedUser) {
     return this.service.alerts(user.factoryId);
   }

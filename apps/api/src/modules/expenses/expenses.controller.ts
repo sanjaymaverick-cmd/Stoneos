@@ -11,6 +11,7 @@ export class ExpensesController {
   constructor(@Inject(ExpensesService) private service: ExpensesService) {}
 
   @Get("categories")
+  @Roles(...EXPENSE_DATA_ROLES)
   categories() {
     return this.service.categories();
   }

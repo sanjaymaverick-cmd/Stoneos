@@ -11,6 +11,7 @@ export class ConsumablesController {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
   @Get()
+  @Roles(...PRODUCTION_INPUT_ROLES)
   list(@CurrentUser() user: AuthenticatedUser) {
     return this.prisma.consumable.findMany({ where: { factoryId: user.factoryId } });
   }

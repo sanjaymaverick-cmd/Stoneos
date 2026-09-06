@@ -11,16 +11,19 @@ export class ProductionController {
   constructor(@Inject(ProductionService) private service: ProductionService) {}
 
   @Get("machines")
+  @Roles(...PRODUCTION_INPUT_ROLES)
   machines(@CurrentUser() user: AuthenticatedUser) {
     return this.service.machines(user.factoryId);
   }
 
   @Get("cutting-sessions")
+  @Roles(...PRODUCTION_INPUT_ROLES)
   sessions(@CurrentUser() user: AuthenticatedUser) {
     return this.service.cuttingSessions(user.factoryId);
   }
 
   @Get("polishing-sessions")
+  @Roles(...PRODUCTION_INPUT_ROLES)
   polishing(@CurrentUser() user: AuthenticatedUser) {
     return this.service.polishingSessions(user.factoryId);
   }
@@ -83,6 +86,7 @@ export class ProductionController {
   }
 
   @Get("dpr")
+  @Roles(...PRODUCTION_INPUT_ROLES)
   dpr(@CurrentUser() user: AuthenticatedUser, @Query("from") from?: string, @Query("to") to?: string) {
     const start = from ? new Date(from) : new Date(Date.now() - 7 * 86400000);
     const end = to ? new Date(to) : new Date();
