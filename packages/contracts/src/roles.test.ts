@@ -4,7 +4,9 @@ import {
   ACCOUNTANT_ROLE,
   ADMIN_ROLE,
   AUDITOR_ROLE,
+  CEO_ROLES,
   MANAGER_ROLE,
+  OPERATOR_ROLE,
   OWNER_ROLE,
   PAYMENT_ROLES,
   SALES_ROLE,
@@ -35,5 +37,12 @@ describe("role policy", () => {
     assert.equal(canAccess(SALES_ROLE, PAYMENT_ROLES), true);
     assert.equal(canAccess(ACCOUNTANT_ROLE, PAYMENT_ROLES), true);
     assert.equal(canAccess(AUDITOR_ROLE, PAYMENT_ROLES), false);
+  });
+
+  it("keeps commercial CEO metrics off the shop floor", () => {
+    assert.equal(canAccess(OWNER_ROLE, CEO_ROLES), true);
+    assert.equal(canAccess(ACCOUNTANT_ROLE, CEO_ROLES), true);
+    assert.equal(canAccess(OPERATOR_ROLE, CEO_ROLES), false);
+    assert.equal(canAccess(SALES_ROLE, CEO_ROLES), false);
   });
 });

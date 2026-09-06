@@ -2,7 +2,7 @@ import type { Role } from "@stoneos/contracts";
 import { canAccess, USER_MANAGEMENT_ROLES, PRODUCTION_INPUT_ROLES, SALES_READ_ROLES, INVENTORY_DATA_ROLES, EXPENSE_DATA_ROLES } from "@stoneos/contracts";
 
 export const routes: Array<{ href: string; label: string; roles: Role[] }> = [
-  { href: "/dashboard", label: "Dashboard", roles: ["owner", "manager", "admin", "supervisor", "operator", "inventory", "sales", "accountant", "auditor"] },
+  { href: "/dashboard", label: "CEO", roles: ["owner", "manager", "admin", "supervisor", "operator", "inventory", "sales", "accountant", "auditor"] },
   { href: "/inventory", label: "Inventory", roles: INVENTORY_DATA_ROLES },
   { href: "/setup/opening-inventory", label: "Opening count", roles: INVENTORY_DATA_ROLES },
   { href: "/production", label: "Production", roles: PRODUCTION_INPUT_ROLES },
