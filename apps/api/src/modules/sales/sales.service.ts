@@ -241,7 +241,7 @@ export class SalesService {
         }
         throw error;
       }
-    });
+    }, { timeout: 30_000, maxWait: 10_000 });
   }
 
   async pay(
@@ -305,7 +305,7 @@ export class SalesService {
         }
         throw error;
       }
-    });
+    }, { timeout: 30_000, maxWait: 10_000 });
   }
 
   async returnSlabs(user: AuthenticatedUser, salesOrderId: string, slabIds: string[], reason: string) {
