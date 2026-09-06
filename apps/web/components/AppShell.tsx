@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiFetch, flushQueuedWrites, getToken, outbox, setToken } from "../lib/api";
+import { apiFetch, flushQueuedWrites, getToken, outbox, setActor, setToken } from "../lib/api";
 import { visibleRoutes } from "../lib/routePolicy";
 import type { PublicUser } from "@stoneos/contracts";
 
@@ -19,7 +19,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       router.replace("/login");
       return;
     }
-    apiFetch<PublicUser>("/api/v1/auth/me").then(setUser).catch(() => router.replace("/login"));
+    apiFetch<PublicUser>("/api/v1/auth/me")
+      .then((u) => {
+        setUser(u);
+        setActor({ userId: u.id, factoryId: u.factoryId });
+      })
+      .catch(() => router.replace("/login"));
   }, [router]);
 
   useEffect(() => {
@@ -60,6 +65,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           onClick={async () => {
             await apiFetch("/api/v1/auth/logout", { method: "POST" }).catch(() => undefined);
             setToken(null);
+            setActor(null);
             router.replace("/login");
           }}
         >

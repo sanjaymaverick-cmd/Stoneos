@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { apiFetch, setToken } from "../../lib/api";
+import { apiFetch, setActor, setToken } from "../../lib/api";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
@@ -12,11 +12,12 @@ export default function LoginPage() {
     event.preventDefault();
     setError("");
     try {
-      const result = await apiFetch<{ token: string; user: { mustChangePassword: boolean } }>(
-        "/api/v1/auth/login",
-        { method: "POST", body: JSON.stringify({ username, password }) },
-      );
+      const result = await apiFetch<{
+        token: string;
+        user: { id: string; factoryId: string; mustChangePassword: boolean };
+      }>("/api/v1/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
       setToken(result.token);
+      setActor({ userId: result.user.id, factoryId: result.user.factoryId });
       window.location.href = result.user.mustChangePassword ? "/account/password" : "/dashboard";
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");

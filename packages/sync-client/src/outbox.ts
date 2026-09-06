@@ -1,5 +1,7 @@
 export type SyncStatus = "synced" | "pending" | "conflict" | "offline";
 
+export const MAX_OUTBOX_ATTEMPTS = 8;
+
 export interface OutboxItem {
   clientOpId: string;
   method: "POST" | "PATCH" | "DELETE";
@@ -10,6 +12,14 @@ export interface OutboxItem {
   attempts: number;
   lastError?: string;
   conflict?: unknown;
+  userId?: string;
+  factoryId?: string;
+  dead?: boolean;
+}
+
+export interface OutboxActor {
+  userId: string;
+  factoryId: string;
 }
 
 export interface OutboxStore {
@@ -70,15 +80,90 @@ export interface FlushResult {
   flushed: number;
   conflicts: number;
   failed: number;
+  skipped: number;
+}
+
+function newClientOpId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `op-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+/** Queue a write with a stable clientOpId injected into the body. */
+export function bindOutboxItem(input: {
+  method: OutboxItem["method"];
+  path: string;
+  body: unknown;
+  actor?: OutboxActor | null;
+}): OutboxItem {
+  const body =
+    input.body && typeof input.body === "object" && !Array.isArray(input.body)
+      ? { ...(input.body as Record<string, unknown>) }
+      : {};
+  const existing = body.clientOpId;
+  const clientOpId = typeof existing === "string" && existing.length > 0 ? existing : newClientOpId();
+  body.clientOpId = clientOpId;
+  return {
+    clientOpId,
+    method: input.method,
+    path: input.path,
+    body,
+    createdAt: new Date().toISOString(),
+    attempts: 0,
+    userId: input.actor?.userId,
+    factoryId: input.actor?.factoryId,
+  };
+}
+
+/** Replay must send the stored key, not mint a new one. */
+export function replayBody(item: OutboxItem): unknown {
+  if (item.body && typeof item.body === "object" && !Array.isArray(item.body)) {
+    return { ...(item.body as Record<string, unknown>), clientOpId: item.clientOpId };
+  }
+  return item.body;
+}
+
+export function actorMatches(item: OutboxItem, actor?: OutboxActor | null): boolean {
+  if (!item.userId && !item.factoryId) return true;
+  if (!actor) return false;
+  if (item.userId && item.userId !== actor.userId) return false;
+  if (item.factoryId && item.factoryId !== actor.factoryId) return false;
+  return true;
 }
 
 export async function flushOutbox(
   store: OutboxStore,
   send: (item: OutboxItem) => Promise<{ ok: boolean; status: number; body: unknown }>,
+  actor?: OutboxActor | null,
 ): Promise<FlushResult> {
-  const result: FlushResult = { flushed: 0, conflicts: 0, failed: 0 };
+  const result: FlushResult = { flushed: 0, conflicts: 0, failed: 0, skipped: 0 };
   for (const item of await store.list()) {
-    const response = await send(item);
+    if (item.dead || item.conflict) {
+      result.skipped += 1;
+      continue;
+    }
+    if (!actorMatches(item, actor)) {
+      result.skipped += 1;
+      continue;
+    }
+    if (item.attempts >= MAX_OUTBOX_ATTEMPTS) {
+      await store.put({ ...item, dead: true, lastError: "retry cap" });
+      result.failed += 1;
+      continue;
+    }
+    let response: { ok: boolean; status: number; body: unknown };
+    try {
+      response = await send(item);
+    } catch (error) {
+      await store.put({
+        ...item,
+        attempts: item.attempts + 1,
+        lastError: error instanceof Error ? error.message : "network error",
+      });
+      result.failed += 1;
+      continue;
+    }
     if (response.ok) {
       await store.remove(item.clientOpId);
       result.flushed += 1;
@@ -92,6 +177,9 @@ export async function flushOutbox(
     if (response.status === 409) {
       next.conflict = response.body;
       result.conflicts += 1;
+    } else if (response.status >= 400 && response.status < 500) {
+      next.dead = true;
+      result.failed += 1;
     } else {
       result.failed += 1;
     }
