@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
@@ -12,10 +12,13 @@ export default function InventoryPage() {
   const [error, setError] = useState("");
   const [slabs, setSlabs] = useState<Array<{ id: string; slabSerial: string; salesStatus: string }>>([]);
   const [supplierName, setSupplierName] = useState("");
+  const [movements, setMovements] = useState<Array<{ id: string; movementType: string; rawBlockId: string | null; notes: string | null }>>([]);
+  const receiveOp = useRef(crypto.randomUUID());
 
   async function refresh() {
     setBlocks(await apiFetch("/api/v1/inventory/raw-blocks"));
     setSlabs(await apiFetch("/api/v1/inventory/slabs"));
+    setMovements(await apiFetch("/api/v1/inventory/movements"));
   }
   useEffect(() => { refresh().catch(() => undefined); }, []);
 
@@ -25,8 +28,9 @@ export default function InventoryPage() {
     try {
       await apiFetch("/api/v1/inventory/raw-blocks", {
         method: "POST",
-        body: JSON.stringify({ serialNumber, varietyName, clientOpId: crypto.randomUUID() }),
+        body: JSON.stringify({ serialNumber, varietyName, clientOpId: receiveOp.current }),
       });
+      receiveOp.current = crypto.randomUUID();
       setSerial("");
       await refresh();
     } catch (err) {
@@ -70,6 +74,32 @@ export default function InventoryPage() {
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+      <div className="card">
+        <h2>Recent movements</h2>
+        {movements.length === 0 ? <EmptyState>No movements yet.</EmptyState> : (
+          <ul>
+            {movements.slice(0, 12).map((m) => (
+              <li key={m.id}>
+                {m.movementType}
+                {m.movementType === "GOODS_RECEIPT" || m.movementType === "SALES_RESERVATION" || m.movementType === "DELIVERY" ? (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      apiFetch(`/api/v1/inventory/movements/${m.id}/reverse`, {
+                        method: "POST",
+                        body: JSON.stringify({ reason: "mistype", clientOpId: `rev:${m.id}` }),
+                      }).then(refresh)
+                    }
+                  >
+                    Reverse
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </AppShell>

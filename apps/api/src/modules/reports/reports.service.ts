@@ -3,6 +3,7 @@ import {
   answerCeoQuestion,
   ceoExceptions,
   ceoNarrative,
+  factoryMonthStart,
   factoryRecovery,
   recoveryRatio,
   type CeoSnapshot,
@@ -31,7 +32,7 @@ export class ReportsService {
   async ceoBrief(factoryId: string) {
     const factory = await this.prisma.factory.findUniqueOrThrow({ where: { id: factoryId } });
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthStart = factoryMonthStart(now);
     const soon = new Date();
     soon.setDate(soon.getDate() + 7);
 
@@ -78,13 +79,19 @@ export class ReportsService {
       }),
       this.prisma.rawBlock.findMany({
         where: { factoryId },
-        include: { slabs: { include: { orderLines: true } } },
+        include: { slabs: { include: { orderLines: { include: { salesOrder: true } } } } },
       }),
     ]);
 
     const recoveryRows = blocks.map((block) => {
       const soldSqft = block.slabs
         .flatMap((s) => s.orderLines)
+        .filter(
+          (line) =>
+            line.salesOrder.status === "CONFIRMED" ||
+            line.salesOrder.status === "PARTIALLY_DELIVERED" ||
+            line.salesOrder.status === "DELIVERED",
+        )
         .reduce((sum, line) => sum + Number(line.quantitySqft), 0);
       return { soldSqft, weightTons: Number(block.weightTons ?? 0) };
     });
@@ -95,7 +102,7 @@ export class ReportsService {
       factoryName: factory.name,
       operatingStatus: factory.operatingStatus,
       recoveryRatio: recovery,
-      outstandingAr: Math.max(0, invoicedTotal - collectedTotal),
+      outstandingAr: invoicedTotal - collectedTotal,
       invoicedMtd: Number(invoicedMtd._sum.amount ?? 0),
       collectedMtd: Number(collectedMtd._sum.amount ?? 0),
       expensesMtd: Number(expensesMtd._sum.amount ?? 0),

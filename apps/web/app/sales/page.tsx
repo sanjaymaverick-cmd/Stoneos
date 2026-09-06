@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
@@ -24,6 +24,14 @@ export default function SalesPage() {
   const [slabId, setSlabId] = useState("");
   const [qty, setQty] = useState("32");
   const [rate, setRate] = useState("120");
+  const opIds = useRef<Record<string, string>>({});
+  function stableOp(key: string) {
+    opIds.current[key] ??= crypto.randomUUID();
+    return opIds.current[key];
+  }
+  function clearOp(key: string) {
+    delete opIds.current[key];
+  }
 
   async function refresh() {
     const [c, s, o] = await Promise.all([
@@ -54,10 +62,11 @@ export default function SalesPage() {
       body: JSON.stringify({
         customerId,
         orderDate: new Date().toISOString().slice(0, 10),
-        clientOpId: crypto.randomUUID(),
+        clientOpId: stableOp("order"),
         lines: [{ slabId: slabId || undefined, quantitySqft: Number(qty), rate: Number(rate) }],
       }),
     });
+    clearOp("order");
     await refresh();
   }
 
@@ -107,9 +116,20 @@ export default function SalesPage() {
             {o.customer.name} — {o.status}
             <button type="button" onClick={() => apiFetch(`/api/v1/sales-orders/${o.id}/packing`, { method: "POST", body: JSON.stringify({ slabIds: o.lines.map((l) => l.slabId).filter(Boolean) }) }).then(refresh)}>Pack</button>
             <button type="button" onClick={() => apiFetch(`/api/v1/sales-orders/${o.id}/dispatch`, { method: "POST", body: JSON.stringify({ slabIds: o.lines.map((l) => l.slabId).filter(Boolean) }) }).then(refresh)}>Dispatch</button>
-            <button type="button" onClick={() => apiFetch(`/api/v1/sales-orders/${o.id}/invoice`, { method: "POST", body: JSON.stringify({ clientOpId: crypto.randomUUID() }) }).then(refresh)}>Invoice</button>
+            <button type="button" onClick={() => apiFetch(`/api/v1/sales-orders/${o.id}/invoice`, { method: "POST", body: JSON.stringify({ clientOpId: stableOp(`inv:${o.id}`) }) }).then(() => { clearOp(`inv:${o.id}`); return refresh(); })}>Invoice</button>
             {o.invoices[0] ? (
-              <button type="button" onClick={() => apiFetch(`/api/v1/invoices/${o.invoices[0]!.id}/payments`, { method: "POST", body: JSON.stringify({ amount: Number(o.invoices[0]!.amount), method: "cash", paidAt: new Date().toISOString().slice(0, 10), clientOpId: crypto.randomUUID() }) }).then(refresh)}>Record payment</button>
+              <button type="button" onClick={() => {
+                const invId = o.invoices[0]!.id;
+                return apiFetch(`/api/v1/invoices/${invId}/payments`, {
+                  method: "POST",
+                  body: JSON.stringify({
+                    amount: Number(o.invoices[0]!.amount),
+                    method: "cash",
+                    paidAt: new Date().toISOString().slice(0, 10),
+                    clientOpId: stableOp(`pay:${invId}`),
+                  }),
+                }).then(() => { clearOp(`pay:${invId}`); return refresh(); });
+              }}>Record payment</button>
             ) : null}
             <button type="button" className="secondary" onClick={() => apiFetch(`/api/v1/sales-orders/${o.id}/returns`, { method: "POST", body: JSON.stringify({ slabIds: o.lines.map((l) => l.slabId).filter(Boolean), reason: "customer return" }) }).then(refresh)}>Return</button>
           </p>
