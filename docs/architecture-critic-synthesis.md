@@ -105,3 +105,5 @@ Add to the handoff checklist: S1 concurrency, S2/B1 membership, S7 volume, A1 re
 6. Fix test globs + red CEO test; put guard HTTP cases in CI.
 
 Without 1, the pilot can lose the only copy of the books. Without 3–5, the pilot cannot correct or trust money.
+
+**Status 2026-09-06 (code on `main`):** 1 volume + dump script landed (second-machine drill still open). 2 TZ + Z tests landed. 3 reversal endpoint + inventory UI landed (receipt / reservation / delivery only). 4 deny-by-default + CSV lock + slab factory checks landed. 5 pay `FOR UPDATE` + stable per-form `clientOpId` landed. 6 test globs + guard unit in CI landed; live HTTP CEO 403 is in `security-check.mjs` (run against smoke).
