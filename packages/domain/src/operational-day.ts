@@ -38,3 +38,20 @@ export function factoryMonthStart(occurredAt: Date, timeZone = FACTORY_TIME_ZONE
   const z = zoneParts(occurredAt, timeZone);
   return new Date(Date.UTC(z.year, z.month - 1, 1) - 5.5 * 3600 * 1000);
 }
+
+/**
+ * Indian financial year on the factory clock: 1 April–31 March.
+ * Returns the calendar year in which that FY starts (FY 2026 = 2026-04-01 .. 2027-03-31 IST).
+ */
+export function indianFinancialYear(occurredAt: Date, timeZone = FACTORY_TIME_ZONE): number {
+  const z = zoneParts(occurredAt, timeZone);
+  return z.month >= 4 ? z.year : z.year - 1;
+}
+
+export function formatInvoiceNumber(fiscalYear: number, seq: number): string {
+  return `INV-${fiscalYear}-${String(seq).padStart(5, "0")}`;
+}
+
+export function formatCreditNoteNumber(fiscalYear: number, seq: number): string {
+  return `CN-${fiscalYear}-${String(seq).padStart(5, "0")}`;
+}

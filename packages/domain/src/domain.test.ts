@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { damagedCostAtRawBlock, recoveryRatio, RECOVERY_BENCHMARK_SQFT_PER_TON } from "./recovery.ts";
 import { damagedSlabCount, slabSerial } from "./serials.ts";
-import { factoryMonthStart, operationalDateFor } from "./operational-day.ts";
+import {
+  factoryMonthStart,
+  formatCreditNoteNumber,
+  formatInvoiceNumber,
+  indianFinancialYear,
+  operationalDateFor,
+} from "./operational-day.ts";
 
 describe("slab serials", () => {
   it("formats good-slab serials from block and cut count", () => {
@@ -45,5 +51,13 @@ describe("operational day", () => {
   it("starts the IST month at 18:30Z on the previous UTC day", () => {
     const start = factoryMonthStart(new Date("2026-09-06T02:30:00Z"), "Asia/Kolkata");
     assert.equal(start.toISOString(), "2026-08-31T18:30:00.000Z");
+  });
+
+  it("uses IST April–March for the invoice financial year", () => {
+    assert.equal(indianFinancialYear(new Date("2026-04-01T00:00:00+05:30")), 2026);
+    assert.equal(indianFinancialYear(new Date("2026-03-31T12:00:00+05:30")), 2025);
+    assert.equal(indianFinancialYear(new Date("2027-03-31T23:59:00+05:30")), 2026);
+    assert.equal(formatInvoiceNumber(2026, 1), "INV-2026-00001");
+    assert.equal(formatCreditNoteNumber(2026, 12), "CN-2026-00012");
   });
 });
