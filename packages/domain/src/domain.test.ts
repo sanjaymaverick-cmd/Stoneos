@@ -27,8 +27,18 @@ describe("recovery", () => {
 });
 
 describe("operational day", () => {
-  it("assigns 06:59 to the previous calendar date", () => {
-    const d = operationalDateFor(new Date("2026-09-06T06:59:00"));
+  it("maps 06:59 IST (01:29Z) to the previous calendar date", () => {
+    const d = operationalDateFor(new Date("2026-09-06T01:29:00Z"), "Asia/Kolkata");
     assert.equal(d.toISOString().slice(0, 10), "2026-09-05");
+  });
+
+  it("maps 08:00 IST (02:30Z) to the same calendar date", () => {
+    const d = operationalDateFor(new Date("2026-09-06T02:30:00Z"), "Asia/Kolkata");
+    assert.equal(d.toISOString().slice(0, 10), "2026-09-06");
+  });
+
+  it("maps 07:00 IST (01:30Z) to that calendar date", () => {
+    const d = operationalDateFor(new Date("2026-09-06T01:30:00Z"), "Asia/Kolkata");
+    assert.equal(d.toISOString().slice(0, 10), "2026-09-06");
   });
 });

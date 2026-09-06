@@ -1,25 +1,26 @@
 # Backup and restore
 
-## Managed PostgreSQL (preferred)
+The prod-image Compose file **must** mount `stoneos_pg_data` on Postgres. `docker compose down` without `-v` keeps that volume. `down -v` destroys books — never use `-v` on a factory volume.
 
-Enable automated backups (7-day minimum) and a daily snapshot. Record the snapshot ID and PostgreSQL version.
+Do not treat the smoke stack as the only copy of LIVE books.
 
-Restore:
+## Nightly dump (workstation)
 
-```bash
-# AWS
-aws rds restore-db-instance-from-db-snapshot --db-instance-identifier stoneos-pg-restore --db-snapshot-identifier SNAPSHOT
-
-# OCI: restore the Database with PostgreSQL backup into a new private endpoint
-```
-
-Point a **disposable** `DATABASE_URL` at the restore. Never restore onto production in place without a freeze.
-
-## Self-hosted alternative
+Write to a **second device** (USB / NAS), not only the system SSD:
 
 ```bash
-pg_dump -Fc "$DATABASE_URL" > stoneos.dump
-pg_restore --clean --if-exists -d "$RESTORE_URL" stoneos.dump
+export HOST_BACKUP_DIR=/mnt/backup-disk/stoneos
+bash scripts/backup-rehearse.sh
 ```
 
-Rehearse restore quarterly. Record duration and row counts for `raw_block`, `slab`, `invoice`, `payment`.
+Schedule that command daily (Task Scheduler / systemd). Keep 30 days of `*.dump` files. Copy one dump offsite weekly.
+
+## Rehearsal
+
+`scripts/backup-rehearse.sh` dumps `stoneos`, restores into `stoneos_restore` on the same instance, and writes `var/backup-rehearse.json` with duration and row counts for `raw_block`, `slab`, `invoice`, `payment`.
+
+Never restore onto the live database in place without a freeze.
+
+## Managed PostgreSQL (later cloud)
+
+Enable automated backups (7-day minimum). Restore into a **new** instance. Point a disposable `DATABASE_URL` at it.

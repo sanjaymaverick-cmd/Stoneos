@@ -85,9 +85,16 @@ export function ceoExceptions(input: CeoBriefInput): CeoException[] {
   return out;
 }
 
+/** Count only the fraction of block tons implied by sold sqft vs the 105 benchmark. */
 export function factoryRecovery(rows: Array<{ soldSqft: number; weightTons: number }>): number | null {
-  const sold = rows.reduce((s, r) => s + r.soldSqft, 0);
-  const tons = rows.reduce((s, r) => (r.soldSqft > 0 ? s + r.weightTons : s), 0);
+  let sold = 0;
+  let tons = 0;
+  for (const r of rows) {
+    if (r.soldSqft <= 0 || r.weightTons <= 0) continue;
+    sold += r.soldSqft;
+    const implied = r.soldSqft / RECOVERY_BENCHMARK_SQFT_PER_TON;
+    tons += Math.min(r.weightTons, implied);
+  }
   if (tons <= 0) return null;
   return sold / tons;
 }

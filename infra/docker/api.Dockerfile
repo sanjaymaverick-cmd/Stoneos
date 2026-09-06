@@ -14,8 +14,9 @@ RUN npm ci --ignore-scripts --workspace=@stoneos/api --workspace=@stoneos/contra
 
 FROM node:24-alpine AS runner
 WORKDIR /app
+ENV TZ=Asia/Kolkata
 RUN addgroup -S stoneos && adduser -S stoneos -G stoneos
-RUN apk add --no-cache wget openssl libc6-compat
+RUN apk add --no-cache wget openssl libc6-compat tzdata
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages ./packages

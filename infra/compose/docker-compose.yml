@@ -6,6 +6,7 @@ services:
       POSTGRES_USER: stoneos
       POSTGRES_PASSWORD: stoneos_dev_only
       POSTGRES_DB: stoneos
+      TZ: Asia/Kolkata
     ports:
       - "5432:5432"
     volumes:
