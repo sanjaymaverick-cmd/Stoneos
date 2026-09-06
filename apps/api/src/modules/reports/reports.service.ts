@@ -45,6 +45,7 @@ export class ReportsService {
       maintenanceDue,
       invoicedAll,
       collectedAll,
+      creditedAll,
       invoicedMtd,
       collectedMtd,
       expensesMtd,
@@ -61,6 +62,7 @@ export class ReportsService {
       }),
       this.prisma.invoice.aggregate({ where: { factoryId }, _sum: { amount: true } }),
       this.prisma.payment.aggregate({ where: { factoryId }, _sum: { amount: true } }),
+      this.prisma.creditNote.aggregate({ where: { factoryId }, _sum: { amount: true } }),
       this.prisma.invoice.aggregate({
         where: { factoryId, createdAt: { gte: monthStart } },
         _sum: { amount: true },
@@ -98,11 +100,12 @@ export class ReportsService {
     const recovery = factoryRecovery(recoveryRows);
     const invoicedTotal = Number(invoicedAll._sum.amount ?? 0);
     const collectedTotal = Number(collectedAll._sum.amount ?? 0);
+    const creditedTotal = Number(creditedAll._sum.amount ?? 0);
     const snap: CeoSnapshot = {
       factoryName: factory.name,
       operatingStatus: factory.operatingStatus,
       recoveryRatio: recovery,
-      outstandingAr: invoicedTotal - collectedTotal,
+      outstandingAr: invoicedTotal - creditedTotal - collectedTotal,
       invoicedMtd: Number(invoicedMtd._sum.amount ?? 0),
       collectedMtd: Number(collectedMtd._sum.amount ?? 0),
       expensesMtd: Number(expensesMtd._sum.amount ?? 0),

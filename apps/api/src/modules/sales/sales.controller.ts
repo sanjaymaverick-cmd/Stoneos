@@ -59,7 +59,7 @@ export class SalesController {
       customerId: string;
       orderDate: string;
       clientOpId: string;
-      lines: Array<{ slabId?: string; quantitySqft: number; rate: number }>;
+      lines: Array<{ slabId?: string; quantitySqft: number; rate: number; baseVersion?: number }>;
     },
   ) {
     return this.service.createOrder(user, body);
@@ -100,7 +100,7 @@ export class SalesController {
   pay(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: { amount: number; method: string; paidAt: string; clientOpId: string },
+    @Body() body: { amount: number; method: string; paidAt: string; clientOpId: string; baseVersion?: number },
   ) {
     return this.service.pay(user, id, body);
   }

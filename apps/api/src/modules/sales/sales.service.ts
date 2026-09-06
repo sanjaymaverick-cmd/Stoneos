@@ -1,9 +1,16 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { recoveryRatio } from "@stoneos/domain";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
+import { isUniqueViolation, nextDocumentNumber } from "./document-number";
 
 @Injectable()
 export class SalesService {
@@ -79,7 +86,7 @@ export class SalesService {
     input: {
       customerId: string;
       orderDate: string;
-      lines: Array<{ slabId?: string; quantitySqft: number; rate: number }>;
+      lines: Array<{ slabId?: string; quantitySqft: number; rate: number; baseVersion?: number }>;
       clientOpId: string;
     },
   ) {
@@ -98,6 +105,13 @@ export class SalesService {
         if (!slab) throw new BadRequestException("Slab does not belong to this factory");
         if (slab.salesStatus === "sold" || slab.salesStatus === "reserved") {
           throw new BadRequestException(`Slab ${slab.slabSerial} is not available`);
+        }
+        if (line.baseVersion != null && slab.version !== line.baseVersion) {
+          throw new ConflictException({
+            code: "VERSION_CONFLICT",
+            serverVersion: slab.version,
+            server: slab,
+          });
         }
         await tx.slab.update({
           where: { id: slab.id },
@@ -198,89 +212,157 @@ export class SalesService {
       if (duplicate) throw new BadRequestException("Order already invoiced");
       const lines = await tx.salesLineItem.findMany({ where: { salesOrderId: order.id } });
       const amount = lines.reduce((sum, line) => sum + Number(line.quantitySqft) * Number(line.rate), 0);
-      const count = await tx.invoice.count({ where: { factoryId: user.factoryId } });
-      const created = await tx.invoice.create({
-        data: {
-          factoryId: user.factoryId,
-          salesOrderId: order.id,
-          customerId: order.customerId,
-          invoiceNumber: `INV-${String(count + 1).padStart(5, "0")}`,
-          amount,
-          idempotencyKey: clientOpId,
-        },
-      });
-      await tx.auditEvent.create({
-        data: {
-          factoryId: user.factoryId,
-          actorId: user.id,
-          action: "sales.invoice",
-          entityType: "invoice",
-          entityId: created.id,
-          payload: { amount },
-        },
-      });
-      return created;
+      const invoiceNumber = await nextDocumentNumber(tx, user.factoryId, "INVOICE");
+      try {
+        const created = await tx.invoice.create({
+          data: {
+            factoryId: user.factoryId,
+            salesOrderId: order.id,
+            customerId: order.customerId,
+            invoiceNumber,
+            amount,
+            idempotencyKey: clientOpId,
+          },
+        });
+        await tx.auditEvent.create({
+          data: {
+            factoryId: user.factoryId,
+            actorId: user.id,
+            action: "sales.invoice",
+            entityType: "invoice",
+            entityId: created.id,
+            payload: { amount, invoiceNumber },
+          },
+        });
+        return created;
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new ConflictException("Invoice number already issued; retry the same clientOpId");
+        }
+        throw error;
+      }
     });
   }
 
   async pay(
     user: AuthenticatedUser,
     invoiceId: string,
-    input: { amount: number; method: string; paidAt: string; clientOpId: string },
+    input: { amount: number; method: string; paidAt: string; clientOpId: string; baseVersion?: number },
   ) {
     if (input.amount <= 0) throw new BadRequestException("Amount must be positive");
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND factory_id = ${user.factoryId} FOR UPDATE`;
       const invoice = await tx.invoice.findFirst({
         where: { id: invoiceId, factoryId: user.factoryId },
-        include: { payments: true },
+        include: { payments: true, creditNotes: true },
       });
       if (!invoice) throw new NotFoundException("Invoice not found");
+      if (input.baseVersion != null && invoice.version !== input.baseVersion) {
+        throw new ConflictException({
+          code: "VERSION_CONFLICT",
+          serverVersion: invoice.version,
+          server: invoice,
+        });
+      }
       const existing = await tx.payment.findUnique({
         where: { factoryId_idempotencyKey: { factoryId: user.factoryId, idempotencyKey: input.clientOpId } },
       });
       if (existing) return existing;
       const paid = invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0);
-      if (paid + input.amount > Number(invoice.amount) + 0.001) {
+      const credited = invoice.creditNotes.reduce((sum, n) => sum + Number(n.amount), 0);
+      if (paid + input.amount > Number(invoice.amount) - credited + 0.001) {
         throw new BadRequestException("Payment exceeds invoice amount");
       }
-      const payment = await tx.payment.create({
-        data: {
-          factoryId: user.factoryId,
-          invoiceId: invoice.id,
-          amount: input.amount,
-          method: input.method,
-          paidAt: new Date(input.paidAt),
-          idempotencyKey: input.clientOpId,
-        },
-      });
-      await tx.auditEvent.create({
-        data: {
-          factoryId: user.factoryId,
-          actorId: user.id,
-          action: "sales.payment",
-          entityType: "payment",
-          entityId: payment.id,
-          payload: { invoiceId: invoice.id, amount: input.amount },
-        },
-      });
-      return payment;
+      try {
+        const payment = await tx.payment.create({
+          data: {
+            factoryId: user.factoryId,
+            invoiceId: invoice.id,
+            amount: input.amount,
+            method: input.method,
+            paidAt: new Date(input.paidAt),
+            idempotencyKey: input.clientOpId,
+          },
+        });
+        await tx.invoice.update({
+          where: { id: invoice.id },
+          data: { version: { increment: 1 } },
+        });
+        await tx.auditEvent.create({
+          data: {
+            factoryId: user.factoryId,
+            actorId: user.id,
+            action: "sales.payment",
+            entityType: "payment",
+            entityId: payment.id,
+            payload: { invoiceId: invoice.id, amount: input.amount },
+          },
+        });
+        return payment;
+      } catch (error) {
+        if (String(error).includes("Payment exceeds invoice amount")) {
+          throw new BadRequestException("Payment exceeds invoice amount");
+        }
+        throw error;
+      }
     });
   }
 
   async returnSlabs(user: AuthenticatedUser, salesOrderId: string, slabIds: string[], reason: string) {
+    if (!reason?.trim()) throw new BadRequestException("Reason is required");
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     return this.prisma.$transaction(async (tx) => {
       await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
+      const invoice = await tx.invoice.findFirst({ where: { salesOrderId: order.id } });
+      const lines = await tx.salesLineItem.findMany({
+        where: { salesOrderId: order.id, slabId: { in: slabIds } },
+      });
+      const creditAmount = lines.reduce(
+        (sum, line) => sum + Number(line.quantitySqft) * Number(line.rate),
+        0,
+      );
+      if (invoice && creditAmount <= 0) {
+        throw new BadRequestException("Invoiced return needs a credit amount from order lines");
+      }
+      for (const slabId of slabIds) {
+        const slab = await tx.slab.findFirst({ where: { id: slabId, factoryId: user.factoryId } });
+        if (!slab) throw new BadRequestException("Slab does not belong to this factory");
+        if (slab.salesStatus !== "sold" && slab.salesStatus !== "reserved") {
+          throw new BadRequestException("Slab is not outbound stock for this order");
+        }
+      }
       const ret = await tx.customerReturn.create({
         data: {
           factoryId: user.factoryId,
           salesOrderId: order.id,
-          reason,
+          reason: reason.trim(),
           lines: { create: slabIds.map((slabId) => ({ slabId })) },
         },
         include: { lines: true },
       });
+      let creditNote = null;
+      if (invoice) {
+        const creditNoteNumber = await nextDocumentNumber(tx, user.factoryId, "CREDIT_NOTE");
+        try {
+          creditNote = await tx.creditNote.create({
+            data: {
+              factoryId: user.factoryId,
+              salesOrderId: order.id,
+              invoiceId: invoice.id,
+              customerReturnId: ret.id,
+              creditNoteNumber,
+              amount: creditAmount,
+              reason: reason.trim(),
+              idempotencyKey: `credit:${ret.id}`,
+            },
+          });
+        } catch (error) {
+          if (isUniqueViolation(error)) {
+            throw new ConflictException("Credit note number already issued");
+          }
+          throw error;
+        }
+      }
       for (const slabId of slabIds) {
         await tx.slab.update({
           where: { id: slabId },
@@ -304,10 +386,15 @@ export class SalesService {
           action: "sales.return",
           entityType: "customer_return",
           entityId: ret.id,
-          payload: { reason, slabIds },
+          payload: {
+            reason: reason.trim(),
+            slabIds,
+            creditNoteNumber: creditNote?.creditNoteNumber,
+            creditAmount: creditNote ? Number(creditNote.amount) : 0,
+          },
         },
       });
-      return ret;
+      return { ...ret, creditNote };
     });
   }
 
