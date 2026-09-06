@@ -12,6 +12,15 @@ import type { Role } from "@stoneos/contracts";
 import { PrismaService } from "./prisma.service";
 import { IS_PUBLIC, ROLES_KEY, type AuthenticatedUser } from "./current-user";
 
+export function assertAllowedRoles(allowed: Role[] | undefined, role: Role) {
+  if (!allowed || allowed.length === 0) {
+    throw new ForbiddenException("Route has no role annotation");
+  }
+  if (!allowed.includes(role)) {
+    throw new ForbiddenException("Insufficient role");
+  }
+}
+
 @Injectable()
 export class SessionGuard implements CanActivate {
   constructor(
@@ -63,9 +72,7 @@ export class SessionGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    if (allowed && !allowed.includes(authUser.role)) {
-      throw new ForbiddenException("Insufficient role");
-    }
+    assertAllowedRoles(allowed, authUser.role);
     return true;
   }
 }

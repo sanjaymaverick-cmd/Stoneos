@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Inject, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
-import { changePasswordRequestSchema, loginRequestSchema } from "@stoneos/contracts";
-import { CurrentUser, Public, type AuthenticatedUser } from "../../common/current-user";
+import { ANY_AUTHENTICATED_ROLE, changePasswordRequestSchema, loginRequestSchema } from "@stoneos/contracts";
+import { CurrentUser, Public, Roles, type AuthenticatedUser } from "../../common/current-user";
 import { ZodPipe } from "../../common/zod-pipe";
 import { AuthService } from "./auth.service";
 
@@ -19,6 +19,7 @@ export class AuthController {
 
   @ApiBearerAuth()
   @Get("me")
+  @Roles(...ANY_AUTHENTICATED_ROLE)
   me(@CurrentUser() user: AuthenticatedUser) {
     return user;
   }
@@ -26,6 +27,7 @@ export class AuthController {
   @ApiBearerAuth()
   @Post("logout")
   @HttpCode(200)
+  @Roles(...ANY_AUTHENTICATED_ROLE)
   logout(@CurrentUser() user: AuthenticatedUser) {
     return this.service.logout(user.sessionId, user);
   }
@@ -33,6 +35,7 @@ export class AuthController {
   @ApiBearerAuth()
   @Post("change-password")
   @HttpCode(200)
+  @Roles(...ANY_AUTHENTICATED_ROLE)
   changePassword(
     @CurrentUser() user: AuthenticatedUser,
     @Body(new ZodPipe(changePasswordRequestSchema))
