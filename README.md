@@ -51,3 +51,5 @@ Later (hosting not chosen): same images on AWS, OCI, or a similar private VPC. T
 ## Classification
 
 Do not assume a page means a feature is proven. See `docs/production-readiness.md` for the evidence table after tests have been run.
+
+Grok continuation: `docs/handoff.md`.
