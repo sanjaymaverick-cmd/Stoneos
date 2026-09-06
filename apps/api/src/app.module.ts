@@ -9,6 +9,7 @@ import { ExpensesModule } from "./modules/expenses/expenses.module";
 import { InventoryModule } from "./modules/inventory/inventory.module";
 import { ProductionModule } from "./modules/production/production.module";
 import { ReportsController } from "./modules/reports/reports.controller";
+import { ReportsService } from "./modules/reports/reports.service";
 import { SalesModule } from "./modules/sales/sales.module";
 import { TallyModule } from "./modules/tally/tally.module";
 import { FilesModule } from "./modules/files/files.module";
@@ -28,7 +29,6 @@ import { MaintenanceModule } from "./modules/maintenance/maintenance.module";
     MaintenanceModule,
   ],
   controllers: [HealthController, ReportsController],
-  providers: [{ provide: APP_GUARD, useClass: SessionGuard }],
+  providers: [ReportsService, { provide: APP_GUARD, useClass: SessionGuard }],
 })
 export class AppModule {}
-
