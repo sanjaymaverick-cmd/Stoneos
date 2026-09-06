@@ -202,7 +202,7 @@ export class InventoryService {
       throw new BadRequestException("Opening count is not in draft");
     }
     return this.prisma.openingInventoryLine.create({
-      data: { snapshotId, kind, payload },
+      data: { snapshotId, kind, payload, enteredById: user.id },
     });
   }
 
@@ -223,110 +223,145 @@ export class InventoryService {
   }
 
   async approveOpening(user: AuthenticatedUser, snapshotId: string) {
-    return this.prisma.$transaction(async (tx) => {
-      const snapshot = await tx.openingInventorySnapshot.findFirst({
-        where: { id: snapshotId, factoryId: user.factoryId },
-        include: { lines: true },
-      });
-      if (!snapshot || snapshot.status !== "SUBMITTED") {
-        throw new BadRequestException("Opening count is not awaiting approval");
-      }
-      if (snapshot.enteredById === user.id) {
-        throw new ForbiddenException("The person who entered the count cannot approve it");
-      }
-      const already = await tx.openingInventorySnapshot.findFirst({
-        where: { factoryId: user.factoryId, status: "APPROVED" },
-      });
-      if (already) throw new ConflictException("An opening count is already approved");
-
-      const rawYard = await tx.inventoryLocation.findFirst({
-        where: { factoryId: user.factoryId, code: "RAW_YARD" },
-      });
-      const finished = await tx.inventoryLocation.findFirst({
-        where: { factoryId: user.factoryId, code: "FINISHED_STOCK" },
-      });
-      const unpolished = await tx.inventoryLocation.findFirst({
-        where: { factoryId: user.factoryId, code: "UNPOLISHED_STOCK" },
-      });
-
-      for (const line of snapshot.lines) {
-        const body = line.payload as Record<string, string>;
-        if (line.kind === "RAW_BLOCK") {
-          const block = await tx.rawBlock.create({
-            data: {
-              factoryId: user.factoryId,
-              serialNumber: String(body.serialNumber),
-              varietyName: String(body.varietyName ?? "Unknown"),
-              weightTons: body.weightTons ? Number(body.weightTons) : undefined,
-              invoicedAmount: body.invoicedAmount ? Number(body.invoicedAmount) : undefined,
-              actualAmountPaid: body.actualAmountPaid ? Number(body.actualAmountPaid) : undefined,
-              locationId: rawYard?.id,
-            },
-          });
-          await tx.openingInventoryLine.update({
-            where: { id: line.id },
-            data: { rawBlockId: block.id },
-          });
-          await tx.inventoryMovement.create({
-            data: {
-              factoryId: user.factoryId,
-              movementType: "OPENING_RECEIPT",
-              rawBlockId: block.id,
-              quantity: 1,
-              idempotencyKey: `opening:${line.id}`,
-              actorId: user.id,
-            },
-          });
-        } else {
-          const loc = line.kind === "POLISHED_SLAB" ? finished : unpolished;
-          const slab = await tx.slab.create({
-            data: {
-              factoryId: user.factoryId,
-              slabSerial: String(body.slabSerial),
-              varietyName: String(body.varietyName ?? "Unknown"),
-              thicknessMm: body.thicknessMm ? Number(body.thicknessMm) : undefined,
-              lengthFt: body.lengthFt ? Number(body.lengthFt) : undefined,
-              widthFt: body.widthFt ? Number(body.widthFt) : undefined,
-              locationId: loc?.id,
-            },
-          });
-          await tx.openingInventoryLine.update({
-            where: { id: line.id },
-            data: { slabId: slab.id },
-          });
-          await tx.inventoryMovement.create({
-            data: {
-              factoryId: user.factoryId,
-              movementType: "OPENING_RECEIPT",
-              slabId: slab.id,
-              quantity: 1,
-              idempotencyKey: `opening:${line.id}`,
-              actorId: user.id,
-            },
-          });
+    return this.prisma.$transaction(
+      async (tx) => {
+        const snapshot = await tx.openingInventorySnapshot.findFirst({
+          where: { id: snapshotId, factoryId: user.factoryId },
+          include: { lines: true },
+        });
+        if (!snapshot || snapshot.status !== "SUBMITTED") {
+          throw new BadRequestException("Opening count is not awaiting approval");
         }
-      }
+        if (snapshot.lines.length === 0) {
+          throw new BadRequestException("Opening count has no lines");
+        }
+        const enterers = new Set(snapshot.lines.map((line) => line.enteredById));
+        if (enterers.has(user.id)) {
+          throw new ForbiddenException("Anyone who entered opening lines cannot approve it");
+        }
+        const already = await tx.openingInventorySnapshot.findFirst({
+          where: { factoryId: user.factoryId, status: "APPROVED" },
+        });
+        if (already) throw new ConflictException("An opening count is already approved");
 
-      await tx.openingInventorySnapshot.update({
-        where: { id: snapshotId },
-        data: { status: "APPROVED", approvedById: user.id },
-      });
-      await tx.factory.update({
-        where: { id: user.factoryId },
-        data: { operatingStatus: "LIVE", goLiveDate: new Date() },
-      });
-      await tx.auditEvent.create({
-        data: {
-          factoryId: user.factoryId,
-          actorId: user.id,
-          action: "inventory.opening_approved",
-          entityType: "opening_inventory_snapshot",
-          entityId: snapshotId,
-          payload: { lines: snapshot.lines.length },
-        },
-      });
-      return { approved: true, live: true };
-    });
+        const rawYard = await tx.inventoryLocation.findFirst({
+          where: { factoryId: user.factoryId, code: "RAW_YARD" },
+        });
+        const finished = await tx.inventoryLocation.findFirst({
+          where: { factoryId: user.factoryId, code: "FINISHED_STOCK" },
+        });
+        const unpolished = await tx.inventoryLocation.findFirst({
+          where: { factoryId: user.factoryId, code: "UNPOLISHED_STOCK" },
+        });
+
+        const blockLines = snapshot.lines.filter((line) => line.kind === "RAW_BLOCK");
+        const slabLines = snapshot.lines.filter((line) => line.kind !== "RAW_BLOCK");
+
+        if (blockLines.length > 0) {
+          const blocks = await tx.rawBlock.createManyAndReturn({
+            data: blockLines.map((line) => {
+              const body = line.payload as Record<string, unknown>;
+              return {
+                factoryId: user.factoryId,
+                serialNumber: String(body.serialNumber),
+                varietyName: String(body.varietyName ?? "Unknown"),
+                weightTons: payloadNumber(body.weightTons),
+                invoicedAmount: payloadNumber(body.invoicedAmount),
+                actualAmountPaid: payloadNumber(body.actualAmountPaid),
+                locationId: rawYard?.id,
+              };
+            }),
+          });
+          const bySerial = new Map(blocks.map((block) => [block.serialNumber, block]));
+          await tx.inventoryMovement.createMany({
+            data: blockLines.map((line) => {
+              const body = line.payload as Record<string, unknown>;
+              const block = bySerial.get(String(body.serialNumber));
+              if (!block) throw new BadRequestException("Opening block serial did not round-trip");
+              return {
+                factoryId: user.factoryId,
+                movementType: InventoryMovementType.OPENING_RECEIPT,
+                rawBlockId: block.id,
+                quantity: 1,
+                idempotencyKey: `opening:${line.id}`,
+                actorId: user.id,
+              };
+            }),
+          });
+          for (const line of blockLines) {
+            const body = line.payload as Record<string, unknown>;
+            const block = bySerial.get(String(body.serialNumber));
+            await tx.openingInventoryLine.update({
+              where: { id: line.id },
+              data: { rawBlockId: block?.id },
+            });
+          }
+        }
+
+        if (slabLines.length > 0) {
+          const slabs = await tx.slab.createManyAndReturn({
+            data: slabLines.map((line) => {
+              const body = line.payload as Record<string, unknown>;
+              const loc = line.kind === "POLISHED_SLAB" ? finished : unpolished;
+              return {
+                factoryId: user.factoryId,
+                slabSerial: String(body.slabSerial),
+                varietyName: String(body.varietyName ?? "Unknown"),
+                thicknessMm: payloadNumber(body.thicknessMm) ?? 18,
+                lengthFt: payloadNumber(body.lengthFt),
+                widthFt: payloadNumber(body.widthFt),
+                locationId: loc?.id,
+              };
+            }),
+          });
+          const bySerial = new Map(slabs.map((slab) => [slab.slabSerial, slab]));
+          await tx.inventoryMovement.createMany({
+            data: slabLines.map((line) => {
+              const body = line.payload as Record<string, unknown>;
+              const slab = bySerial.get(String(body.slabSerial));
+              if (!slab) throw new BadRequestException("Opening slab serial did not round-trip");
+              return {
+                factoryId: user.factoryId,
+                movementType: InventoryMovementType.OPENING_RECEIPT,
+                slabId: slab.id,
+                quantity: 1,
+                idempotencyKey: `opening:${line.id}`,
+                actorId: user.id,
+              };
+            }),
+          });
+          for (const line of slabLines) {
+            const body = line.payload as Record<string, unknown>;
+            const slab = bySerial.get(String(body.slabSerial));
+            await tx.openingInventoryLine.update({
+              where: { id: line.id },
+              data: { slabId: slab?.id },
+            });
+          }
+        }
+
+        await tx.openingInventorySnapshot.update({
+          where: { id: snapshotId },
+          data: { status: "APPROVED", approvedById: user.id },
+        });
+        await tx.factory.update({
+          where: { id: user.factoryId },
+          data: { operatingStatus: "LIVE", goLiveDate: new Date() },
+        });
+        await tx.auditEvent.create({
+          data: {
+            factoryId: user.factoryId,
+            actorId: user.id,
+            action: "inventory.opening_approved",
+            entityType: "opening_inventory_snapshot",
+            entityId: snapshotId,
+            payload: { lines: snapshot.lines.length },
+          },
+        });
+        return { approved: true, live: true };
+      },
+      { timeout: 120_000, maxWait: 20_000 },
+    );
   }
 
   async reverseMovement(user: AuthenticatedUser, movementId: string, reason: string, clientOpId: string) {
@@ -457,4 +492,10 @@ export class InventoryService {
       });
     }
   }
+}
+
+function payloadNumber(value: unknown): number | undefined {
+  if (value == null || value === "") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
 }
