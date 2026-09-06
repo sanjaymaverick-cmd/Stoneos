@@ -1,4 +1,10 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { damagedCostAtRawBlock, damagedSlabCount, slabSerial } from "@stoneos/domain";
 import { operationalDateFor } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
@@ -91,6 +97,20 @@ export class ProductionService {
     });
     if (!session) throw new NotFoundException("Session not found");
     const operationalDate = operationalDateFor(new Date());
+    if (input.baseVersion != null) {
+      const existing = await this.prisma.cuttingDayLog.findUnique({
+        where: {
+          cuttingSessionId_operationalDate: { cuttingSessionId: sessionId, operationalDate },
+        },
+      });
+      if (existing && existing.version !== input.baseVersion) {
+        throw new ConflictException({
+          code: "VERSION_CONFLICT",
+          serverVersion: existing.version,
+          server: existing,
+        });
+      }
+    }
     return this.prisma.cuttingDayLog.upsert({
       where: {
         cuttingSessionId_operationalDate: { cuttingSessionId: sessionId, operationalDate },
@@ -231,57 +251,96 @@ export class ProductionService {
   async completePolishing(user: AuthenticatedUser, sessionId: string) {
     const session = await this.prisma.polishingSession.findFirst({
       where: { id: sessionId, factoryId: user.factoryId },
-      include: { slabs: true },
+      include: { slabs: { include: { slab: true } } },
     });
     if (!session) throw new NotFoundException("Session not found");
-    const finished = await this.prisma.inventoryLocation.findFirst({
-      where: { factoryId: user.factoryId, code: "FINISHED_STOCK" },
-    });
+    if (session.status !== "IN_PROGRESS") {
+      throw new BadRequestException("Session is not in progress");
+    }
+    const blocked = session.slabs.filter((link) =>
+      ["sold", "reserved", "voided"].includes(link.slab.salesStatus),
+    );
+    if (blocked.length > 0) {
+      throw new BadRequestException("Cannot complete process on sold, reserved, or voided slabs");
+    }
+    const sellable = session.processType === "POLISHING";
+    const finished = sellable
+      ? await this.prisma.inventoryLocation.findFirst({
+          where: { factoryId: user.factoryId, code: "FINISHED_STOCK" },
+        })
+      : null;
     await this.prisma.$transaction(async (tx) => {
       for (const link of session.slabs) {
-        await tx.slab.update({
-          where: { id: link.slabId },
-          data: {
-            salesStatus: "in_stock",
-            finish: session.finishType ?? undefined,
-            locationId: finished?.id,
-            version: { increment: 1 },
-          },
-        });
-        await tx.inventoryMovement.create({
-          data: {
-            factoryId: user.factoryId,
-            movementType: "POLISHING_COMPLETION",
-            slabId: link.slabId,
-            quantity: 1,
-            idempotencyKey: `polish:${session.id}:${link.slabId}`,
-            actorId: user.id,
-          },
-        });
+        if (sellable) {
+          await tx.slab.update({
+            where: { id: link.slabId },
+            data: {
+              salesStatus: "in_stock",
+              finish: session.finishType ?? undefined,
+              locationId: finished?.id,
+              version: { increment: 1 },
+            },
+          });
+          await tx.inventoryMovement.create({
+            data: {
+              factoryId: user.factoryId,
+              movementType: "POLISHING_COMPLETION",
+              slabId: link.slabId,
+              quantity: 1,
+              idempotencyKey: `polish:${session.id}:${link.slabId}`,
+              actorId: user.id,
+            },
+          });
+        } else {
+          await tx.slab.update({
+            where: { id: link.slabId },
+            data: {
+              finish: session.finishType ?? undefined,
+              version: { increment: 1 },
+            },
+          });
+        }
       }
       await tx.polishingSession.update({
         where: { id: session.id },
         data: { status: "COMPLETED" },
       });
     });
-    return { completed: true };
+    return { completed: true, processType: session.processType, sellable };
   }
 
   async derivedDpr(factoryId: string, from: Date, to: Date) {
+    const fromDay = operationalDateFor(from);
+    const toDay = operationalDateFor(to);
     const cutting = await this.prisma.cuttingDayLog.findMany({
       where: {
         session: { factoryId },
-        operationalDate: { gte: from, lte: to },
+        operationalDate: { gte: fromDay, lte: toDay },
       },
     });
     const polishing = await this.prisma.polishingSession.findMany({
-      where: { factoryId, operationalDate: { gte: from, lte: to }, status: "COMPLETED" },
+      where: { factoryId, operationalDate: { gte: fromDay, lte: toDay }, status: "COMPLETED" },
       include: { slabs: true },
     });
+    const produced = await this.prisma.slab.findMany({
+      where: {
+        factoryId,
+        cuttingSessionId: { not: null },
+        createdAt: {
+          gte: new Date(fromDay.getTime() - 12 * 3600 * 1000),
+          lte: new Date(toDay.getTime() + 36 * 3600 * 1000),
+        },
+      },
+      select: { createdAt: true },
+    });
+    const slabsCut = produced.filter((row) => {
+      const day = operationalDateFor(row.createdAt).getTime();
+      return day >= fromDay.getTime() && day <= toDay.getTime();
+    }).length;
     return {
-      from,
-      to,
-      slabsCut: cutting.reduce((sum, row) => sum + (row.slabsProducedCount ?? 0), 0),
+      from: fromDay,
+      to: toDay,
+      slabsCut,
       runtimeHours: cutting.reduce((sum, row) => sum + Number(row.runtimeHours ?? 0), 0),
       downtimeMinutes: cutting.reduce((sum, row) => sum + (row.downtimeMinutes ?? 0), 0),
       slabsPolished: polishing.reduce((sum, row) => sum + row.slabs.length, 0),

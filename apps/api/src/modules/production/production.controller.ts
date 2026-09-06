@@ -42,7 +42,15 @@ export class ProductionController {
   dayLog(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: { runtimeHours?: number; downtimeMinutes?: number; notes?: string },
+    @Body()
+    body: {
+      runtimeHours?: number;
+      downtimeMinutes?: number;
+      downtimeReason?: string;
+      slabsProducedCount?: number;
+      notes?: string;
+      baseVersion?: number;
+    },
   ) {
     return this.service.logCuttingDay(user, id, body);
   }
