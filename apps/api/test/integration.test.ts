@@ -222,6 +222,29 @@ describe("postgres-backed workflows", () => {
     assert.equal(count, 1);
   });
 
+  it("reverses a goods receipt and refuses a second reverse", async () => {
+    const received = (await inventory.receiveBlock(owner, {
+      serialNumber: "V303",
+      varietyName: "Tan Brown",
+      clientOpId: "receipt-rev",
+    })) as { block: { id: string } };
+    const movement = await prisma.inventoryMovement.findFirst({
+      where: { factoryId, rawBlockId: received.block.id, movementType: "GOODS_RECEIPT" },
+    });
+    assert.ok(movement);
+    const first = (await inventory.reverseMovement(owner, movement!.id, "mistype", "rev-1")) as {
+      reversed: boolean;
+    };
+    assert.equal(first.reversed, true);
+    const block = await prisma.rawBlock.findUnique({ where: { id: received.block.id } });
+    assert.equal(block?.currentStatus, "voided");
+    const retry = (await inventory.reverseMovement(owner, movement!.id, "mistype", "rev-1")) as {
+      reversed: boolean;
+    };
+    assert.equal(retry.reversed, true);
+    await assert.rejects(() => inventory.reverseMovement(owner, movement!.id, "again", "rev-2"));
+  });
+
   it("requires vehicleId for vehicle expenses and rejects foreign-factory vehicles", async () => {
     await assert.rejects(() =>
       expenses.create(owner, {
