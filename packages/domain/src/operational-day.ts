@@ -32,3 +32,9 @@ export function operationalDateFor(occurredAt: Date, timeZone = FACTORY_TIME_ZON
 export function formatOperationalDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
+
+/** First instant of the calendar month on the factory clock, as a Date. */
+export function factoryMonthStart(occurredAt: Date, timeZone = FACTORY_TIME_ZONE): Date {
+  const z = zoneParts(occurredAt, timeZone);
+  return new Date(Date.UTC(z.year, z.month - 1, 1) - 5.5 * 3600 * 1000);
+}
