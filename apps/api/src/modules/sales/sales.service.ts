@@ -38,6 +38,23 @@ export class SalesService {
     });
   }
 
+  private async assertFactorySlabs(
+    tx: Prisma.TransactionClient | PrismaService,
+    factoryId: string,
+    slabIds: Array<string | undefined>,
+    orderId?: string,
+  ) {
+    const ids = [...new Set(slabIds.filter((id): id is string => Boolean(id)))];
+    for (const slabId of ids) {
+      const slab = await tx.slab.findFirst({ where: { id: slabId, factoryId } });
+      if (!slab) throw new BadRequestException("Slab does not belong to this factory");
+      if (orderId) {
+        const onOrder = await tx.salesLineItem.findFirst({ where: { salesOrderId: orderId, slabId } });
+        if (!onOrder) throw new BadRequestException("Slab is not on this order");
+      }
+    }
+  }
+
   async createQuotation(
     user: AuthenticatedUser,
     input: {
@@ -46,6 +63,7 @@ export class SalesService {
     },
   ) {
     await this.assertCustomer(user.factoryId, input.customerId);
+    await this.assertFactorySlabs(this.prisma, user.factoryId, input.lines.map((l) => l.slabId));
     return this.prisma.quotation.create({
       data: {
         factoryId: user.factoryId,
@@ -125,6 +143,7 @@ export class SalesService {
 
   async pack(user: AuthenticatedUser, salesOrderId: string, slabIds: string[]) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
+    await this.assertFactorySlabs(this.prisma, user.factoryId, slabIds, order.id);
     return this.prisma.packingList.create({
       data: {
         factoryId: user.factoryId,
@@ -138,6 +157,7 @@ export class SalesService {
   async dispatch(user: AuthenticatedUser, salesOrderId: string, slabIds: string[]) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     return this.prisma.$transaction(async (tx) => {
+      await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
       const delivery = await tx.delivery.create({
         data: {
           factoryId: user.factoryId,
@@ -148,10 +168,6 @@ export class SalesService {
         include: { lines: true },
       });
       for (const slabId of slabIds) {
-        const slab = await tx.slab.findFirst({
-          where: { id: slabId, factoryId: user.factoryId },
-        });
-        if (!slab) throw new BadRequestException("Slab not in factory");
         await tx.slab.update({
           where: { id: slabId },
           data: { salesStatus: "sold", version: { increment: 1 } },
@@ -183,7 +199,7 @@ export class SalesService {
       const lines = await tx.salesLineItem.findMany({ where: { salesOrderId: order.id } });
       const amount = lines.reduce((sum, line) => sum + Number(line.quantitySqft) * Number(line.rate), 0);
       const count = await tx.invoice.count({ where: { factoryId: user.factoryId } });
-      return tx.invoice.create({
+      const created = await tx.invoice.create({
         data: {
           factoryId: user.factoryId,
           salesOrderId: order.id,
@@ -193,6 +209,17 @@ export class SalesService {
           idempotencyKey: clientOpId,
         },
       });
+      await tx.auditEvent.create({
+        data: {
+          factoryId: user.factoryId,
+          actorId: user.id,
+          action: "sales.invoice",
+          entityType: "invoice",
+          entityId: created.id,
+          payload: { amount },
+        },
+      });
+      return created;
     });
   }
 
@@ -203,6 +230,7 @@ export class SalesService {
   ) {
     if (input.amount <= 0) throw new BadRequestException("Amount must be positive");
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND factory_id = ${user.factoryId} FOR UPDATE`;
       const invoice = await tx.invoice.findFirst({
         where: { id: invoiceId, factoryId: user.factoryId },
         include: { payments: true },
@@ -216,7 +244,7 @@ export class SalesService {
       if (paid + input.amount > Number(invoice.amount) + 0.001) {
         throw new BadRequestException("Payment exceeds invoice amount");
       }
-      return tx.payment.create({
+      const payment = await tx.payment.create({
         data: {
           factoryId: user.factoryId,
           invoiceId: invoice.id,
@@ -226,12 +254,24 @@ export class SalesService {
           idempotencyKey: input.clientOpId,
         },
       });
+      await tx.auditEvent.create({
+        data: {
+          factoryId: user.factoryId,
+          actorId: user.id,
+          action: "sales.payment",
+          entityType: "payment",
+          entityId: payment.id,
+          payload: { invoiceId: invoice.id, amount: input.amount },
+        },
+      });
+      return payment;
     });
   }
 
   async returnSlabs(user: AuthenticatedUser, salesOrderId: string, slabIds: string[], reason: string) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     return this.prisma.$transaction(async (tx) => {
+      await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
       const ret = await tx.customerReturn.create({
         data: {
           factoryId: user.factoryId,
@@ -242,8 +282,6 @@ export class SalesService {
         include: { lines: true },
       });
       for (const slabId of slabIds) {
-        const slab = await tx.slab.findFirst({ where: { id: slabId, factoryId: user.factoryId } });
-        if (!slab) throw new BadRequestException("Slab not in factory");
         await tx.slab.update({
           where: { id: slabId },
           data: { salesStatus: "in_stock", version: { increment: 1 } },
@@ -259,6 +297,16 @@ export class SalesService {
           },
         });
       }
+      await tx.auditEvent.create({
+        data: {
+          factoryId: user.factoryId,
+          actorId: user.id,
+          action: "sales.return",
+          entityType: "customer_return",
+          entityId: ret.id,
+          payload: { reason, slabIds },
+        },
+      });
       return ret;
     });
   }
@@ -266,11 +314,12 @@ export class SalesService {
   async recovery(factoryId: string) {
     const blocks = await this.prisma.rawBlock.findMany({
       where: { factoryId },
-      include: { slabs: { include: { orderLines: true } } },
+      include: { slabs: { include: { orderLines: { include: { salesOrder: true } } } } },
     });
     return blocks.map((block) => {
       const soldSqft = block.slabs
         .flatMap((s) => s.orderLines)
+        .filter((line) => line.salesOrder.status === "CONFIRMED" || line.salesOrder.status === "PARTIALLY_DELIVERED" || line.salesOrder.status === "DELIVERED")
         .reduce((sum, line) => sum + Number(line.quantitySqft), 0);
       const tons = Number(block.weightTons ?? 0);
       return {
