@@ -19,7 +19,7 @@ button, input, select, textarea { font: inherit; }
 .nav a.active, .nav a:hover { opacity: 1; text-decoration: underline; }
 .brand { font-weight: 700; margin-right: auto; }
 .page { padding: 16px; max-width: 1100px; width: 100%; margin: 0 auto; }
-.page.wide { max-width: 1280px; }
+.wide { max-width: 1280px; width: 100%; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
 .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .metric { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
