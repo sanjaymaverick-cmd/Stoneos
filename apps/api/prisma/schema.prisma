@@ -151,6 +151,8 @@ model Factory {
   consumables        Consumable[]
   maintenanceJobs    MaintenanceJob[]
   returns            CustomerReturn[]
+  documentSequences  DocumentSequence[]
+  creditNotes        CreditNote[]
 
   @@map("factory")
 }
@@ -388,15 +390,16 @@ model OpeningInventorySnapshot {
 }
 
 model OpeningInventoryLine {
-  id         String                    @id @default(uuid())
-  snapshotId String                    @map("snapshot_id")
-  snapshot   OpeningInventorySnapshot  @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
-  kind       InventoryKind
-  rawBlockId String?                   @map("raw_block_id")
-  rawBlock   RawBlock?                 @relation(fields: [rawBlockId], references: [id])
-  slabId     String?                   @map("slab_id")
-  slab       Slab?                     @relation(fields: [slabId], references: [id])
-  payload    Json
+  id          String                    @id @default(uuid())
+  snapshotId  String                    @map("snapshot_id")
+  snapshot    OpeningInventorySnapshot  @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  kind        InventoryKind
+  enteredById String                    @map("entered_by_id")
+  rawBlockId  String?                   @map("raw_block_id")
+  rawBlock    RawBlock?                 @relation(fields: [rawBlockId], references: [id])
+  slabId      String?                   @map("slab_id")
+  slab        Slab?                     @relation(fields: [slabId], references: [id])
+  payload     Json
 
   @@map("opening_inventory_line")
 }
@@ -569,6 +572,7 @@ model SalesOrder {
   deliveries  Delivery[]
   invoices    Invoice[]
   returns     CustomerReturn[]
+  creditNotes CreditNote[]
 
   @@index([factoryId, orderDate])
   @@map("sales_order")
@@ -650,6 +654,7 @@ model Invoice {
   createdAt      DateTime   @default(now()) @map("created_at")
   version        Int        @default(0)
   payments       Payment[]
+  creditNotes    CreditNote[]
 
   @@unique([factoryId, invoiceNumber])
   @@unique([factoryId, idempotencyKey])
@@ -672,6 +677,39 @@ model Payment {
   @@map("payment")
 }
 
+model DocumentSequence {
+  factoryId   String  @map("factory_id")
+  factory     Factory @relation(fields: [factoryId], references: [id])
+  kind        String
+  fiscalYear  Int     @map("fiscal_year")
+  nextNumber  Int     @map("next_number")
+
+  @@id([factoryId, kind, fiscalYear])
+  @@map("document_sequence")
+}
+
+model CreditNote {
+  id               String          @id @default(uuid())
+  factoryId        String          @map("factory_id")
+  factory          Factory         @relation(fields: [factoryId], references: [id])
+  salesOrderId     String          @map("sales_order_id")
+  salesOrder       SalesOrder      @relation(fields: [salesOrderId], references: [id])
+  invoiceId        String          @map("invoice_id")
+  invoice          Invoice         @relation(fields: [invoiceId], references: [id])
+  customerReturnId String?         @unique @map("customer_return_id")
+  customerReturn   CustomerReturn? @relation(fields: [customerReturnId], references: [id])
+  creditNoteNumber String          @map("credit_note_number")
+  amount           Decimal         @db.Decimal(14, 2)
+  reason           String
+  idempotencyKey   String          @map("idempotency_key")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  version          Int             @default(0)
+
+  @@unique([factoryId, creditNoteNumber])
+  @@unique([factoryId, idempotencyKey])
+  @@map("credit_note")
+}
+
 model CustomerReturn {
   id           String               @id @default(uuid())
   factoryId    String               @map("factory_id")
@@ -681,6 +719,7 @@ model CustomerReturn {
   reason       String
   createdAt    DateTime             @default(now()) @map("created_at")
   lines        CustomerReturnLine[]
+  creditNote   CreditNote?
 
   @@map("customer_return")
 }
