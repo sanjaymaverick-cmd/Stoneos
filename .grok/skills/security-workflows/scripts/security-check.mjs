@@ -82,12 +82,13 @@ async function main() {
     found && found.factoryId === owner.body.user.factoryId ? "" : "high",
   );
 
+  const tempUser = `sectemp${Date.now().toString(36).slice(-6)}`;
   const tmp = await req("POST", "/api/v1/admin/users", {
     token: owner.body?.token,
-    body: { username: "sectemp", name: "Temp", role: "operator" },
+    body: { username: tempUser, name: "Temp", role: "operator" },
   });
   const tmpLogin = await req("POST", "/api/v1/auth/login", {
-    body: { username: "sectemp", password: tmp.body?.password },
+    body: { username: tempUser, password: tmp.body?.password },
   });
   const blocked = await req("POST", "/api/v1/inventory/raw-blocks", {
     token: tmpLogin.body?.token,

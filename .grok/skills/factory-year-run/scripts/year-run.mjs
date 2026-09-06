@@ -49,12 +49,19 @@ async function req(method, pathName, { token, body, expected } = {}) {
 }
 
 async function login(username, password) {
-  const { ok, body, status } = await req("POST", "/api/v1/auth/login", {
+  let last = await req("POST", "/api/v1/auth/login", {
     body: { username, password },
     expected: 200,
   });
-  if (!ok) throw new Error(`login failed for ${username}: ${status} ${JSON.stringify(body)}`);
-  return body;
+  if (last.status === 429) {
+    await new Promise((r) => setTimeout(r, 65_000));
+    last = await req("POST", "/api/v1/auth/login", {
+      body: { username, password },
+      expected: 200,
+    });
+  }
+  if (!last.ok) throw new Error(`login failed for ${username}: ${last.status} ${JSON.stringify(last.body)}`);
+  return last.body;
 }
 
 async function ensurePassword(token, current, next) {
