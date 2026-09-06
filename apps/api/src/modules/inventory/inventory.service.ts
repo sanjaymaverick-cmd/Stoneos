@@ -257,6 +257,9 @@ export class InventoryService {
               factoryId: user.factoryId,
               serialNumber: String(body.serialNumber),
               varietyName: String(body.varietyName ?? "Unknown"),
+              weightTons: body.weightTons ? Number(body.weightTons) : undefined,
+              invoicedAmount: body.invoicedAmount ? Number(body.invoicedAmount) : undefined,
+              actualAmountPaid: body.actualAmountPaid ? Number(body.actualAmountPaid) : undefined,
               locationId: rawYard?.id,
             },
           });
@@ -281,6 +284,9 @@ export class InventoryService {
               factoryId: user.factoryId,
               slabSerial: String(body.slabSerial),
               varietyName: String(body.varietyName ?? "Unknown"),
+              thicknessMm: body.thicknessMm ? Number(body.thicknessMm) : undefined,
+              lengthFt: body.lengthFt ? Number(body.lengthFt) : undefined,
+              widthFt: body.widthFt ? Number(body.widthFt) : undefined,
               locationId: loc?.id,
             },
           });
@@ -320,6 +326,120 @@ export class InventoryService {
         },
       });
       return { approved: true, live: true };
+    });
+  }
+
+  async reverseMovement(user: AuthenticatedUser, movementId: string, reason: string, clientOpId: string) {
+    if (!reason?.trim()) throw new BadRequestException("Reason is required");
+    if (!clientOpId) throw new BadRequestException("clientOpId is required");
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.syncOperation.findUnique({
+        where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId } },
+      });
+      if (existing) return existing.response;
+
+      const movement = await tx.inventoryMovement.findFirst({
+        where: { id: movementId, factoryId: user.factoryId },
+      });
+      if (!movement) throw new NotFoundException("Movement not found");
+      if (movement.movementType === InventoryMovementType.REVERSAL) {
+        throw new BadRequestException("Cannot reverse a reversal");
+      }
+      const already = await tx.inventoryMovement.findFirst({
+        where: {
+          factoryId: user.factoryId,
+          movementType: InventoryMovementType.REVERSAL,
+          notes: { startsWith: `reverses:${movement.id}` },
+        },
+      });
+      if (already) throw new ConflictException("Movement already reversed");
+
+      if (
+        movement.movementType === InventoryMovementType.GOODS_RECEIPT ||
+        movement.movementType === InventoryMovementType.OPENING_RECEIPT
+      ) {
+        if (!movement.rawBlockId) throw new BadRequestException("Receipt has no block to void");
+        const block = await tx.rawBlock.findFirst({
+          where: { id: movement.rawBlockId, factoryId: user.factoryId },
+          include: { slabs: true, cuttingSessions: true },
+        });
+        if (!block) throw new NotFoundException("Block not found");
+        if (block.slabs.length > 0 || block.cuttingSessions.length > 0) {
+          throw new BadRequestException("Cannot reverse a block that has been cut");
+        }
+        if (block.currentStatus !== "in_stock") {
+          throw new BadRequestException("Block is no longer in stock");
+        }
+        await tx.rawBlock.update({
+          where: { id: block.id },
+          data: { currentStatus: "voided", version: { increment: 1 } },
+        });
+      } else if (movement.movementType === InventoryMovementType.SALES_RESERVATION) {
+        if (!movement.slabId) throw new BadRequestException("Reservation has no slab");
+        const slab = await tx.slab.findFirst({
+          where: { id: movement.slabId, factoryId: user.factoryId },
+        });
+        if (!slab) throw new NotFoundException("Slab not found");
+        if (slab.salesStatus !== "reserved") {
+          throw new BadRequestException("Slab is no longer reserved");
+        }
+        await tx.slab.update({
+          where: { id: slab.id },
+          data: { salesStatus: "in_stock", version: { increment: 1 } },
+        });
+      } else if (movement.movementType === InventoryMovementType.DELIVERY) {
+        if (!movement.slabId) throw new BadRequestException("Delivery has no slab");
+        const slab = await tx.slab.findFirst({
+          where: { id: movement.slabId, factoryId: user.factoryId },
+        });
+        if (!slab) throw new NotFoundException("Slab not found");
+        if (slab.salesStatus !== "sold") {
+          throw new BadRequestException("Slab is no longer marked sold");
+        }
+        await tx.slab.update({
+          where: { id: slab.id },
+          data: { salesStatus: "in_stock", version: { increment: 1 } },
+        });
+      } else {
+        throw new BadRequestException(`No reversal path for ${movement.movementType}`);
+      }
+
+      const reversal = await tx.inventoryMovement.create({
+        data: {
+          factoryId: user.factoryId,
+          movementType: InventoryMovementType.REVERSAL,
+          rawBlockId: movement.rawBlockId,
+          slabId: movement.slabId,
+          quantity: movement.quantity,
+          idempotencyKey: clientOpId,
+          actorId: user.id,
+          notes: `reverses:${movement.id} ${reason.trim()}`,
+        },
+      });
+      const response = { reversed: true, movementId: reversal.id, originalId: movement.id };
+      await tx.syncOperation.create({
+        data: {
+          factoryId: user.factoryId,
+          clientOpId,
+          actorId: user.id,
+          method: "POST",
+          path: `/api/v1/inventory/movements/${movement.id}/reverse`,
+          requestHash: clientOpId,
+          statusCode: 200,
+          response: response as Prisma.InputJsonValue,
+        },
+      });
+      await tx.auditEvent.create({
+        data: {
+          factoryId: user.factoryId,
+          actorId: user.id,
+          action: "inventory.movement_reversed",
+          entityType: "inventory_movement",
+          entityId: reversal.id,
+          payload: { originalId: movement.id, reason: reason.trim(), type: movement.movementType },
+        },
+      });
+      return response;
     });
   }
 
