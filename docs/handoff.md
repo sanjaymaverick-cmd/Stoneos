@@ -30,9 +30,11 @@ docker compose -p stoneos-smoke -f infra/compose/docker-compose.prod.yml down
 
 Postgres in this compose file is ephemeral unless Docker reuses an anonymous volume. After a wipe, bootstrap creates factory **Vedam Granites** and owner `owner` / `ChangeMeNow!12` (`mustChangePassword: true`).
 
-**Live owner password after year-run on this machine:** `YearRunOwner!12` (bootstrap password no longer works if that run completed). Confirm with `POST /api/v1/auth/login` before telling the user.
+**Live owner password on the 2026-09-06 smoke rebuild:** `YearRunOwner!12` (bootstrap `ChangeMeNow!12` was changed on first login). Confirm with `POST /api/v1/auth/login` before telling the user.
 
-Year-run staff (if provisioned): `yrunmgr`, `yrunadm`, `yrunsup`, `yrunopr`, `yruninv`, `yrunsls`, `yrunacc`, `yrunaud` — passwords `YearRunXxx!12` (e.g. `yrunopr` / `YearRunOpr!12`).
+This rebuild created named volume `stoneos-smoke_stoneos_pg_data` empty, then bootstrap + migrate. Year-run staff are **not** on this volume. An older volume `compose_stoneos_pg_data` is still on the machine and was not attached.
+
+Year-run staff (if provisioned on a volume that has them): `yrunmgr`, `yrunadm`, `yrunsup`, `yrunopr`, `yruninv`, `yrunsls`, `yrunacc`, `yrunaud` — passwords `YearRunXxx!12` (e.g. `yrunopr` / `YearRunOpr!12`).
 
 There is **no public signup**.
 
@@ -46,7 +48,7 @@ There is **no public signup**.
 
 Login is **10/min per IP**. Year-run logs in owner + 8 staff; wait ~65s after a burst or the script retries once on 429. Authenticated API traffic is **600/min per IP+token**; anonymous **120/min**.
 
-Last live run after rebuild (2026-09-06): year-run **0 unexpected failures** / 12 months / payments **201**; security **10/10**; UI walk **pass** desktop+mobile. CEO brief HTTP not yet recorded after 2026-09-06 code land.
+Last live run after rebuild (2026-09-06): year-run **0 unexpected failures** / 12 months / payments **201** was on the previous volume. After this named-volume rebuild: CEO operator 403 / owner+auditor 200; double-tap pay one row; reverse receipt voided+idempotent; backup rehearse 5s to `E:/stoneos-backups`. Security-check extras (reverse reason, overpay) proven via HTTP on this stack; year-run staff logins in `security-check.mjs` will fail until those users exist here.
 
 ## Architecture (do not regress)
 
@@ -61,7 +63,7 @@ Last live run after rebuild (2026-09-06): year-run **0 unexpected failures** / 1
 
 ## Tests
 
-`npm test` workspaces: last recorded **30 pass / 0 fail**. After CEO work expect contracts +1 and domain +4. Playwright: `apps/web/e2e/login.spec.ts` and `modules-walk.spec.ts`.
+`npm test` workspaces: last recorded **61 pass / 0 fail** (2026-09-06). Playwright: `apps/web/e2e/login.spec.ts` and `modules-walk.spec.ts` (not re-run on this rebuild).
 
 Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=UTF8 --locale=C`. Approve `@embedded-postgres/windows-x64` scripts if hydrate fails.
 
@@ -74,6 +76,6 @@ Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=
 
 ## Useful next local work
 
-- Rebuild smoke after this pull: `up -d --build`, then `GET /api/v1/reports/ceo` as owner and operator (operator must 403).
-- Timed backup/restore rehearsal (`docs/runbooks/backup-restore.md`).
-- Opening-count SoD on the live factory (`operatingStatus` may still be `SETUP` until opening is approved).
+- Year-run against `stoneos-smoke_stoneos_pg_data` if 12-month books are needed on this named volume (previous year-run may still sit on `compose_stoneos_pg_data`).
+- Timed restore drill on a second *machine*.
+- Opening-count SoD on the live factory (`operatingStatus` is `SETUP` on this fresh volume until opening is approved).
