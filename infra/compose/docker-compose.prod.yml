@@ -31,6 +31,7 @@ services:
       BOOTSTRAP_TOKEN: local-dev-bootstrap-token-change-me
       BOOTSTRAP_OWNER_USERNAME: owner
       BOOTSTRAP_OWNER_PASSWORD: ChangeMeNow!12
+      STORAGE_LOCAL_DIR: /app/apps/api/data/storage
     ports:
       - "4000:4000"
     depends_on:

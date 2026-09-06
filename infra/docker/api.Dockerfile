@@ -23,7 +23,8 @@ COPY packages ./packages
 COPY apps/api ./apps/api
 WORKDIR /app/apps/api
 RUN npx prisma generate --schema prisma/schema.prisma
-RUN mkdir -p /app/apps/api/data && chown -R stoneos:stoneos /app/apps/api/data
+ENV STORAGE_LOCAL_DIR=/app/apps/api/data/storage
+RUN mkdir -p /app/apps/api/data/storage && chown -R stoneos:stoneos /app/apps/api/data
 USER stoneos
 EXPOSE 4000
 CMD ["npx", "tsx", "--tsconfig", "tsconfig.json", "src/main.ts"]
