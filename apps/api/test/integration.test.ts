@@ -31,7 +31,8 @@ describe("postgres-backed workflows", () => {
   let owner: AuthenticatedUser;
 
   before(async () => {
-    if (!process.env.DATABASE_URL) {
+    const integrationUrl = process.env.STONEOS_INTEGRATION_DATABASE_URL;
+    if (!integrationUrl) {
       pg = new EmbeddedPostgres({
         databaseDir: path.join(apiRoot, "data", "pg-test"),
         user: "stoneos",
@@ -44,10 +45,12 @@ describe("postgres-backed workflows", () => {
       await pg.start();
       await pg.createDatabase("stoneos");
       process.env.DATABASE_URL = "postgresql://stoneos:stoneos_ci@127.0.0.1:55432/stoneos";
+    } else {
+      process.env.DATABASE_URL = integrationUrl;
     }
     execSync("npx prisma migrate deploy --schema prisma/schema.prisma", {
       cwd: apiRoot,
-      env: { ...process.env },
+      env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
       stdio: "inherit",
     });
     prisma = new PrismaClient();
@@ -190,6 +193,7 @@ describe("postgres-backed workflows", () => {
     const first = await sales.invoice(owner, order.id, "inv-1");
     const retry = await sales.invoice(owner, order.id, "inv-1");
     assert.equal(first.id, (retry as { id: string }).id);
+    assert.match(first.invoiceNumber, /^INV-\d{4}-\d{5}$/);
     await sales.pay(owner, first.id, {
       amount: 1000,
       method: "cash",
@@ -272,5 +276,294 @@ describe("postgres-backed workflows", () => {
       clientOpId: "exp-1",
     });
     assert.equal(Number(ok.amount), 500);
+  });
+
+  async function staffFactory(label: string) {
+    const factory = await prisma.factory.create({ data: { name: label } });
+    await inventory.ensureDefaultLocations(factory.id);
+    await prisma.machine.createMany({
+      data: [
+        { factoryId: factory.id, name: "B-21", machineType: "CUTTING", bladeCount: 21 },
+        { factoryId: factory.id, name: "LPM", machineType: "POLISHING", headCount: 16, abrasivesPerHead: 6 },
+      ],
+    });
+    const suffix = `${label}-${Math.random().toString(36).slice(2, 8)}`.replace(/[^a-z0-9-]/g, "").slice(0, 24);
+    const ownerRow = await prisma.appUser.create({
+      data: {
+        factoryId: factory.id,
+        username: `o-${suffix}`,
+        name: "Owner",
+        role: "owner",
+        passwordHash: await hashPassword("ChangeMeNow!12"),
+        mustChangePassword: false,
+      },
+    });
+    const mgrRow = await prisma.appUser.create({
+      data: {
+        factoryId: factory.id,
+        username: `m-${suffix}`,
+        name: "Mgr",
+        role: "manager",
+        passwordHash: await hashPassword("ChangeMeNow!12"),
+        mustChangePassword: false,
+      },
+    });
+    const asOwner: AuthenticatedUser = {
+      ...owner,
+      id: ownerRow.id,
+      factoryId: factory.id,
+      username: ownerRow.username,
+      role: "owner",
+    };
+    const asManager: AuthenticatedUser = {
+      ...owner,
+      id: mgrRow.id,
+      factoryId: factory.id,
+      username: mgrRow.username,
+      role: "manager",
+    };
+    return { factory, asOwner, asManager };
+  }
+
+  it("rejects the line enterer from approving opening, including owner-start", async () => {
+    const { factory, asOwner, asManager } = await staffFactory("sod");
+    const snapshot = await inventory.startOpeningCount(asOwner);
+    await inventory.addOpeningLine(asOwner, snapshot.id, "RAW_BLOCK", {
+      serialNumber: "SOD-1",
+      varietyName: "Tan Brown",
+      weightTons: "2.5",
+      invoicedAmount: "12000",
+    });
+    await inventory.submitOpening(asOwner, snapshot.id);
+    await assert.rejects(() => inventory.approveOpening(asOwner, snapshot.id), /cannot approve/i);
+    const approved = await inventory.approveOpening(asManager, snapshot.id);
+    assert.equal(approved.live, true);
+    const block = await prisma.rawBlock.findFirst({ where: { factoryId: factory.id, serialNumber: "SOD-1" } });
+    assert.equal(Number(block?.weightTons), 2.5);
+    assert.equal(Number(block?.invoicedAmount), 12000);
+  });
+
+  it("allows the starter to approve when a different user entered the lines", async () => {
+    const { factory, asOwner, asManager } = await staffFactory("sod2");
+    const snapshot = await inventory.startOpeningCount(asOwner);
+    await inventory.addOpeningLine(asManager, snapshot.id, "RAW_BLOCK", {
+      serialNumber: "SOD-2",
+      varietyName: "Black",
+      weightTons: "1",
+    });
+    await inventory.submitOpening(asManager, snapshot.id);
+    const approved = await inventory.approveOpening(asOwner, snapshot.id);
+    assert.equal(approved.live, true);
+    const live = await prisma.factory.findUnique({ where: { id: factory.id } });
+    assert.equal(live?.operatingStatus, "LIVE");
+  });
+
+  it("approves a large opening count without a transaction timeout", async () => {
+    const { factory, asOwner, asManager } = await staffFactory("yard");
+    const snapshot = await inventory.startOpeningCount(asManager);
+    await prisma.openingInventoryLine.createMany({
+      data: Array.from({ length: 150 }, (_, i) => ({
+        snapshotId: snapshot.id,
+        kind: "RAW_BLOCK" as const,
+        enteredById: asManager.id,
+        payload: {
+          serialNumber: `YARD-${i}`,
+          varietyName: "Grey",
+          weightTons: "1.5",
+          invoicedAmount: "5000",
+        },
+      })),
+    });
+    await inventory.submitOpening(asManager, snapshot.id);
+    const approved = await inventory.approveOpening(asOwner, snapshot.id);
+    assert.equal(approved.live, true);
+    const count = await prisma.rawBlock.count({ where: { factoryId: factory.id } });
+    assert.equal(count, 150);
+    const sample = await prisma.rawBlock.findFirst({
+      where: { factoryId: factory.id, serialNumber: "YARD-0" },
+    });
+    assert.equal(Number(sample?.weightTons), 1.5);
+  });
+
+  it("does not make grinding completion sellable and refuses sold slabs", async () => {
+    const { factory, asOwner } = await staffFactory("lpm");
+    const unpolished = await prisma.inventoryLocation.findFirst({
+      where: { factoryId: factory.id, code: "UNPOLISHED_STOCK" },
+    });
+    const finished = await prisma.inventoryLocation.findFirst({
+      where: { factoryId: factory.id, code: "FINISHED_STOCK" },
+    });
+    const slab = await prisma.slab.create({
+      data: {
+        factoryId: factory.id,
+        slabSerial: "G-1",
+        varietyName: "White",
+        locationId: unpolished!.id,
+      },
+    });
+    const machine = await prisma.machine.findFirst({ where: { factoryId: factory.id, name: "LPM" } });
+    const grind = await production.startPolishing(asOwner, {
+      machineId: machine!.id,
+      processType: "GRINDING",
+      slabIds: [slab.id],
+    });
+    const grindDone = await production.completePolishing(asOwner, grind.id);
+    assert.equal(grindDone.sellable, false);
+    const afterGrind = await prisma.slab.findUnique({ where: { id: slab.id } });
+    assert.equal(afterGrind?.locationId, unpolished!.id);
+    assert.equal(afterGrind?.salesStatus, "in_stock");
+
+    const polish = await production.startPolishing(asOwner, {
+      machineId: machine!.id,
+      processType: "POLISHING",
+      slabIds: [slab.id],
+    });
+    const polishDone = await production.completePolishing(asOwner, polish.id);
+    assert.equal(polishDone.sellable, true);
+    const afterPolish = await prisma.slab.findUnique({ where: { id: slab.id } });
+    assert.equal(afterPolish?.locationId, finished!.id);
+
+    const sold = await prisma.slab.create({
+      data: {
+        factoryId: factory.id,
+        slabSerial: "SOLD-1",
+        varietyName: "White",
+        salesStatus: "sold",
+        locationId: finished!.id,
+      },
+    });
+    const blocked = await production.startPolishing(asOwner, {
+      machineId: machine!.id,
+      processType: "POLISHING",
+      slabIds: [sold.id],
+    });
+    await assert.rejects(() => production.completePolishing(asOwner, blocked.id), /sold|reserved|voided/i);
+  });
+
+  it("derives DPR good-slab totals from slab rows, not typed day-log counts", async () => {
+    const { factory, asOwner } = await staffFactory("dpr");
+    const received = (await inventory.receiveBlock(asOwner, {
+      serialNumber: "DPR-1",
+      varietyName: "Kashmir White",
+      clientOpId: "dpr-block",
+      weightTons: 2,
+      actualAmountPaid: 100000,
+    })) as { block: { id: string } };
+    const machine = await prisma.machine.findFirst({ where: { factoryId: factory.id, name: "B-21" } });
+    const session = await production.startCutting(asOwner, {
+      rawBlockId: received.block.id,
+      machineId: machine!.id,
+    });
+    await production.logCuttingDay(asOwner, session.id, { slabsProducedCount: 99, runtimeHours: 6 });
+    const done = await production.completeCutting(asOwner, session.id, {
+      totalSlabsCut: 6,
+      finalGoodSlabCount: 4,
+      lengthFt: 8,
+      widthFt: 4,
+    });
+    assert.equal(done.slabs.length, 4);
+    const dpr = await production.derivedDpr(
+      factory.id,
+      new Date("2020-01-01T00:00:00Z"),
+      new Date("2030-01-01T00:00:00Z"),
+    );
+    assert.equal(dpr.slabsCut, 4);
+  });
+
+  it("issues distinct FY invoice numbers under concurrent invoice()", async () => {
+    const { asOwner } = await staffFactory("inv");
+    const customer = await sales.createCustomer(asOwner, "Concurrent Co");
+    const a = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-06",
+      clientOpId: "conc-order-a",
+      lines: [{ quantitySqft: 10, rate: 100 }],
+    })) as { id: string };
+    const b = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-06",
+      clientOpId: "conc-order-b",
+      lines: [{ quantitySqft: 8, rate: 100 }],
+    })) as { id: string };
+    const [ia, ib] = await Promise.all([
+      sales.invoice(asOwner, a.id, "conc-inv-a"),
+      sales.invoice(asOwner, b.id, "conc-inv-b"),
+    ]);
+    assert.match(ia.invoiceNumber, /^INV-\d{4}-\d{5}$/);
+    assert.match(ib.invoiceNumber, /^INV-\d{4}-\d{5}$/);
+    assert.notEqual(ia.invoiceNumber, ib.invoiceNumber);
+  });
+
+  it("blocks a raw payment insert that would exceed the invoice even without the service lock", async () => {
+    const { factory, asOwner } = await staffFactory("paycap");
+    const customer = await sales.createCustomer(asOwner, "Cap Co");
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-06",
+      clientOpId: "cap-order",
+      lines: [{ quantitySqft: 1, rate: 10 }],
+    })) as { id: string };
+    const invoice = await sales.invoice(asOwner, order.id, "cap-inv");
+    await assert.rejects(() =>
+      prisma.payment.create({
+        data: {
+          factoryId: factory.id,
+          invoiceId: invoice.id,
+          amount: 50,
+          method: "cash",
+          paidAt: new Date("2026-09-06"),
+          idempotencyKey: "cap-raw",
+        },
+      }),
+    );
+  });
+
+  it("credits AR when returning slabs on an invoiced order", async () => {
+    const { factory, asOwner } = await staffFactory("ret");
+    const slab = await prisma.slab.create({
+      data: { factoryId: factory.id, slabSerial: "RET-1", varietyName: "White" },
+    });
+    const customer = await sales.createCustomer(asOwner, "Return Co");
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-06",
+      clientOpId: "ret-order",
+      lines: [{ slabId: slab.id, quantitySqft: 32, rate: 100 }],
+    })) as { id: string };
+    await sales.invoice(asOwner, order.id, "ret-inv");
+    const result = await sales.returnSlabs(asOwner, order.id, [slab.id], "wrong shade");
+    assert.ok(result.creditNote);
+    assert.equal(Number(result.creditNote?.amount), 3200);
+    assert.match(result.creditNote!.creditNoteNumber, /^CN-\d{4}-\d{5}$/);
+    const back = await prisma.slab.findUnique({ where: { id: slab.id } });
+    assert.equal(back?.salesStatus, "in_stock");
+    const standing = await prisma.invoice.findFirst({ where: { salesOrderId: order.id } });
+    assert.ok(standing);
+  });
+
+  it("returns 409 when a cutting day-log baseVersion does not match", async () => {
+    const { asOwner } = await staffFactory("ver");
+    const received = (await inventory.receiveBlock(asOwner, {
+      serialNumber: "VER-1",
+      varietyName: "Grey",
+      clientOpId: "ver-block",
+    })) as { block: { id: string } };
+    const machine = await prisma.machine.findFirst({
+      where: { factoryId: asOwner.factoryId, name: "B-21" },
+    });
+    const session = await production.startCutting(asOwner, {
+      rawBlockId: received.block.id,
+      machineId: machine!.id,
+    });
+    await production.logCuttingDay(asOwner, session.id, { runtimeHours: 1 });
+    await production.logCuttingDay(asOwner, session.id, { runtimeHours: 2, baseVersion: 0 });
+    await assert.rejects(
+      () => production.logCuttingDay(asOwner, session.id, { runtimeHours: 3, baseVersion: 0 }),
+      (err: unknown) => {
+        const e = err as { status?: number; response?: { code?: string } };
+        const body = (err as { getResponse?: () => { code?: string } }).getResponse?.();
+        return e.status === 409 || body?.code === "VERSION_CONFLICT" || String(err).includes("VERSION_CONFLICT") || String(err).includes("Conflict");
+      },
+    );
   });
 });

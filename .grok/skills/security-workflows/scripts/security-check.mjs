@@ -102,6 +102,50 @@ async function main() {
   });
   rec("temp user can change password", changed.status === 200 ? "pass" : "fail", `POST change-password ${changed.status}`);
 
+  const noReason = await req("POST", "/api/v1/inventory/movements/00000000-0000-0000-0000-000000000000/reverse", {
+    token: owner.body?.token,
+    body: { clientOpId: "sec-rev-noreason" },
+  });
+  rec(
+    "reverse requires reason",
+    noReason.status === 400 ? "pass" : "fail",
+    `POST movements/:id/reverse without reason ${noReason.status}`,
+    noReason.status === 400 ? "" : "high",
+  );
+
+  const cust = await req("POST", "/api/v1/customers", {
+    token: owner.body?.token,
+    body: { name: "Sec Overpay Co" },
+  });
+  const order = await req("POST", "/api/v1/sales-orders", {
+    token: owner.body?.token,
+    body: {
+      customerId: cust.body?.id,
+      orderDate: "2026-09-06",
+      clientOpId: crypto.randomUUID(),
+      lines: [{ quantitySqft: 1, rate: 10 }],
+    },
+  });
+  const inv = await req("POST", `/api/v1/sales-orders/${order.body?.id}/invoice`, {
+    token: owner.body?.token,
+    body: { clientOpId: crypto.randomUUID() },
+  });
+  const over = await req("POST", `/api/v1/invoices/${inv.body?.id}/payments`, {
+    token: owner.body?.token,
+    body: {
+      amount: 999,
+      method: "cash",
+      paidAt: "2026-09-06",
+      clientOpId: crypto.randomUUID(),
+    },
+  });
+  rec(
+    "pay cannot exceed invoice",
+    over.status === 400 ? "pass" : "fail",
+    `POST invoices/:id/payments amount=999 status=${over.status} invoice=${inv.status}`,
+    over.status === 400 ? "" : "high",
+  );
+
   await req("POST", "/api/v1/auth/logout", { token: owner.body?.token });
   const reuse = await req("GET", "/api/v1/auth/me", { token: owner.body?.token });
   rec("logout revokes session", reuse.status === 401 ? "pass" : "fail", `GET /auth/me after logout ${reuse.status}`, reuse.status === 401 ? "" : "high");
