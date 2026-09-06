@@ -109,6 +109,15 @@ async function main() {
   const dash = await req("GET", "/api/v1/reports/dashboard", { token: aud.body?.token });
   rec("auditor can read dashboard", dash.status === 200 ? "pass" : "fail", `GET dashboard ${dash.status}`);
 
+  const ceoAsOp = await req("GET", "/api/v1/reports/ceo", { token: op.body?.token });
+  rec("operator cannot read CEO brief", ceoAsOp.status === 403 ? "pass" : "fail", `GET /reports/ceo as operator ${ceoAsOp.status}`, ceoAsOp.status === 403 ? "" : "high");
+
+  const csvAsOp = await req("GET", "/api/v1/reports/export/blocks.csv", { token: op.body?.token });
+  rec("operator cannot export CSV", csvAsOp.status === 403 ? "pass" : "fail", `GET blocks.csv as operator ${csvAsOp.status}`, csvAsOp.status === 403 ? "" : "high");
+
+  const ceoAsAud = await req("GET", "/api/v1/reports/ceo", { token: aud.body?.token });
+  rec("auditor can read CEO brief", ceoAsAud.status === 200 ? "pass" : "fail", `GET /reports/ceo as auditor ${ceoAsAud.status}`);
+
   const exp = await req("POST", "/api/v1/expenses", {
     token: aud.body?.token,
     body: { category: "other", amount: 1, expenseDate: "2026-01-01", clientOpId: "sec-aud-exp" },

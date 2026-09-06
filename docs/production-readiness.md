@@ -42,7 +42,13 @@ Playwright (smoke stack `localhost:3000` / `localhost:4000`): 2 passed (no publi
 - [x] Android debug APK built (`apps/android/android/app/build/outputs/apk/debug/app-debug.apk`, gitignored)
 - [x] Terraform `init -backend=false` + `validate` for OCI (`oracle/oci` 6.37.0)
 - [ ] Terraform apply (not now: local-first; AWS / OCI / similar later)
-- [ ] Backup restore rehearsal timed
+- [x] Prod Compose mounts `stoneos_pg_data`; `scripts/backup-rehearse.sh` dumps off-disk and restores into `stoneos_restore`
+- [ ] Timed restore drill on a second machine (script ready; run on factory workstation)
+- [x] Invoice pay takes `SELECT … FOR UPDATE`; sales UI mints one `clientOpId` per invoice/payment, not per click
+- [x] Deny-by-default `@Roles`; CSV locked to `CEO_ROLES`; every `slabId` factory-checked
+- [x] Audited `POST /inventory/movements/:id/reverse` for receipt / reservation / delivery mistypes
+- [x] `TZ=Asia/Kolkata` in API image + Compose; operational-day tests use `Z` instants
+- [x] Domain/API test globs include CEO + guard cases; CI sets `TZ` and runs guard unit tests
 - [ ] CEO brief `GET /api/v1/reports/ceo` proven on smoke after rebuild (code landed; HTTP not yet recorded)
 - [x] No production credentials used in tests
 - [x] Copilot not enabled
