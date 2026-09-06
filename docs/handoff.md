@@ -48,7 +48,7 @@ There is **no public signup**.
 
 Login is **10/min per IP**. Year-run logs in owner + 8 staff; wait ~65s after a burst or the script retries once on 429. Authenticated API traffic is **600/min per IP+token**; anonymous **120/min**.
 
-Last live run after rebuild (2026-09-06): year-run **0 unexpected failures** / 12 months / payments **201** was on the previous volume. After this named-volume rebuild: CEO operator 403 / owner+auditor 200; double-tap pay one row; reverse receipt voided+idempotent; backup rehearse 5s to `E:/stoneos-backups`. Security-check extras (reverse reason, overpay) proven via HTTP on this stack; year-run staff logins in `security-check.mjs` will fail until those users exist here.
+Last live run on `stoneos-smoke_stoneos_pg_data` (2026-09-06, after books-integrity land): year-run **12 months / 204 events**. Expected 403s (operator provision, manager grant-owner, auditor expense) passed. Two first-pass 500s were real: pay transaction 5s timeout (Oct-2025 invoice) and `POST /files` `EACCES mkdir var`. Both retried **201** after timeout + `STORAGE_LOCAL_DIR` fixes (12/12 payments). Security-check **15/15**. Opening SoD on this factory: owner-enter approve **403**, manager approve **201**, `operatingStatus=LIVE`.
 
 ## Architecture (do not regress)
 
@@ -76,6 +76,5 @@ Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=
 
 ## Useful next local work
 
-- Year-run against `stoneos-smoke_stoneos_pg_data` if 12-month books are needed on this named volume (previous year-run may still sit on `compose_stoneos_pg_data`).
 - Timed restore drill on a second *machine*.
-- Opening-count SoD on the live factory (`operatingStatus` is `SETUP` on this fresh volume until opening is approved).
+- Previous year-run books may still sit on volume `compose_stoneos_pg_data` (not attached).

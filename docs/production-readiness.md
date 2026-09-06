@@ -28,6 +28,7 @@ Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (
 - [x] Cutting damaged slabs not stocked
 - [x] Opening approval requires a different user, then factory goes LIVE
 - [x] Opening SoD is line-enterer, not starter: owner-start + owner-enter + owner-approve is 403; 150-line approve keeps payload tons/cost
+- [x] Live smoke SoD: owner-enter approve 403, manager approve 201, factory LIVE (`SOD-LIVE-1`)
 - [x] Invoice retry idempotent; overpay rejected (service lock + DB trigger)
 - [x] Concurrent `invoice()` calls get distinct `INV-YYYY-NNNNN` (IST FY April–March)
 - [x] Grinding completion does not move slabs to finished stock; sold slabs cannot be un-sold by polish
@@ -46,6 +47,8 @@ Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (
 - [ ] Timed restore drill on a second *machine* (script ready; second-*disk* rehearsal done on this workstation)
 - [x] `HOST_BACKUP_DIR=E:/stoneos-backups` `scripts/backup-rehearse.sh` → `var/backup-rehearse.json` (5s; dump on E:; restore counts raw_block=1 invoice=1 payment=1)
 - [x] Invoice pay takes `SELECT … FOR UPDATE`; sales UI mints one `clientOpId` per invoice/payment, not per click
+- [x] Pay/invoice interactive transactions use 30s timeout (year-run first pay hit Prisma 5s P2028)
+- [x] Factory file uploads write to `STORAGE_LOCAL_DIR=/app/apps/api/data/storage` (not `./var`)
 - [x] Deny-by-default `@Roles`; CSV locked to `CEO_ROLES`; every `slabId` factory-checked
 - [x] Audited `POST /inventory/movements/:id/reverse` for receipt / reservation / delivery mistypes
 - [x] `TZ=Asia/Kolkata` in API image + Compose; operational-day tests use `Z` instants
@@ -58,4 +61,6 @@ Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (
 
 Smoke rebuild 2026-09-06 used a **new** named volume `stoneos-smoke_stoneos_pg_data` (fresh bootstrap). Owner password on this stack is `YearRunOwner!12`. Year-run staff (`yrunopr`, …) are not on this volume. A previous volume `compose_stoneos_pg_data` still exists and was not attached.
 
-Remaining local work: second-machine restore drill; year-run against this named volume if those books are required. Cloud apply waits until a host is chosen. Copilot stays deferred (ADR 0009). CEO dashboard is rule-based (ADR 0010). Isolation is application `WHERE` (ADR 0005). PACKING reverse is not shipped — `pack()` does not mutate stock.
+Year-run on this named volume (2026-09-06): 12 months, staff `yrunmgr`…`yrunaud` provisioned. First-pass pay 500 (P2028 5s) and files 500 (`mkdir var`) were fixed and retried 201. Security-check **15/15**. Live opening SoD: owner-enter cannot approve; manager approve → LIVE.
+
+Remaining local work: second-machine restore drill. Cloud apply waits until a host is chosen. Copilot stays deferred (ADR 0009). CEO dashboard is rule-based (ADR 0010). Isolation is application `WHERE` (ADR 0005). PACKING reverse is not shipped — `pack()` does not mutate stock.
