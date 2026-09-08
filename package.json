@@ -22,7 +22,9 @@
     "docker:dev": "docker compose -f infra/compose/docker-compose.yml up -d",
     "docker:prod:smoke": "docker compose -f infra/compose/docker-compose.prod.yml up --build",
     "pack:win": "npm run dist:win --workspace=@stoneos/desktop",
-    "year-run": "node .grok/skills/factory-year-run/scripts/year-run.mjs"
+    "year-run": "node .grok/skills/factory-year-run/scripts/year-run.mjs",
+    "backup:rehearse": "bash scripts/backup-rehearse.sh",
+    "restore:second": "bash scripts/restore-second-machine.sh"
   },
   "engines": {
     "node": ">=22"
