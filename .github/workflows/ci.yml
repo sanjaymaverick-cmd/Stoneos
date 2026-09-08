@@ -63,7 +63,7 @@ jobs:
       - name: Unit and integration tests
         run: npm test
       - name: Guard unit cases
-        run: node --import tsx --test --test-reporter spec apps/api/src/common/session.guard.test.ts packages/domain/src/*.test.ts
+        run: npm exec --workspace=@stoneos/api -- node --import tsx --test --test-reporter spec src/common/session.guard.test.ts
       - name: Typecheck
         run: npm run typecheck
       - name: API build
@@ -104,7 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # v0.24.0 was yanked after the 2026-03 trivy-action tag compromise (CVE-2026-33634).
-      # Pin a post-rebuild immutable tag. Do not use 0.0.1–0.34.2.
+      # Pin a post-rebuild immutable tag. Do not use 0.0.1-0.34.2.
       - uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
