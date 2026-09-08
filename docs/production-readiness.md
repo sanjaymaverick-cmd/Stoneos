@@ -63,4 +63,6 @@ Smoke rebuild 2026-09-06 used a **new** named volume `stoneos-smoke_stoneos_pg_d
 
 Year-run on this named volume (2026-09-06): 12 months, staff `yrunmgr`…`yrunaud` provisioned. First-pass pay 500 (P2028 5s) and files 500 (`mkdir var`) were fixed and retried 201. Security-check **15/15**. Live opening SoD: owner-enter cannot approve; manager approve → LIVE.
 
-Remaining local work: second-machine restore drill. Cloud apply waits until a host is chosen. Copilot stays deferred (ADR 0009). CEO dashboard is rule-based (ADR 0010). Isolation is application `WHERE` (ADR 0005). PACKING reverse is not shipped — `pack()` does not mutate stock.
+Remaining local work: run `scripts/restore-second-machine.sh` on a **different PC** against a dump from `HOST_BACKUP_DIR` and keep `var/restore-second-machine.json`. Cloud apply waits until a host is chosen. Copilot stays deferred (ADR 0009). CEO dashboard is rule-based (ADR 0010). Isolation is application `WHERE` (ADR 0005). PACKING reverse is not shipped — `pack()` does not mutate stock.
+
+CI (2026-09-08): quality no longer dies on `npm audit` before tests; AWS `main.tf` is `terraform fmt`-clean; Trivy action pinned to `v0.36.0` (do not use yanked `0.24.0`). Quality job also dumps/restores the migrated schema on the CI Postgres. Playwright module-walk stays on the smoke stack (`PLAYWRIGHT_SKIP_WEBSERVER=1 STONEOS_OWNER_PASSWORD=YearRunOwner!12 npm run test:e2e --workspace=@stoneos/web`).
