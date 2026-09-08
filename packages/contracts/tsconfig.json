@@ -4,7 +4,8 @@
     "rootDir": "src",
     "noEmit": true,
     "module": "ESNext",
-    "moduleResolution": "bundler"
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"]
