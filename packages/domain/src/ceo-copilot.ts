@@ -1,4 +1,4 @@
-import { ceoExceptions, type CeoBriefInput, type CeoException } from "./ceo-brief.ts";
+import { ceoExceptions, type CeoBriefInput, type CeoException } from "./ceo-brief";
 
 export type CeoSnapshot = CeoBriefInput & {
   factoryName: string;
