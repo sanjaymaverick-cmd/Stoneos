@@ -125,20 +125,20 @@ resource "aws_security_group" "db" {
 }
 
 resource "aws_db_instance" "postgres" {
-  identifier                 = "${var.name}-pg"
-  engine                     = "postgres"
-  engine_version             = "16"
-  instance_class             = "db.t4g.medium"
-  allocated_storage          = 50
-  username                   = "stoneos"
+  identifier                  = "${var.name}-pg"
+  engine                      = "postgres"
+  engine_version              = "16"
+  instance_class              = "db.t4g.medium"
+  allocated_storage           = 50
+  username                    = "stoneos"
   manage_master_user_password = true
-  db_subnet_group_name       = aws_db_subnet_group.this.name
-  vpc_security_group_ids     = [aws_security_group.db.id]
-  storage_encrypted          = true
-  skip_final_snapshot        = true
-  backup_retention_period    = 7
-  deletion_protection        = false
-  publicly_accessible        = false
+  db_subnet_group_name        = aws_db_subnet_group.this.name
+  vpc_security_group_ids      = [aws_security_group.db.id]
+  storage_encrypted           = true
+  skip_final_snapshot         = true
+  backup_retention_period     = 7
+  deletion_protection         = false
+  publicly_accessible         = false
 }
 
 resource "aws_s3_bucket" "files" {
