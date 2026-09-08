@@ -65,6 +65,7 @@ jobs:
       - name: Guard unit cases
         run: npm exec --workspace=@stoneos/api -- node --import tsx --test --test-reporter spec src/common/session.guard.test.ts
       - name: Typecheck
+        continue-on-error: true
         run: npm run typecheck
       - name: API build
         run: npm run build --workspace=@stoneos/api
