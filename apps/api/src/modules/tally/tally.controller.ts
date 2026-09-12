@@ -1,4 +1,4 @@
-import { Body, Controller, Inject, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { HISTORICAL_IMPORT_ROLES } from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
@@ -9,6 +9,12 @@ import { TallyService } from "./tally.service";
 @Controller("tally")
 export class TallyController {
   constructor(@Inject(TallyService) private service: TallyService) {}
+
+  @Get("batches")
+  @Roles(...HISTORICAL_IMPORT_ROLES)
+  batches(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.batches(user.factoryId);
+  }
 
   @Post("daybook")
   @Roles(...HISTORICAL_IMPORT_ROLES)

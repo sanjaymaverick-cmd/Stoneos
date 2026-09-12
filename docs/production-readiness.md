@@ -64,6 +64,7 @@ Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.s
 - [x] No production credentials used in tests
 - [x] Copilot not enabled
 - [x] Interfactory AR/AP not in StoneOS (reverted). Sister-plant settlements are Tally, so this app stays the factory yard ledger.
+- [x] Tally daybook import stores voucher type/party/amount as a log; `writesInventory: false`; does not post stock or invoices
 
 Smoke rebuild 2026-09-06 used named volume `stoneos-smoke_stoneos_pg_data`. Owner password on this stack is `YearRunOwner!12`. Year-run staff (`yrunopr`, …) **were provisioned** on that volume. A previous volume `compose_stoneos_pg_data` still exists and was not attached.
 

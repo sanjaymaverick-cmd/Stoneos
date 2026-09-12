@@ -49,7 +49,7 @@ A executed more. B did not contradict these.
 | A10 | No 409 on stock/money despite ADR 0006 | Wire version checks or delete the story. |
 | A11 | Commercial writes unaudited | Invoice/pay/dispatch/return/expense/Tally. |
 | A12 | Movement row has no from/to/value/business date; 7 movement types have no emitter; `CUSTOMER_OWNED` unused | Ledger cannot reconstruct location history. |
-| A13 | Tally is XML tag counting; files are write-only 100 KB | Rename or delete. |
+| A13 | Tally is XML tag counting; files are write-only 100 KB | **Addressed 2026-09-12:** daybook import parses voucher type/party/amount into a log (`writesInventory: false`). Still not a second money ledger — group AR stays Tally. Files remain 100 KB write-only. |
 | A14 | API image runs `npx tsx`; bootstrap in same image; `SESSION_SECRET` unused; `BOOTSTRAP_TOKEN` not compared; prod postgres no `restart` | Build `dist`; split bootstrap; rotate committed secrets. |
 | A15 | `npm test` does not run `ceo-*.test.ts`; one of those tests is red (`/Vedam/` vs exception headline) | Fix globs; fix test. |
 | A16 | CI ignores `security-check.mjs`, year-run, Playwright | Add HTTP suite to CI. |
