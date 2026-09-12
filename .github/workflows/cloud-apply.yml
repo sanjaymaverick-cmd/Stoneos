@@ -1,0 +1,43 @@
+name: Cloud apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: aws or oci
+        required: true
+        type: choice
+        options:
+          - aws
+          - oci
+      auto_approve:
+        description: terraform apply -auto-approve
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: production-cloud
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - name: Apply
+        env:
+          PROVIDER: ${{ inputs.provider }}
+          AUTO_APPROVE: ${{ inputs.auto_approve }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+        run: bash scripts/cloud-apply.sh

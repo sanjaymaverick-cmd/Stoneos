@@ -34,6 +34,8 @@ Fixture used by tests: `apps/api/test/fixtures/khata/customer-list.json` (36 fil
 
 CSV templates: `templates/rokad.csv`, `templates/dpr.csv`. PDF/photo → `unreadable`. Proposer ≠ confirmer. Rokad out → expense. Rokad in with a matching open invoice → `sales.pay`; else unallocated. DPR missing block → no stock. `derivedDpr.slabsCut` comes from slab rows.
 
+After a successful live PDF import (`GET /books/outstanding` You&apos;ll Get ₹1,25,61,248 / You&apos;ll Give ₹1,63,671), uninstall Khatabook. New collections live only in StoneOS.
+
 ## GST
 
 Invoice amount is the customer total. Voucher splits 18% GST inclusive onto `GST_OUTPUT`. File GSTR outside StoneOS.

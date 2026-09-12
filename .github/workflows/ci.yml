@@ -60,6 +60,11 @@ jobs:
           psql -h 127.0.0.1 -U stoneos -d postgres -c "CREATE DATABASE stoneos_restore;"
           pg_restore -h 127.0.0.1 -U stoneos --no-owner -d stoneos_restore /tmp/stoneos-ci.dump
           psql -h 127.0.0.1 -U stoneos -d stoneos_restore -c "SELECT count(*) AS migrations FROM _prisma_migrations;"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stoneos-ci-dump
+          path: /tmp/stoneos-ci.dump
+          retention-days: 3
       - name: Unit and integration tests
         run: npm test
       - name: Guard unit cases
@@ -73,6 +78,40 @@ jobs:
       - name: Audit production dependencies (report only)
         continue-on-error: true
         run: npm audit --omit=dev --audit-level=high
+
+  restore-fresh-runner:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: stoneos
+          POSTGRES_PASSWORD: stoneos_ci
+          POSTGRES_DB: stoneos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stoneos -d stoneos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: stoneos-ci-dump
+          path: /tmp
+      - name: Restore dump on a fresh runner
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          export PGPASSWORD=stoneos_ci
+          psql -h 127.0.0.1 -U stoneos -d postgres -c "DROP DATABASE IF EXISTS stoneos_restore;"
+          psql -h 127.0.0.1 -U stoneos -d postgres -c "CREATE DATABASE stoneos_restore;"
+          pg_restore -h 127.0.0.1 -U stoneos --no-owner -d stoneos_restore /tmp/stoneos-ci.dump
+          psql -h 127.0.0.1 -U stoneos -d stoneos_restore -At -c "SELECT 'migrations='||count(*) FROM _prisma_migrations;"
+          psql -h 127.0.0.1 -U stoneos -d stoneos_restore -At -c "SELECT json_build_object('raw_block', (SELECT count(*) FROM raw_block), 'slab', (SELECT count(*) FROM slab), 'invoice', (SELECT count(*) FROM invoice), 'payment', (SELECT count(*) FROM payment));"
 
   images:
     needs: quality

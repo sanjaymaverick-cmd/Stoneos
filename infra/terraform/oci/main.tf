@@ -176,3 +176,6 @@ output "private_subnet_id" { value = oci_core_subnet.private.id }
 output "db_subnet_id" { value = oci_core_subnet.db.id }
 output "vault_id" { value = oci_kms_vault.this.id }
 output "bucket" { value = oci_objectstorage_bucket.files.name }
+output "files_bucket" { value = oci_objectstorage_bucket.files.name }
+output "backup_bucket" { value = oci_objectstorage_bucket.files.name }
+output "postgres_endpoint" { value = "set DATABASE_URL after applying a Postgres 16 instance in the db subnet" }
