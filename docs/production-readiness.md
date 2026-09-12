@@ -12,9 +12,9 @@ Command: `npm test` per workspace (`node --test`). API integration uses embedded
 | `@stoneos/sync-client` | 5 | 0 | 0 |
 | `@stoneos/storage` | 2 | 0 | 0 |
 | `@stoneos/api` unit | 8 | 0 | 0 |
-| `@stoneos/api` postgres workflows | 18 | 0 | 0 |
+| `@stoneos/api` postgres workflows | 19 | 0 | 0 |
 | `@stoneos/web` route policy | 3 | 0 | 0 |
-| **Total** | **61** | **0** | **0** |
+| **Total** | **62** | **0** | **0** |
 
 Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (no public signup; owner login forced to change bootstrap password). Not re-run on this rebuild.
 
@@ -34,6 +34,7 @@ Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (
 - [x] Grinding completion does not move slabs to finished stock; sold slabs cannot be un-sold by polish
 - [x] DPR `slabsCut` equals slab rows from `completeCutting` in the operational-day window
 - [x] Invoiced return issues `CN-YYYY-NNNNN` and leaves the invoice standing
+- [x] `pack()` does not change slab `salesStatus`/location and emits no `PACKING` movement (no reverse path)
 - [x] Prisma migrate deploy on empty Postgres 16 (Docker `postgres:16-alpine` in `stoneos-smoke`)
 - [x] Bootstrap refuses a second owner (CLI no-ops after lock; first run created Vedam Granites / `owner`)
 - [x] `/health/live` and `/health/ready` against Docker API image
@@ -59,7 +60,9 @@ Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (
 - [x] No production credentials used in tests
 - [x] Copilot not enabled
 
-Smoke rebuild 2026-09-06 used a **new** named volume `stoneos-smoke_stoneos_pg_data` (fresh bootstrap). Owner password on this stack is `YearRunOwner!12`. Year-run staff (`yrunopr`, …) are not on this volume. A previous volume `compose_stoneos_pg_data` still exists and was not attached.
+Smoke rebuild 2026-09-06 used named volume `stoneos-smoke_stoneos_pg_data`. Owner password on this stack is `YearRunOwner!12`. Year-run staff (`yrunopr`, …) **were provisioned** on that volume. A previous volume `compose_stoneos_pg_data` still exists and was not attached.
+
+**2026-09-12 this workstation:** local `main` fast-forwarded to `38e6512`. Docker Desktop GUI started but the Linux engine pipe never appeared, so smoke was not brought up. Playwright walk and `restore-second-machine.sh` were **not** run (no invented `var/restore-second-machine.json`). `terraform apply` not run. Copilot not enabled. PACKING reverse not added (`pack()` still creates a packing list only). Dual RLS not claimed.
 
 Year-run on this named volume (2026-09-06): 12 months, staff `yrunmgr`…`yrunaud` provisioned. First-pass pay 500 (P2028 5s) and files 500 (`mkdir var`) were fixed and retried 201. Security-check **15/15**. Live opening SoD: owner-enter cannot approve; manager approve → LIVE.
 

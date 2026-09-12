@@ -32,7 +32,7 @@ Postgres in this compose file is ephemeral unless Docker reuses an anonymous vol
 
 **Live owner password on the 2026-09-06 smoke rebuild:** `YearRunOwner!12` (bootstrap `ChangeMeNow!12` was changed on first login). Confirm with `POST /api/v1/auth/login` before telling the user.
 
-This rebuild created named volume `stoneos-smoke_stoneos_pg_data` empty, then bootstrap + migrate. Year-run staff are **not** on this volume. An older volume `compose_stoneos_pg_data` is still on the machine and was not attached.
+Named volume `stoneos-smoke_stoneos_pg_data` has the 2026-09-06 bootstrap + year-run + opening SoD (factory LIVE). Year-run staff **are** on this volume after that run. An older volume `compose_stoneos_pg_data` is still on the machine and was not attached.
 
 Year-run staff (if provisioned on a volume that has them): `yrunmgr`, `yrunadm`, `yrunsup`, `yrunopr`, `yruninv`, `yrunsls`, `yrunacc`, `yrunaud` — passwords `YearRunXxx!12` (e.g. `yrunopr` / `YearRunOpr!12`).
 
@@ -63,7 +63,7 @@ Last live run on `stoneos-smoke_stoneos_pg_data` (2026-09-06, after books-integr
 
 ## Tests
 
-`npm test` workspaces: last recorded **61 pass / 0 fail** (2026-09-06). Playwright: `apps/web/e2e/login.spec.ts` and `modules-walk.spec.ts` (not re-run on this rebuild).
+`npm test` workspaces: last recorded **62 pass / 0 fail** (2026-09-12; pack stock-invariance +1). Playwright: `apps/web/e2e/login.spec.ts` and `modules-walk.spec.ts` (not re-run; Docker engine down 2026-09-12).
 
 Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=UTF8 --locale=C`. Approve `@embedded-postgres/windows-x64` scripts if hydrate fails.
 
@@ -76,5 +76,7 @@ Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=
 
 ## Useful next local work
 
-- Timed restore drill on a second *machine*.
-- Previous year-run books may still sit on volume `compose_stoneos_pg_data` (not attached).
+- Timed restore drill on a **different PC**: `DUMP_FILE=… bash scripts/restore-second-machine.sh` → `var/restore-second-machine.json`. Dump exists on this factory box at `E:/stoneos-backups/stoneos-20260906T104756.dump`. Do not tick the box from a run on this SSD.
+- Playwright module walk on smoke: `PLAYWRIGHT_SKIP_WEBSERVER=1 PLAYWRIGHT_BASE_URL=http://localhost:3000 STONEOS_OWNER_PASSWORD=YearRunOwner!12 npx playwright test --config apps/web/playwright.config.ts apps/web/e2e/modules-walk.spec.ts`. **2026-09-12:** Docker Desktop Linux engine did not come up (`npipe dockerDesktopLinuxEngine` missing); walk not run.
+- `terraform apply` waits until the user names AWS vs OCI.
+- Copilot stays snapshot-only (ADR 0009 / 0011). PACKING reverse stays out: `pack()` does not mutate stock. Isolation stays application `WHERE` (ADR 0005).
