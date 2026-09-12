@@ -77,6 +77,6 @@ Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=
 ## Useful next local work
 
 - Timed restore drill on a **different PC**: `DUMP_FILE=… bash scripts/restore-second-machine.sh` → `var/restore-second-machine.json`. Dump exists on this factory box at `E:/stoneos-backups/stoneos-20260906T104756.dump`. Do not tick the box from a run on this SSD.
-- Playwright owner module walk on smoke: **passed** 2026-09-12 (desktop+mobile, no blockers). Operator/auditor hidden-nav walk is not in `modules-walk.spec.ts` yet.
+- Playwright on smoke 2026-09-12: owner module walk **passed**; operator+auditor nav walk **passed** (`e2e/role-nav.spec.ts`). Operator nav is CEO/Production/Maintenance/Consumables; auditor nav is CEO/Sales/Recovery/Audit. Team/Tally/Sales/Expenses/Audit hidden from operator. Production writes hidden from auditor nav. Deep-link `/admin/users` as operator still shows the form but does not provision.
 - `terraform apply` waits until the user names AWS vs OCI.
 - Copilot stays snapshot-only (ADR 0009 / 0011). PACKING reverse stays out: `pack()` does not mutate stock. Isolation stays application `WHERE` (ADR 0005).

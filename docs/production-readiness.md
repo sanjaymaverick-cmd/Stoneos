@@ -20,6 +20,8 @@ Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (
 
 Owner module walk on current smoke (2026-09-12): **1 passed** (`apps/web/e2e/modules-walk.spec.ts`, desktop 1280×800 + mobile 390×844, every `routePolicy` href + login + password). Report `var/ui-ux-module-review.md`. Blockers: none.
 
+Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.spec.ts`). Operator nav has no Team/Tally/Sales/Expenses/Audit; provision submit as operator does not mint a password. Auditor nav shows CEO+Audit, not Production/Maintenance/Consumables.
+
 - [x] `npm test` pass/fail counts recorded (**30 pass / 0 fail** as of 2026-09-05)
 - [x] Goods-receipt `clientOpId` retry does not create a second block
 - [x] Vehicle expenses require a same-factory vehicle
