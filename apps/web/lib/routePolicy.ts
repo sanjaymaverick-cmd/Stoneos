@@ -8,6 +8,8 @@ import {
   EXPENSE_DATA_ROLES,
   BOOKS_STATEMENT_ROLES,
   INTAKE_DRAFT_ROLES,
+  MUSTER_ATTEND_ROLES,
+  CEO_ROLES,
 } from "@stoneos/contracts";
 
 export const routes: Array<{ href: string; label: string; roles: Role[]; nav?: boolean }> = [
@@ -22,6 +24,8 @@ export const routes: Array<{ href: string; label: string; roles: Role[]; nav?: b
   { href: "/expenses", label: "Expenses", roles: EXPENSE_DATA_ROLES },
   { href: "/books", label: "Books", roles: BOOKS_STATEMENT_ROLES },
   { href: "/intake", label: "Intake", roles: INTAKE_DRAFT_ROLES },
+  { href: "/interfactory", label: "Sister plants", roles: CEO_ROLES },
+  { href: "/muster", label: "Muster", roles: MUSTER_ATTEND_ROLES },
   { href: "/tally", label: "Tally archive", roles: USER_MANAGEMENT_ROLES, nav: false },
   { href: "/files", label: "Files", roles: INVENTORY_DATA_ROLES },
   { href: "/admin/users", label: "Team", roles: USER_MANAGEMENT_ROLES },
