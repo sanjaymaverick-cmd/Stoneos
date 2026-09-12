@@ -38,7 +38,12 @@ Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.s
 - [x] Grinding completion does not move slabs to finished stock; sold slabs cannot be un-sold by polish
 - [x] DPR `slabsCut` equals slab rows from `completeCutting` in the operational-day window
 - [x] Invoiced return issues `CN-YYYY-NNNNN` and leaves the invoice standing
-- [x] `pack()` does not change slab `salesStatus`/location and emits no `PACKING` movement (no reverse path)
+- [x] `pack()` moves slabs to the PACKING location and emits a `PACKING` movement (salesStatus unchanged until dispatch)
+- [x] Invoice/pay/CN/expense each post one balanced voucher; retry `clientOpId` is a no-op
+- [x] Khata customer-list import: 46 parties, AR ₹1,25,61,248, AP ₹1,63,671 as of 2026-09-12; supervisor cannot import
+- [x] Supervisor rokad/DPR intake: proposer cannot confirm; PDF is unreadable; cash drawer lock blocks further cash vouchers
+- [x] GST 18% inclusive on sales/CN vouchers (`GST_OUTPUT`); GSTR filing stays outside
+- [ ] Muster/payroll (deferred until the plant says it still needs it)
 - [x] Prisma migrate deploy on empty Postgres 16 (Docker `postgres:16-alpine` in `stoneos-smoke`)
 - [x] Bootstrap refuses a second owner (CLI no-ops after lock; first run created Vedam Granites / `owner`)
 - [x] `/health/live` and `/health/ready` against Docker API image
@@ -68,10 +73,10 @@ Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.s
 
 Smoke rebuild 2026-09-06 used named volume `stoneos-smoke_stoneos_pg_data`. Owner password on this stack is `YearRunOwner!12`. Year-run staff (`yrunopr`, …) **were provisioned** on that volume. A previous volume `compose_stoneos_pg_data` still exists and was not attached.
 
-**2026-09-12 this workstation:** smoke stack was up; owner Playwright walk passed (desktop+mobile). `restore-second-machine.sh` still belongs on a **different PC**. `terraform apply` not run. Copilot not enabled. PACKING reverse not added (`pack()` still creates a packing list only). Dual RLS not claimed.
+**2026-09-12 this workstation:** smoke stack was up; owner Playwright walk passed (desktop+mobile). `restore-second-machine.sh` still belongs on a **different PC**. `terraform apply` not run. Copilot not enabled. `pack()` now moves slabs to PACKING. Dual RLS not claimed. Vedam Books spine + khata fixture + intake/drawer are in the API; live PDF import on smoke is still a local cutover step.
 
 Year-run on this named volume (2026-09-06): 12 months, staff `yrunmgr`…`yrunaud` provisioned. First-pass pay 500 (P2028 5s) and files 500 (`mkdir var`) were fixed and retried 201. Security-check **15/15**. Live opening SoD: owner-enter cannot approve; manager approve → LIVE.
 
-Remaining local work: run `scripts/restore-second-machine.sh` on a **different PC** against a dump from `HOST_BACKUP_DIR` and keep `var/restore-second-machine.json`. Cloud apply waits until a host is chosen. Copilot stays deferred (ADR 0009). CEO dashboard is rule-based (ADR 0010). Isolation is application `WHERE` (ADR 0005). PACKING reverse is not shipped — `pack()` does not mutate stock.
+Remaining local work: run `scripts/restore-second-machine.sh` on a **different PC** against a dump from `HOST_BACKUP_DIR` and keep `var/restore-second-machine.json`. Import the live Khatabook customer-list PDFs on smoke (fixture fillers are not Vedam names). Cloud apply waits until a host is chosen. Copilot stays deferred (ADR 0009). CEO dashboard is rule-based (ADR 0010). Isolation is application `WHERE` (ADR 0005). Muster/payroll is not shipped.
 
 CI (2026-09-08): quality no longer dies on `npm audit` before tests; AWS `main.tf` is `terraform fmt`-clean; Trivy action pinned to `v0.36.0` (do not use yanked `0.24.0`). Quality job also dumps/restores the migrated schema on the CI Postgres. Playwright module-walk stays on the smoke stack (`PLAYWRIGHT_SKIP_WEBSERVER=1 STONEOS_OWNER_PASSWORD=YearRunOwner!12 npm run test:e2e --workspace=@stoneos/web`).
