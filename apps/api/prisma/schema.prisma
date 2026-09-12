@@ -153,6 +153,9 @@ model Factory {
   returns            CustomerReturn[]
   documentSequences  DocumentSequence[]
   creditNotes        CreditNote[]
+  interfactoryPayables InterfactoryPayable[] @relation("PayableBuyer")
+  interfactorySold     InterfactoryPayable[] @relation("PayableSeller")
+  interfactorySettlements InterfactorySettlement[]
 
   @@map("factory")
 }
@@ -248,18 +251,20 @@ model Supplier {
 }
 
 model Customer {
-  id          String       @id @default(uuid())
-  factoryId   String       @map("factory_id")
-  factory     Factory      @relation(fields: [factoryId], references: [id])
-  name        String
-  contactInfo String?      @map("contact_info")
-  creditLimit Decimal?     @map("credit_limit") @db.Decimal(14, 2)
-  createdAt   DateTime     @default(now()) @map("created_at")
-  version     Int          @default(0)
-  quotations  Quotation[]
-  salesOrders SalesOrder[]
-  invoices    Invoice[]
+  id                    String       @id @default(uuid())
+  factoryId             String       @map("factory_id")
+  factory               Factory      @relation(fields: [factoryId], references: [id])
+  name                  String
+  contactInfo           String?      @map("contact_info")
+  creditLimit           Decimal?     @map("credit_limit") @db.Decimal(14, 2)
+  counterpartyFactoryId String?      @map("counterparty_factory_id")
+  createdAt             DateTime     @default(now()) @map("created_at")
+  version               Int          @default(0)
+  quotations            Quotation[]
+  salesOrders           SalesOrder[]
+  invoices              Invoice[]
 
+  @@unique([factoryId, counterpartyFactoryId])
   @@index([factoryId])
   @@map("customer")
 }
@@ -648,13 +653,15 @@ model Invoice {
   salesOrder     SalesOrder @relation(fields: [salesOrderId], references: [id])
   customerId     String     @map("customer_id")
   customer       Customer   @relation(fields: [customerId], references: [id])
-  invoiceNumber  String     @map("invoice_number")
-  amount         Decimal    @db.Decimal(14, 2)
-  idempotencyKey String     @map("idempotency_key")
-  createdAt      DateTime   @default(now()) @map("created_at")
-  version        Int        @default(0)
-  payments       Payment[]
-  creditNotes    CreditNote[]
+  invoiceNumber         String     @map("invoice_number")
+  amount                Decimal    @db.Decimal(14, 2)
+  idempotencyKey        String     @map("idempotency_key")
+  counterpartyFactoryId String?    @map("counterparty_factory_id")
+  createdAt             DateTime   @default(now()) @map("created_at")
+  version               Int        @default(0)
+  payments              Payment[]
+  creditNotes           CreditNote[]
+  interfactoryPayable   InterfactoryPayable?
 
   @@unique([factoryId, invoiceNumber])
   @@unique([factoryId, idempotencyKey])
@@ -675,6 +682,52 @@ model Payment {
 
   @@unique([factoryId, idempotencyKey])
   @@map("payment")
+}
+
+model InterfactoryLink {
+  id         String   @id @default(uuid())
+  factoryAId String   @map("factory_a_id")
+  factoryBId String   @map("factory_b_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([factoryAId, factoryBId])
+  @@map("interfactory_link")
+}
+
+model InterfactoryPayable {
+  id              String   @id @default(uuid())
+  factoryId       String   @map("factory_id")
+  factory         Factory  @relation("PayableBuyer", fields: [factoryId], references: [id])
+  sellerFactoryId String   @map("seller_factory_id")
+  sellerFactory   Factory  @relation("PayableSeller", fields: [sellerFactoryId], references: [id])
+  sourceInvoiceId String   @unique @map("source_invoice_id")
+  sourceInvoice   Invoice  @relation(fields: [sourceInvoiceId], references: [id])
+  amount          Decimal  @db.Decimal(14, 2)
+  creditedAmount  Decimal  @default(0) @map("credited_amount") @db.Decimal(14, 2)
+  createdAt       DateTime @default(now()) @map("created_at")
+  version         Int      @default(0)
+  settlements     InterfactorySettlement[]
+
+  @@index([factoryId])
+  @@map("interfactory_payable")
+}
+
+model InterfactorySettlement {
+  id              String               @id @default(uuid())
+  factoryId       String               @map("factory_id")
+  factory         Factory              @relation(fields: [factoryId], references: [id])
+  payableId       String               @map("payable_id")
+  payable         InterfactoryPayable  @relation(fields: [payableId], references: [id])
+  sellerPaymentId String?              @map("seller_payment_id")
+  amount          Decimal              @db.Decimal(14, 2)
+  method          String
+  paidAt          DateTime             @map("paid_at") @db.Date
+  idempotencyKey  String               @map("idempotency_key")
+  createdAt       DateTime             @default(now()) @map("created_at")
+
+  @@unique([factoryId, idempotencyKey])
+  @@index([payableId])
+  @@map("interfactory_settlement")
 }
 
 model DocumentSequence {
