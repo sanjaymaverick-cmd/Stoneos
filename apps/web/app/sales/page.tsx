@@ -5,7 +5,7 @@ import { AppShell } from "../../components/AppShell";
 import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
 
-type Customer = { id: string; name: string; counterpartyFactoryId?: string | null };
+type Customer = { id: string; name: string };
 type Slab = { id: string; slabSerial: string; salesStatus: string };
 type Order = {
   id: string;
@@ -95,7 +95,7 @@ export default function SalesPage() {
           <label>Customer
             <select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
               {customers.length === 0 ? <option value="">No customers yet</option> : null}
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.counterpartyFactoryId ? " (sister plant)" : ""}</option>)}
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </label>
           <label>Slab

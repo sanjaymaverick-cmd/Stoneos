@@ -55,7 +55,7 @@ Last live run on `stoneos-smoke_stoneos_pg_data` (2026-09-06, after books-integr
 - Monorepo: NestJS API `apps/api` (`/api/v1`), Next 15 PWA `apps/web`, Electron `apps/desktop`, Capacitor `apps/android`.
 - Username + opaque session (SHA-256 of token stored). scrypt passwords. `factoryId` from session only.
 - Roles: owner, manager, supervisor, operator, inventory, sales, accountant, auditor, admin. Managers cannot grant owner. `PAYMENT_ROLES` = sales writers + accountant. `CEO_ROLES` = owner, manager, accountant, auditor, admin.
-- `factory_id` is **TEXT**. Isolation is application `WHERE factoryId = session.factoryId`. RLS is ENABLE-only (table owner exempt; `withFactory` unused). Idempotency `(factoryId, clientOpId)`. Invoice numbers are factory + IST FY (April–March) sequences (`INV-YYYY-NNNNN`). Sister plants on the same server can be linked; sales to that customer post AP on the buyer; settlement pays seller AR and buyer AP together. Client still cannot choose `factoryId`. Stock is not auto-received on the buyer (recovery stays sale-time on the seller).
+- `factory_id` is **TEXT**. Isolation is application `WHERE factoryId = session.factoryId`. RLS is ENABLE-only (table owner exempt; `withFactory` unused). Idempotency `(factoryId, clientOpId)`. Invoice numbers are factory + IST FY (April–March) sequences (`INV-YYYY-NNNNN`).
 - Operational day 07:00. Recovery 105 sqft/ton at sale. Damaged cost at raw-block cost. Damaged pieces are counts, not slab rows.
 - API image runs `tsx` + explicit `@Inject()` (tsx does not emit `design:paramtypes`). Copy `tsconfig.base.json` into the API image.
 - Web: `apiFetch<T = any>`, extensionless imports in contracts/sync-client, `transpilePackages`, `allowImportingTsExtensions`.
@@ -63,7 +63,7 @@ Last live run on `stoneos-smoke_stoneos_pg_data` (2026-09-06, after books-integr
 
 ## Tests
 
-`npm test` workspaces: last recorded **64 pass / 0 fail** (2026-09-12; interfactory + pack). Playwright owner module walk on smoke **passed** 2026-09-12 (`modules-walk.spec.ts`, desktop+mobile; `var/ui-ux-module-review.md`).
+`npm test` workspaces: last recorded **62 pass / 0 fail** (2026-09-12; pack stock-invariance +1). Playwright owner module walk on smoke **passed** 2026-09-12 (`modules-walk.spec.ts`, desktop+mobile; `var/ui-ux-module-review.md`).
 
 Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=UTF8 --locale=C`. Approve `@embedded-postgres/windows-x64` scripts if hydrate fails.
 

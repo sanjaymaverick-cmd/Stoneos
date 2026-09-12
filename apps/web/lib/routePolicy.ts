@@ -9,7 +9,6 @@ export const routes: Array<{ href: string; label: string; roles: Role[] }> = [
   { href: "/maintenance", label: "Maintenance", roles: PRODUCTION_INPUT_ROLES },
   { href: "/consumables", label: "Consumables", roles: PRODUCTION_INPUT_ROLES },
   { href: "/sales", label: "Sales", roles: SALES_READ_ROLES },
-  { href: "/interfactory", label: "Sister plants", roles: ["owner", "manager", "admin", "accountant", "auditor"] },
   { href: "/recovery-ratio", label: "Recovery", roles: SALES_READ_ROLES },
   { href: "/expenses", label: "Expenses", roles: EXPENSE_DATA_ROLES },
   { href: "/tally", label: "Tally", roles: USER_MANAGEMENT_ROLES },

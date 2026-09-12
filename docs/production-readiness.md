@@ -12,9 +12,9 @@ Command: `npm test` per workspace (`node --test`). API integration uses embedded
 | `@stoneos/sync-client` | 5 | 0 | 0 |
 | `@stoneos/storage` | 2 | 0 | 0 |
 | `@stoneos/api` unit | 8 | 0 | 0 |
-| `@stoneos/api` postgres workflows | 20 | 0 | 0 |
-| `@stoneos/web` route policy | 4 | 0 | 0 |
-| **Total** | **64** | **0** | **0** |
+| `@stoneos/api` postgres workflows | 19 | 0 | 0 |
+| `@stoneos/web` route policy | 3 | 0 | 0 |
+| **Total** | **62** | **0** | **0** |
 
 Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (no public signup; owner login forced to change bootstrap password).
 
@@ -39,7 +39,6 @@ Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.s
 - [x] DPR `slabsCut` equals slab rows from `completeCutting` in the operational-day window
 - [x] Invoiced return issues `CN-YYYY-NNNNN` and leaves the invoice standing
 - [x] `pack()` does not change slab `salesStatus`/location and emits no `PACKING` movement (no reverse path)
-- [x] Interfactory: owner can register sister plants; link posts counterpart customers; invoice to a sister posts AP on the buyer; settlement pays seller AR and buyer AP together (idempotent). Stock is not auto-received on the buyer.
 - [x] Prisma migrate deploy on empty Postgres 16 (Docker `postgres:16-alpine` in `stoneos-smoke`)
 - [x] Bootstrap refuses a second owner (CLI no-ops after lock; first run created Vedam Granites / `owner`)
 - [x] `/health/live` and `/health/ready` against Docker API image

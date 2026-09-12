@@ -11,7 +11,6 @@ import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { isUniqueViolation, nextDocumentNumber } from "./document-number";
-import { postPayableForInvoice, recordSettlement } from "./interfactory-posting";
 
 @Injectable()
 export class SalesService {
@@ -213,9 +212,6 @@ export class SalesService {
       if (duplicate) throw new BadRequestException("Order already invoiced");
       const lines = await tx.salesLineItem.findMany({ where: { salesOrderId: order.id } });
       const amount = lines.reduce((sum, line) => sum + Number(line.quantitySqft) * Number(line.rate), 0);
-      const customer = await tx.customer.findFirst({
-        where: { id: order.customerId, factoryId: user.factoryId },
-      });
       const invoiceNumber = await nextDocumentNumber(tx, user.factoryId, "INVOICE");
       try {
         const created = await tx.invoice.create({
@@ -226,17 +222,8 @@ export class SalesService {
             invoiceNumber,
             amount,
             idempotencyKey: clientOpId,
-            counterpartyFactoryId: customer?.counterpartyFactoryId,
           },
         });
-        if (customer?.counterpartyFactoryId) {
-          await postPayableForInvoice(tx, {
-            buyerFactoryId: customer.counterpartyFactoryId,
-            sellerFactoryId: user.factoryId,
-            invoiceId: created.id,
-            amount,
-          });
-        }
         await tx.auditEvent.create({
           data: {
             factoryId: user.factoryId,
@@ -244,7 +231,7 @@ export class SalesService {
             action: "sales.invoice",
             entityType: "invoice",
             entityId: created.id,
-            payload: { amount, invoiceNumber, counterpartyFactoryId: customer?.counterpartyFactoryId },
+            payload: { amount, invoiceNumber },
           },
         });
         return created;
@@ -301,22 +288,6 @@ export class SalesService {
           where: { id: invoice.id },
           data: { version: { increment: 1 } },
         });
-        if (invoice.counterpartyFactoryId) {
-          const payable = await tx.interfactoryPayable.findUnique({
-            where: { sourceInvoiceId: invoice.id },
-          });
-          if (payable) {
-            await recordSettlement(tx, {
-              buyerFactoryId: payable.factoryId,
-              payableId: payable.id,
-              amount: input.amount,
-              method: input.method,
-              paidAt: new Date(input.paidAt),
-              clientOpId: input.clientOpId,
-              sellerPaymentId: payment.id,
-            });
-          }
-        }
         await tx.auditEvent.create({
           data: {
             factoryId: user.factoryId,
@@ -390,12 +361,6 @@ export class SalesService {
             throw new ConflictException("Credit note number already issued");
           }
           throw error;
-        }
-        if (invoice.counterpartyFactoryId) {
-          await tx.interfactoryPayable.updateMany({
-            where: { sourceInvoiceId: invoice.id },
-            data: { creditedAmount: { increment: creditAmount } },
-          });
         }
       }
       for (const slabId of slabIds) {

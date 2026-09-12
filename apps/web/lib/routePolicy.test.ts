@@ -19,10 +19,4 @@ describe("route policy", () => {
     assert.equal(canAccessPath("supervisor", "/tally"), false);
     assert.equal(canAccessPath("owner", "/tally"), true);
   });
-
-  it("keeps sister-plant settlements off the shop floor", () => {
-    assert.equal(canAccessPath("operator", "/interfactory"), false);
-    assert.equal(canAccessPath("auditor", "/interfactory"), true);
-    assert.equal(canAccessPath("owner", "/interfactory"), true);
-  });
 });
