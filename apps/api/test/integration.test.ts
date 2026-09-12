@@ -566,4 +566,35 @@ describe("postgres-backed workflows", () => {
       },
     );
   });
+
+  it("pack does not mutate slab stock, so packing reverse is not offered", async () => {
+    const { factory, asOwner } = await staffFactory("pack");
+    const finished = await prisma.inventoryLocation.findFirst({
+      where: { factoryId: factory.id, code: "FINISHED_STOCK" },
+    });
+    const slab = await prisma.slab.create({
+      data: {
+        factoryId: factory.id,
+        slabSerial: "PACK-1",
+        varietyName: "White",
+        locationId: finished!.id,
+      },
+    });
+    const customer = await sales.createCustomer(asOwner, "Pack Co");
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-06",
+      clientOpId: "pack-order",
+      lines: [{ slabId: slab.id, quantitySqft: 32, rate: 100 }],
+    })) as { id: string };
+    const before = await prisma.slab.findUnique({ where: { id: slab.id } });
+    await sales.pack(asOwner, order.id, [slab.id]);
+    const after = await prisma.slab.findUnique({ where: { id: slab.id } });
+    assert.equal(after?.salesStatus, before?.salesStatus);
+    assert.equal(after?.locationId, before?.locationId);
+    const packingMoves = await prisma.inventoryMovement.count({
+      where: { factoryId: factory.id, movementType: "PACKING" },
+    });
+    assert.equal(packingMoves, 0);
+  });
 });
