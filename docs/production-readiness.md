@@ -16,7 +16,9 @@ Command: `npm test` per workspace (`node --test`). API integration uses embedded
 | `@stoneos/web` route policy | 3 | 0 | 0 |
 | **Total** | **62** | **0** | **0** |
 
-Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (no public signup; owner login forced to change bootstrap password). Not re-run on this rebuild.
+Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (no public signup; owner login forced to change bootstrap password).
+
+Owner module walk on current smoke (2026-09-12): **1 passed** (`apps/web/e2e/modules-walk.spec.ts`, desktop 1280×800 + mobile 390×844, every `routePolicy` href + login + password). Report `var/ui-ux-module-review.md`. Blockers: none.
 
 - [x] `npm test` pass/fail counts recorded (**30 pass / 0 fail** as of 2026-09-05)
 - [x] Goods-receipt `clientOpId` retry does not create a second block
@@ -62,7 +64,7 @@ Playwright (earlier smoke stack `localhost:3000` / `localhost:4000`): 2 passed (
 
 Smoke rebuild 2026-09-06 used named volume `stoneos-smoke_stoneos_pg_data`. Owner password on this stack is `YearRunOwner!12`. Year-run staff (`yrunopr`, …) **were provisioned** on that volume. A previous volume `compose_stoneos_pg_data` still exists and was not attached.
 
-**2026-09-12 this workstation:** local `main` fast-forwarded to `38e6512`. Docker Desktop GUI started but the Linux engine pipe never appeared, so smoke was not brought up. Playwright walk and `restore-second-machine.sh` were **not** run (no invented `var/restore-second-machine.json`). `terraform apply` not run. Copilot not enabled. PACKING reverse not added (`pack()` still creates a packing list only). Dual RLS not claimed.
+**2026-09-12 this workstation:** smoke stack was up; owner Playwright walk passed (desktop+mobile). `restore-second-machine.sh` still belongs on a **different PC**. `terraform apply` not run. Copilot not enabled. PACKING reverse not added (`pack()` still creates a packing list only). Dual RLS not claimed.
 
 Year-run on this named volume (2026-09-06): 12 months, staff `yrunmgr`…`yrunaud` provisioned. First-pass pay 500 (P2028 5s) and files 500 (`mkdir var`) were fixed and retried 201. Security-check **15/15**. Live opening SoD: owner-enter cannot approve; manager approve → LIVE.
 

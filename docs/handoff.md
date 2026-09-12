@@ -63,7 +63,7 @@ Last live run on `stoneos-smoke_stoneos_pg_data` (2026-09-06, after books-integr
 
 ## Tests
 
-`npm test` workspaces: last recorded **62 pass / 0 fail** (2026-09-12; pack stock-invariance +1). Playwright: `apps/web/e2e/login.spec.ts` and `modules-walk.spec.ts` (not re-run; Docker engine down 2026-09-12).
+`npm test` workspaces: last recorded **62 pass / 0 fail** (2026-09-12; pack stock-invariance +1). Playwright owner module walk on smoke **passed** 2026-09-12 (`modules-walk.spec.ts`, desktop+mobile; `var/ui-ux-module-review.md`).
 
 Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=UTF8 --locale=C`. Approve `@embedded-postgres/windows-x64` scripts if hydrate fails.
 
@@ -77,6 +77,6 @@ Embedded Postgres for API integration tests: port **55432**, `initdb --encoding=
 ## Useful next local work
 
 - Timed restore drill on a **different PC**: `DUMP_FILE=… bash scripts/restore-second-machine.sh` → `var/restore-second-machine.json`. Dump exists on this factory box at `E:/stoneos-backups/stoneos-20260906T104756.dump`. Do not tick the box from a run on this SSD.
-- Playwright module walk on smoke: `PLAYWRIGHT_SKIP_WEBSERVER=1 PLAYWRIGHT_BASE_URL=http://localhost:3000 STONEOS_OWNER_PASSWORD=YearRunOwner!12 npx playwright test --config apps/web/playwright.config.ts apps/web/e2e/modules-walk.spec.ts`. **2026-09-12:** Docker Desktop Linux engine did not come up (`npipe dockerDesktopLinuxEngine` missing); walk not run.
+- Playwright owner module walk on smoke: **passed** 2026-09-12 (desktop+mobile, no blockers). Operator/auditor hidden-nav walk is not in `modules-walk.spec.ts` yet.
 - `terraform apply` waits until the user names AWS vs OCI.
 - Copilot stays snapshot-only (ADR 0009 / 0011). PACKING reverse stays out: `pack()` does not mutate stock. Isolation stays application `WHERE` (ADR 0005).
