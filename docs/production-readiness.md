@@ -63,6 +63,7 @@ Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.s
 - [x] Reverse goods receipt voids the block; same `clientOpId` retry is a no-op (`SMOKE-REV-1` currentStatus=voided)
 - [x] No production credentials used in tests
 - [x] Copilot not enabled
+- [x] Interfactory AR/AP not in StoneOS (reverted). Sister-plant settlements are Tally, so this app stays the factory yard ledger.
 
 Smoke rebuild 2026-09-06 used named volume `stoneos-smoke_stoneos_pg_data`. Owner password on this stack is `YearRunOwner!12`. Year-run staff (`yrunopr`, …) **were provisioned** on that volume. A previous volume `compose_stoneos_pg_data` still exists and was not attached.
 

@@ -55,7 +55,7 @@ Last live run on `stoneos-smoke_stoneos_pg_data` (2026-09-06, after books-integr
 - Monorepo: NestJS API `apps/api` (`/api/v1`), Next 15 PWA `apps/web`, Electron `apps/desktop`, Capacitor `apps/android`.
 - Username + opaque session (SHA-256 of token stored). scrypt passwords. `factoryId` from session only.
 - Roles: owner, manager, supervisor, operator, inventory, sales, accountant, auditor, admin. Managers cannot grant owner. `PAYMENT_ROLES` = sales writers + accountant. `CEO_ROLES` = owner, manager, accountant, auditor, admin.
-- `factory_id` is **TEXT**. Isolation is application `WHERE factoryId = session.factoryId`. RLS is ENABLE-only (table owner exempt; `withFactory` unused). Idempotency `(factoryId, clientOpId)`. Invoice numbers are factory + IST FY (April–March) sequences (`INV-YYYY-NNNNN`).
+- `factory_id` is **TEXT**. Isolation is application `WHERE factoryId = session.factoryId`. RLS is ENABLE-only (table owner exempt; `withFactory` unused). Idempotency `(factoryId, clientOpId)`. Invoice numbers are factory + IST FY (April–March) sequences (`INV-YYYY-NNNNN`). One StoneOS factory = one yard’s physical books. Group / inter-plant sales and payment settlements stay in **Tally import**, not a second ledger inside StoneOS.
 - Operational day 07:00. Recovery 105 sqft/ton at sale. Damaged cost at raw-block cost. Damaged pieces are counts, not slab rows.
 - API image runs `tsx` + explicit `@Inject()` (tsx does not emit `design:paramtypes`). Copy `tsconfig.base.json` into the API image.
 - Web: `apiFetch<T = any>`, extensionless imports in contracts/sync-client, `transpilePackages`, `allowImportingTsExtensions`.
