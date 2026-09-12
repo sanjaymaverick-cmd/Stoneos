@@ -11,6 +11,8 @@ import { UsersService } from "../src/modules/admin/users.service";
 import { InventoryService } from "../src/modules/inventory/inventory.service";
 import { ProductionService } from "../src/modules/production/production.service";
 import { SalesService } from "../src/modules/sales/sales.service";
+import { InterfactoryService } from "../src/modules/sales/interfactory.service";
+import { FactoriesService } from "../src/modules/admin/factories.service";
 import { ExpensesService } from "../src/modules/expenses/expenses.service";
 import { AuditService } from "../src/common/audit.service";
 import type { AuthenticatedUser } from "../src/common/current-user";
@@ -26,6 +28,8 @@ describe("postgres-backed workflows", () => {
   let inventory: InventoryService;
   let production: ProductionService;
   let sales: SalesService;
+  let interfactory: InterfactoryService;
+  let factoriesSvc: FactoriesService;
   let expenses: ExpensesService;
   let factoryId = "";
   let owner: AuthenticatedUser;
@@ -60,6 +64,8 @@ describe("postgres-backed workflows", () => {
     inventory = new InventoryService(prisma as never, audit);
     production = new ProductionService(prisma as never, audit);
     sales = new SalesService(prisma as never, audit);
+    interfactory = new InterfactoryService(prisma as never, audit);
+    factoriesSvc = new FactoriesService(prisma as never, audit, inventory);
     expenses = new ExpensesService(prisma as never);
 
     await prisma.$executeRawUnsafe(`
@@ -596,5 +602,70 @@ describe("postgres-backed workflows", () => {
       where: { factoryId: factory.id, movementType: "PACKING" },
     });
     assert.equal(packingMoves, 0);
+  });
+
+  it("links four factories, invoices a sister, and settles both AR and AP", async () => {
+    const before = await prisma.factory.count();
+    const plants = [];
+    for (const row of [
+      { name: "South Yard", ownerUsername: "southown" },
+      { name: "East Yard", ownerUsername: "eastown" },
+      { name: "West Yard", ownerUsername: "westown" },
+    ]) {
+      plants.push(await factoriesSvc.create(owner, row));
+    }
+    assert.equal(await prisma.factory.count(), before + 3);
+    const south = plants[0]!.factory;
+    await interfactory.link(owner, south.id);
+    await interfactory.link(owner, plants[1]!.factory.id);
+    await interfactory.link(owner, plants[2]!.factory.id);
+    const sisterCustomer = await prisma.customer.findFirst({
+      where: { factoryId, counterpartyFactoryId: south.id },
+    });
+    assert.ok(sisterCustomer);
+    const slab = await prisma.slab.create({
+      data: { factoryId, slabSerial: "IF-1", varietyName: "Grey" },
+    });
+    const order = (await sales.createOrder(owner, {
+      customerId: sisterCustomer!.id,
+      orderDate: "2026-09-12",
+      clientOpId: "if-order-1",
+      lines: [{ slabId: slab.id, quantitySqft: 40, rate: 180 }],
+    })) as { id: string };
+    const inv = await sales.invoice(owner, order.id, "if-inv-1");
+    assert.equal(inv.counterpartyFactoryId, south.id);
+    const payable = await prisma.interfactoryPayable.findUnique({ where: { sourceInvoiceId: inv.id } });
+    assert.ok(payable);
+    assert.equal(payable!.factoryId, south.id);
+    assert.equal(Number(payable!.amount), 7200);
+
+    const southOwner = await prisma.appUser.findFirst({ where: { factoryId: south.id, role: "owner" } });
+    const asSouth: AuthenticatedUser = {
+      ...owner,
+      id: southOwner!.id,
+      factoryId: south.id,
+      username: southOwner!.username,
+      role: "owner",
+    };
+    const first = await interfactory.payPayable(asSouth, payable!.id, {
+      amount: 7200,
+      method: "neft",
+      paidAt: "2026-09-12",
+      clientOpId: "if-settle-1",
+    });
+    const retry = await interfactory.payPayable(asSouth, payable!.id, {
+      amount: 7200,
+      method: "neft",
+      paidAt: "2026-09-12",
+      clientOpId: "if-settle-1",
+    });
+    assert.equal(first.payment.id, retry.payment.id);
+    const sellerPayments = await prisma.payment.count({ where: { invoiceId: inv.id } });
+    assert.equal(sellerPayments, 1);
+    const pos = await interfactory.positions(owner);
+    const southPos = pos.find((p) => p.sisterFactoryId === south.id);
+    assert.equal(southPos?.arOutstanding, 0);
+    const southPosAp = (await interfactory.positions(asSouth)).find((p) => p.sisterFactoryId === factoryId);
+    assert.equal(southPosAp?.apOutstanding, 0);
   });
 });
