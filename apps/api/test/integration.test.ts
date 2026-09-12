@@ -10,9 +10,14 @@ import { AuthService } from "../src/modules/auth/auth.service";
 import { UsersService } from "../src/modules/admin/users.service";
 import { InventoryService } from "../src/modules/inventory/inventory.service";
 import { ProductionService } from "../src/modules/production/production.service";
+import { readFileSync } from "node:fs";
 import { SalesService } from "../src/modules/sales/sales.service";
 import { ExpensesService } from "../src/modules/expenses/expenses.service";
 import { AuditService } from "../src/common/audit.service";
+import { FilesService } from "../src/modules/files/files.service";
+import { BooksService } from "../src/modules/books/books.service";
+import { KhataService } from "../src/modules/books/khata.service";
+import { IntakeService } from "../src/modules/books/intake.service";
 import type { AuthenticatedUser } from "../src/common/current-user";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -27,6 +32,9 @@ describe("postgres-backed workflows", () => {
   let production: ProductionService;
   let sales: SalesService;
   let expenses: ExpensesService;
+  let books: BooksService;
+  let khata: KhataService;
+  let intake: IntakeService;
   let factoryId = "";
   let owner: AuthenticatedUser;
 
@@ -59,8 +67,12 @@ describe("postgres-backed workflows", () => {
     users = new UsersService(prisma as never, audit);
     inventory = new InventoryService(prisma as never, audit);
     production = new ProductionService(prisma as never, audit);
-    sales = new SalesService(prisma as never, audit);
-    expenses = new ExpensesService(prisma as never);
+    books = new BooksService(prisma as never);
+    sales = new SalesService(prisma as never, audit, books);
+    expenses = new ExpensesService(prisma as never, books);
+    const files = new FilesService(prisma as never, audit);
+    khata = new KhataService(prisma as never, files);
+    intake = new IntakeService(prisma as never, files, expenses, sales, production);
 
     await prisma.$executeRawUnsafe(`
       DO $$ DECLARE r RECORD;
@@ -567,10 +579,13 @@ describe("postgres-backed workflows", () => {
     );
   });
 
-  it("pack does not mutate slab stock, so packing reverse is not offered", async () => {
+  it("pack moves slabs to PACKING so the list actually ships stock", async () => {
     const { factory, asOwner } = await staffFactory("pack");
     const finished = await prisma.inventoryLocation.findFirst({
       where: { factoryId: factory.id, code: "FINISHED_STOCK" },
+    });
+    const packing = await prisma.inventoryLocation.findFirst({
+      where: { factoryId: factory.id, code: "PACKING" },
     });
     const slab = await prisma.slab.create({
       data: {
@@ -591,10 +606,144 @@ describe("postgres-backed workflows", () => {
     await sales.pack(asOwner, order.id, [slab.id]);
     const after = await prisma.slab.findUnique({ where: { id: slab.id } });
     assert.equal(after?.salesStatus, before?.salesStatus);
-    assert.equal(after?.locationId, before?.locationId);
+    assert.equal(after?.locationId, packing!.id);
     const packingMoves = await prisma.inventoryMovement.count({
       where: { factoryId: factory.id, movementType: "PACKING" },
     });
-    assert.equal(packingMoves, 0);
+    assert.equal(packingMoves, 1);
+  });
+
+  it("posts one balanced voucher per invoice, pay, and expense, and retries are no-ops", async () => {
+    const { factory, asOwner } = await staffFactory("voucher");
+    const customer = await sales.createCustomer(asOwner, "Books Co");
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-12",
+      clientOpId: "books-order",
+      lines: [{ quantitySqft: 32, rate: 100 }],
+    })) as { id: string };
+    const invoice = await sales.invoice(asOwner, order.id, "books-inv");
+    const retryInv = await sales.invoice(asOwner, order.id, "books-inv");
+    assert.equal(invoice.id, (retryInv as { id: string }).id);
+    await sales.pay(asOwner, invoice.id, {
+      amount: 1000,
+      method: "cash",
+      paidAt: "2026-09-12",
+      clientOpId: "books-pay",
+    });
+    const retryPay = await sales.pay(asOwner, invoice.id, {
+      amount: 1000,
+      method: "cash",
+      paidAt: "2026-09-12",
+      clientOpId: "books-pay",
+    });
+    assert.equal((retryPay as { id: string }).id, (await prisma.payment.findFirst({ where: { factoryId: factory.id } }))!.id);
+    await expenses.create(asOwner, {
+      category: "diesel",
+      amount: 500,
+      expenseDate: "2026-09-12",
+      clientOpId: "books-exp",
+    });
+    await expenses.create(asOwner, {
+      category: "diesel",
+      amount: 500,
+      expenseDate: "2026-09-12",
+      clientOpId: "books-exp",
+    });
+    const vouchers = await prisma.voucher.findMany({
+      where: { factoryId: factory.id },
+      include: { lines: { include: { ledger: true } } },
+    });
+    assert.equal(vouchers.length, 3);
+    for (const v of vouchers) {
+      const debit = v.lines.reduce((s, l) => s + l.debit, 0);
+      const credit = v.lines.reduce((s, l) => s + l.credit, 0);
+      assert.equal(debit, credit);
+    }
+    const salesV = vouchers.find((v) => v.source === "sales_invoice");
+    assert.ok(salesV?.lines.some((l) => l.ledger.code === "GST_OUTPUT" && l.credit > 0));
+    const ar = salesV!.lines.find((l) => l.ledger.code === "AR");
+    assert.equal(ar?.debit, 320000);
+    const outstanding = await books.outstanding(factory.id);
+    assert.equal(outstanding.youllGet, 2200);
+  });
+
+  it("imports the khata customer list at 46 parties and the 12 Sep 2026 totals", async () => {
+    const { factory, asOwner } = await staffFactory("khata");
+    const body = readFileSync(path.join(root, "fixtures/khata/customer-list.json"), "utf8");
+    const first = await khata.importList(asOwner, { fileName: "customer-list.json", body });
+    const again = await khata.importList(asOwner, { fileName: "customer-list.json", body });
+    assert.equal(first.id, again.id);
+    const parties = await books.parties(factory.id);
+    assert.equal(parties.length, 46);
+    const mh = parties.find((p) => p.name === "Rajasthan Tiles Mh");
+    assert.equal(mh?.youllGet, 29616);
+    const shakti = parties.find((p) => /shakti/i.test(p.name));
+    assert.equal(shakti?.youllGet, 577166);
+    const nr = parties.find((p) => p.name === "NR JOB");
+    assert.equal(nr?.kind, "job");
+    assert.equal(nr?.youllGive, 22351);
+    const out = await books.outstanding(factory.id);
+    assert.equal(out.youllGet, 12_561_248);
+    assert.equal(out.youllGive, 163_671);
+    const receipts = await prisma.voucher.count({ where: { factoryId: factory.id, type: "receipt" } });
+    assert.equal(receipts, 0);
+  });
+
+  it("rejects a supervisor confirming their own rokad draft and locks the cash drawer", async () => {
+    const { factory, asOwner } = await staffFactory("intake");
+    const supRow = await prisma.appUser.create({
+      data: {
+        factoryId: factory.id,
+        username: `s-${factory.id.slice(0, 8)}`,
+        name: "Sup",
+        role: "supervisor",
+        passwordHash: await hashPassword("ChangeMeNow!12"),
+        mustChangePassword: false,
+      },
+    });
+    const asSup: AuthenticatedUser = {
+      ...owner,
+      id: supRow.id,
+      factoryId: factory.id,
+      username: supRow.username,
+      role: "supervisor",
+    };
+    const csv = Buffer.from("date,particulars,in,out,mode,partyName\n2026-09-12,Diesel,0,500,cash,\n").toString("base64");
+    const draft = await intake.propose(asSup, {
+      kind: "rokad",
+      date: "2026-09-12",
+      fileName: "rokad.csv",
+      contentType: "text/csv",
+      base64: csv,
+    });
+    assert.equal(draft.status, "proposed");
+    await assert.rejects(() => intake.confirm(asSup, draft.id), /cannot confirm/i);
+    const confirmed = await intake.confirm(asOwner, draft.id);
+    assert.equal(confirmed.status, "confirmed");
+    const exp = await prisma.expense.findMany({ where: { factoryId: factory.id } });
+    assert.equal(exp.length, 1);
+    assert.equal(Number(exp[0]?.amount), 500);
+
+    const pdf = await intake.propose(asOwner, {
+      kind: "dpr",
+      date: "2026-09-12",
+      fileName: "dpr.pdf",
+      contentType: "application/pdf",
+      base64: Buffer.from("%PDF-1.4 fake").toString("base64"),
+    });
+    assert.equal(pdf.status, "unreadable");
+
+    await books.lockDrawer(asOwner, new Date("2026-09-12T01:30:00Z"), 0);
+    await assert.rejects(
+      () =>
+        expenses.create(asOwner, {
+          category: "diesel",
+          amount: 100,
+          expenseDate: "2026-09-12",
+          clientOpId: "locked-exp",
+        }),
+      /locked/i,
+    );
   });
 });

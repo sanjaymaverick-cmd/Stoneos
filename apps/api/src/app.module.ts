@@ -14,6 +14,7 @@ import { SalesModule } from "./modules/sales/sales.module";
 import { TallyModule } from "./modules/tally/tally.module";
 import { FilesModule } from "./modules/files/files.module";
 import { MaintenanceModule } from "./modules/maintenance/maintenance.module";
+import { BooksModule, IntakeModule } from "./modules/books/books.module";
 
 @Module({
   imports: [
@@ -22,11 +23,13 @@ import { MaintenanceModule } from "./modules/maintenance/maintenance.module";
     AdminModule,
     InventoryModule,
     ProductionModule,
+    BooksModule,
     SalesModule,
     ExpensesModule,
     TallyModule,
     FilesModule,
     MaintenanceModule,
+    IntakeModule,
   ],
   controllers: [HealthController, ReportsController],
   providers: [ReportsService, { provide: APP_GUARD, useClass: SessionGuard }],

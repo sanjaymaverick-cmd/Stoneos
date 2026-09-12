@@ -115,6 +115,70 @@ enum ConflictPolicy {
   AUDITED_OVERWRITE
 }
 
+enum LedgerGroup {
+  asset
+  liability
+  income
+  expense
+}
+
+enum LedgerKind {
+  cash
+  bank
+  ar
+  ap
+  sales
+  cogs
+  expense
+  opening_equity
+  gst
+  other
+}
+
+enum PartyKind {
+  customer
+  supplier
+  job
+}
+
+enum VoucherType {
+  opening
+  receipt
+  payment
+  contra
+  journal
+  sales
+  credit_note
+}
+
+enum VoucherSource {
+  khata_opening
+  sales_invoice
+  sales_pay
+  sales_cn
+  expense_create
+  intake_confirm
+  manual
+}
+
+enum CashDrawerStatus {
+  open
+  proposed
+  locked
+}
+
+enum IntakeKind {
+  rokad
+  dpr
+}
+
+enum IntakeStatus {
+  proposed
+  confirmed
+  rejected
+  unreadable
+}
+
 model Factory {
   id              String                  @id @default(uuid())
   name            String
@@ -153,6 +217,12 @@ model Factory {
   returns            CustomerReturn[]
   documentSequences  DocumentSequence[]
   creditNotes        CreditNote[]
+  ledgers            Ledger[]
+  parties            Party[]
+  vouchers           Voucher[]
+  cashDrawerDays     CashDrawerDay[]
+  khataImports       KhataImportBatch[]
+  intakeDrafts       IntakeDraft[]
 
   @@map("factory")
 }
@@ -821,4 +891,152 @@ model SyncOperation {
 
   @@unique([factoryId, clientOpId])
   @@map("sync_operation")
+}
+
+model Ledger {
+  id        String     @id @default(uuid())
+  factoryId String     @map("factory_id")
+  factory   Factory    @relation(fields: [factoryId], references: [id])
+  code      String
+  name      String
+  group     LedgerGroup
+  kind      LedgerKind
+  isSystem  Boolean    @default(true) @map("is_system")
+  lines     VoucherLine[]
+
+  @@unique([factoryId, code])
+  @@map("ledger")
+}
+
+model Party {
+  id              String    @id @default(uuid())
+  factoryId       String    @map("factory_id")
+  factory         Factory   @relation(fields: [factoryId], references: [id])
+  name            String
+  nameKey         String    @map("name_key")
+  phone           String?
+  kind            PartyKind @default(customer)
+  khataSourceName String?   @map("khata_source_name")
+  notes           String?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  vouchers        Voucher[]
+  lines           VoucherLine[]
+  khataLines      ImportedKhataLine[]
+
+  @@unique([factoryId, nameKey])
+  @@index([factoryId, kind])
+  @@map("party")
+}
+
+model Voucher {
+  id                String         @id @default(uuid())
+  factoryId         String         @map("factory_id")
+  factory           Factory        @relation(fields: [factoryId], references: [id])
+  type              VoucherType
+  operationalDate   DateTime       @map("operational_date") @db.Date
+  clientOpId        String         @map("client_op_id")
+  source            VoucherSource
+  sourceId          String?        @map("source_id")
+  partyId           String?        @map("party_id")
+  party             Party?         @relation(fields: [partyId], references: [id])
+  invoiceId         String?        @map("invoice_id")
+  fileId            String?        @map("file_id")
+  memo              String?
+  createdBy         String         @map("created_by")
+  reversedVoucherId String?        @map("reversed_voucher_id")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  lines             VoucherLine[]
+
+  @@unique([factoryId, clientOpId])
+  @@index([factoryId, operationalDate])
+  @@index([factoryId, partyId])
+  @@map("voucher")
+}
+
+model VoucherLine {
+  id        String   @id @default(uuid())
+  voucherId String   @map("voucher_id")
+  voucher   Voucher  @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  ledgerId  String   @map("ledger_id")
+  ledger    Ledger   @relation(fields: [ledgerId], references: [id])
+  partyId   String?  @map("party_id")
+  party     Party?   @relation(fields: [partyId], references: [id])
+  debit     Int      @default(0)
+  credit    Int      @default(0)
+
+  @@index([voucherId])
+  @@index([ledgerId])
+  @@map("voucher_line")
+}
+
+model CashDrawerDay {
+  id             String           @id @default(uuid())
+  factoryId      String           @map("factory_id")
+  factory        Factory          @relation(fields: [factoryId], references: [id])
+  operationalDate DateTime        @map("operational_date") @db.Date
+  openingCash    Int              @default(0) @map("opening_cash")
+  countedClose   Int?             @map("counted_close")
+  proposedBy     String?          @map("proposed_by")
+  confirmedBy    String?          @map("confirmed_by")
+  sourceFileId   String?          @map("source_file_id")
+  status         CashDrawerStatus @default(open)
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  @@unique([factoryId, operationalDate])
+  @@map("cash_drawer_day")
+}
+
+model KhataImportBatch {
+  id          String   @id @default(uuid())
+  factoryId   String   @map("factory_id")
+  factory     Factory  @relation(fields: [factoryId], references: [id])
+  fileName    String   @map("file_name")
+  fileId      String?  @map("file_id")
+  importedBy  String   @map("imported_by")
+  partyCount  Int      @map("party_count")
+  arMinor     Int      @map("ar_minor")
+  apMinor     Int      @map("ap_minor")
+  createdAt   DateTime @default(now()) @map("created_at")
+  lines       ImportedKhataLine[]
+
+  @@index([factoryId])
+  @@map("khata_import_batch")
+}
+
+model ImportedKhataLine {
+  id            String           @id @default(uuid())
+  batchId       String           @map("batch_id")
+  batch         KhataImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  partyId       String           @map("party_id")
+  party         Party            @relation(fields: [partyId], references: [id])
+  lineDate      DateTime?        @map("line_date") @db.Date
+  details       String
+  debitMinor    Int              @default(0) @map("debit_minor")
+  creditMinor   Int              @default(0) @map("credit_minor")
+  balanceAfter  Int?             @map("balance_after")
+  sourceFileId  String?          @map("source_file_id")
+
+  @@index([partyId])
+  @@map("imported_khata_line")
+}
+
+model IntakeDraft {
+  id               String        @id @default(uuid())
+  factoryId        String        @map("factory_id")
+  factory          Factory       @relation(fields: [factoryId], references: [id])
+  kind             IntakeKind
+  operationalDate  DateTime      @map("operational_date") @db.Date
+  status           IntakeStatus  @default(proposed)
+  clientOpId       String        @map("client_op_id")
+  sourceFileId     String?       @map("source_file_id")
+  parsed           Json
+  mismatch         Json?
+  proposedBy       String        @map("proposed_by")
+  confirmedBy      String?       @map("confirmed_by")
+  error            String?
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  @@unique([factoryId, clientOpId])
+  @@index([factoryId, operationalDate])
+  @@map("intake_draft")
 }

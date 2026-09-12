@@ -1,6 +1,8 @@
 import { BadRequestException, Inject, Injectable } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
+import { BooksService } from "../books/books.service";
+import { parseFactoryDateInput } from "../books/money";
 
 export const EXPENSE_CATEGORIES = [
   "diesel",
@@ -15,7 +17,10 @@ export const EXPENSE_CATEGORIES = [
 
 @Injectable()
 export class ExpensesService {
-  constructor(@Inject(PrismaService) private prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private prisma: PrismaService,
+    @Inject(BooksService) private books: BooksService,
+  ) {}
 
   categories() {
     return EXPENSE_CATEGORIES;
@@ -60,16 +65,34 @@ export class ExpensesService {
       });
       if (!vehicle) throw new BadRequestException("Vehicle does not belong to this factory");
     }
-    return this.prisma.expense.create({
-      data: {
-        factoryId: user.factoryId,
+    return this.prisma.$transaction(async (tx) => {
+      if (input.clientOpId) {
+        const existing = await tx.expense.findUnique({
+          where: { factoryId_idempotencyKey: { factoryId: user.factoryId, idempotencyKey: input.clientOpId } },
+        });
+        if (existing) return existing;
+      }
+      const expenseDate = parseFactoryDateInput(input.expenseDate);
+      const created = await tx.expense.create({
+        data: {
+          factoryId: user.factoryId,
+          category: input.category,
+          amount: input.amount,
+          expenseDate,
+          vehicleId: input.vehicleId,
+          toWhom: input.toWhom,
+          idempotencyKey: input.clientOpId,
+        },
+      });
+      await this.books.postExpense(tx, user, {
+        expenseId: created.id,
         category: input.category,
         amount: input.amount,
-        expenseDate: new Date(input.expenseDate),
-        vehicleId: input.vehicleId,
-        toWhom: input.toWhom,
-        idempotencyKey: input.clientOpId,
-      },
+        clientOpId: input.clientOpId ?? `expense:${created.id}`,
+        method: "cash",
+        date: expenseDate,
+      });
+      return created;
     });
   }
 

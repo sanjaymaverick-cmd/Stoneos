@@ -7,5 +7,6 @@ import { MachineRuntimeController } from "./runtime.controller";
 @Module({
   controllers: [ProductionController, ConsumablesController, MachineRuntimeController],
   providers: [ProductionService],
+  exports: [ProductionService],
 })
 export class ProductionModule {}

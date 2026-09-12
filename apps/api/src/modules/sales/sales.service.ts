@@ -11,12 +11,15 @@ import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { isUniqueViolation, nextDocumentNumber } from "./document-number";
+import { BooksService } from "../books/books.service";
+import { parseFactoryDateInput } from "../books/money";
 
 @Injectable()
 export class SalesService {
   constructor(
     @Inject(PrismaService) private prisma: PrismaService,
     @Inject(AuditService) private audit: AuditService,
+    @Inject(BooksService) private books: BooksService,
   ) {}
 
   customers(factoryId: string) {
@@ -157,14 +160,37 @@ export class SalesService {
 
   async pack(user: AuthenticatedUser, salesOrderId: string, slabIds: string[]) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
-    await this.assertFactorySlabs(this.prisma, user.factoryId, slabIds, order.id);
-    return this.prisma.packingList.create({
-      data: {
-        factoryId: user.factoryId,
-        salesOrderId: order.id,
-        lines: { create: slabIds.map((slabId) => ({ slabId })) },
-      },
-      include: { lines: true },
+    return this.prisma.$transaction(async (tx) => {
+      await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
+      const packing = await tx.inventoryLocation.findFirst({
+        where: { factoryId: user.factoryId, code: "PACKING" },
+      });
+      if (!packing) throw new BadRequestException("PACKING location is missing");
+      const list = await tx.packingList.create({
+        data: {
+          factoryId: user.factoryId,
+          salesOrderId: order.id,
+          lines: { create: slabIds.map((slabId) => ({ slabId })) },
+        },
+        include: { lines: true },
+      });
+      for (const slabId of slabIds) {
+        await tx.slab.update({
+          where: { id: slabId },
+          data: { locationId: packing.id, version: { increment: 1 } },
+        });
+        await tx.inventoryMovement.create({
+          data: {
+            factoryId: user.factoryId,
+            movementType: "PACKING",
+            slabId,
+            quantity: 1,
+            idempotencyKey: `pack:${list.id}:${slabId}`,
+            actorId: user.id,
+          },
+        });
+      }
+      return list;
     });
   }
 
@@ -234,6 +260,15 @@ export class SalesService {
             payload: { amount, invoiceNumber },
           },
         });
+        const customer = await tx.customer.findFirst({
+          where: { id: order.customerId, factoryId: user.factoryId },
+        });
+        await this.books.postInvoice(tx, user, {
+          invoiceId: created.id,
+          customerName: customer?.name ?? "Unknown",
+          amount,
+          clientOpId,
+        });
         return created;
       } catch (error) {
         if (isUniqueViolation(error)) {
@@ -280,7 +315,7 @@ export class SalesService {
             invoiceId: invoice.id,
             amount: input.amount,
             method: input.method,
-            paidAt: new Date(input.paidAt),
+            paidAt: parseFactoryDateInput(input.paidAt),
             idempotencyKey: input.clientOpId,
           },
         });
@@ -297,6 +332,18 @@ export class SalesService {
             entityId: payment.id,
             payload: { invoiceId: invoice.id, amount: input.amount },
           },
+        });
+        const customer = await tx.customer.findFirst({
+          where: { id: invoice.customerId, factoryId: user.factoryId },
+        });
+        await this.books.postPayment(tx, user, {
+          paymentId: payment.id,
+          invoiceId: invoice.id,
+          customerName: customer?.name ?? "Unknown",
+          amount: input.amount,
+          method: input.method,
+          clientOpId: input.clientOpId,
+          paidAt: parseFactoryDateInput(input.paidAt),
         });
         return payment;
       } catch (error) {
@@ -362,6 +409,16 @@ export class SalesService {
           }
           throw error;
         }
+        const customer = await tx.customer.findFirst({
+          where: { id: order.customerId, factoryId: user.factoryId },
+        });
+        await this.books.postCreditNote(tx, user, {
+          creditNoteId: creditNote.id,
+          invoiceId: invoice.id,
+          customerName: customer?.name ?? "Unknown",
+          amount: creditAmount,
+          clientOpId: `credit:${ret.id}`,
+        });
       }
       for (const slabId of slabIds) {
         await tx.slab.update({

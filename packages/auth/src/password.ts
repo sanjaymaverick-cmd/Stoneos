@@ -1,12 +1,23 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { promisify } from "node:util";
-
-const scrypt = promisify(scryptCallback);
 
 const N = 16384;
 const R = 8;
 const P = 1;
 const KEYLEN = 32;
+
+function scryptAsync(
+  password: string,
+  salt: Buffer,
+  keylen: number,
+  options: { N: number; r: number; p: number },
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scryptCallback(password, salt, keylen, options, (err, derived) => {
+      if (err) reject(err);
+      else resolve(derived as Buffer);
+    });
+  });
+}
 
 function encode(salt: Buffer, hash: Buffer): string {
   return `scrypt$${N}$${R}$${P}$${salt.toString("base64")}$${hash.toString("base64")}`;
@@ -14,7 +25,7 @@ function encode(salt: Buffer, hash: Buffer): string {
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
-  const hash = (await scrypt(password, salt, KEYLEN, { N, r: R, p: P })) as Buffer;
+  const hash = await scryptAsync(password, salt, KEYLEN, { N, r: R, p: P });
   return encode(salt, hash);
 }
 
@@ -27,7 +38,7 @@ export async function verifyPassword(password: string, encoded: string): Promise
   const salt = Buffer.from(parts[4] ?? "", "base64");
   const expected = Buffer.from(parts[5] ?? "", "base64");
   if (!salt.length || expected.length !== KEYLEN) return false;
-  const actual = (await scrypt(password, salt, expected.length, { N: n, r, p })) as Buffer;
+  const actual = await scryptAsync(password, salt, expected.length, { N: n, r, p });
   if (actual.length !== expected.length) return false;
   return timingSafeEqual(actual, expected);
 }

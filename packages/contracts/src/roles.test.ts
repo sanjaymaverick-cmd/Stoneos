@@ -4,13 +4,16 @@ import {
   ACCOUNTANT_ROLE,
   ADMIN_ROLE,
   AUDITOR_ROLE,
+  BOOKS_STATEMENT_ROLES,
   CEO_ROLES,
+  HISTORICAL_IMPORT_ROLES,
   MANAGER_ROLE,
   OPERATOR_ROLE,
   OWNER_ROLE,
   PAYMENT_ROLES,
   SALES_ROLE,
   STAFF_PROVISIONABLE_ROLES,
+  SUPERVISOR_ROLE,
   canAccess,
   canGrantOwner,
   canManageUsers,
@@ -44,5 +47,13 @@ describe("role policy", () => {
     assert.equal(canAccess(ACCOUNTANT_ROLE, CEO_ROLES), true);
     assert.equal(canAccess(OPERATOR_ROLE, CEO_ROLES), false);
     assert.equal(canAccess(SALES_ROLE, CEO_ROLES), false);
+  });
+
+  it("keeps khata opening import off supervisors and operators", () => {
+    assert.equal(canAccess(SUPERVISOR_ROLE, HISTORICAL_IMPORT_ROLES), false);
+    assert.equal(canAccess(OPERATOR_ROLE, HISTORICAL_IMPORT_ROLES), false);
+    assert.equal(canAccess(OWNER_ROLE, HISTORICAL_IMPORT_ROLES), true);
+    assert.equal(canAccess(SUPERVISOR_ROLE, BOOKS_STATEMENT_ROLES), true);
+    assert.equal(canAccess(OPERATOR_ROLE, BOOKS_STATEMENT_ROLES), false);
   });
 });
