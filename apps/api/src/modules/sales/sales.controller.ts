@@ -80,9 +80,9 @@ export class SalesController {
   dispatch(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: { slabIds: string[] },
+    @Body() body: { slabIds: string[]; clientOpId?: string; vehicleId?: string; ewayDraftId?: string; invoiceId?: string },
   ) {
-    return this.service.dispatch(user, id, body.slabIds);
+    return this.service.dispatch(user, id, body.slabIds, body);
   }
 
   @Post("sales-orders/:id/invoice")

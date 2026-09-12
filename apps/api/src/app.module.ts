@@ -15,6 +15,8 @@ import { TallyModule } from "./modules/tally/tally.module";
 import { FilesModule } from "./modules/files/files.module";
 import { MaintenanceModule } from "./modules/maintenance/maintenance.module";
 import { BooksModule, IntakeModule } from "./modules/books/books.module";
+import { MusterModule } from "./modules/muster/muster.module";
+import { GstModule } from "./modules/gst/gst.module";
 
 @Module({
   imports: [
@@ -30,6 +32,8 @@ import { BooksModule, IntakeModule } from "./modules/books/books.module";
     FilesModule,
     MaintenanceModule,
     IntakeModule,
+    MusterModule,
+    GstModule,
   ],
   controllers: [HealthController, ReportsController],
   providers: [ReportsService, { provide: APP_GUARD, useClass: SessionGuard }],

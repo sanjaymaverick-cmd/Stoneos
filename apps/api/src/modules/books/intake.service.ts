@@ -6,6 +6,8 @@ import { FilesService } from "../files/files.service";
 import { ExpensesService } from "../expenses/expenses.service";
 import { ProductionService } from "../production/production.service";
 import { SalesService } from "../sales/sales.service";
+import { BooksService } from "./books.service";
+import type { PostLine } from "./posting";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { operationalDateFor } from "@stoneos/domain";
 import { expenseCategoryFromParticulars } from "./chart";
@@ -27,6 +29,7 @@ export class IntakeService {
     @Inject(ExpensesService) private expenses: ExpensesService,
     @Inject(SalesService) private sales: SalesService,
     @Inject(ProductionService) private production: ProductionService,
+    @Inject(BooksService) private books: BooksService,
   ) {}
 
   list(factoryId: string) {
@@ -146,6 +149,22 @@ export class IntakeService {
             mismatch.push({ row, reason: "unallocated cash in — no open invoice" });
           }
         }
+      }
+    }
+
+    if (draft.kind === "journal") {
+      const journal = parsed as { lines?: PostLine[] };
+      if (!journal.lines?.length) {
+        mismatch.push({ reason: "journal has no lines" });
+      } else {
+        await this.prisma.$transaction((tx) =>
+          this.books.postJournal(tx, user, {
+            clientOpId: draft.clientOpId,
+            memo: "Copilot journal",
+            lines: journal.lines as PostLine[],
+            date: draft.operationalDate,
+          }),
+        );
       }
     }
 

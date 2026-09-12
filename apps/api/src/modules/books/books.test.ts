@@ -20,7 +20,12 @@ import {
   rupeesToMinor,
 } from "./money.ts";
 import { assertVoucherLines } from "./posting.ts";
-import { classifyPartyKind, looksLikeCashNarrationSplit, parseKhataList } from "./khata.service.ts";
+import { classifyPartyKind, looksLikeCashNarrationSplit, parseKhataList } from "./khata-parse.ts";
+import { extractPdfText, previewKhata } from "./khata-pdf.ts";
+import { ruleBasedDraft } from "./copilot.service.ts";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 describe("books voucher lines", () => {
   it("rejects an unbalanced voucher", () => {
@@ -86,6 +91,36 @@ describe("khata cutover constants", () => {
     assert.equal(KHATA_AP_TOTAL_MINOR, 16_367_100);
     assert.equal(operationalDateFor(parseFactoryDate("2026-09-12")).toISOString().slice(0, 10), "2026-09-12");
     assert.equal(operationalDateFor(parseFactoryDateInput("2026-09-12")).toISOString().slice(0, 10), "2026-09-12");
+  });
+});
+
+describe("khata pdf", () => {
+  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../test/fixtures/khata/pdf");
+
+  it("parses the customer-list PDF to 46 parties and locked totals", () => {
+    const bytes = readFileSync(path.join(dir, "customer-list.pdf"));
+    const text = extractPdfText(bytes);
+    assert.match(text, /Rajasthan Tiles Mh/);
+    const preview = previewKhata({ fileName: "customer-list.pdf", bytes });
+    assert.equal(preview.kind, "customer-list");
+    assert.equal(preview.partyCount, 46);
+    assert.equal(preview.arRupees, 12_561_248);
+    assert.equal(preview.apRupees, 163_671);
+    assert.equal(preview.totalsOk, true);
+  });
+
+  it("keeps Cash 97070 on a statement PDF as narration", () => {
+    const bytes = readFileSync(path.join(dir, "shakti-statement.pdf"));
+    const preview = previewKhata({ fileName: "shakti-statement.pdf", bytes });
+    assert.equal(preview.kind, "statement");
+    assert.ok(preview.statements.some((s) => s.cashNarration && /cash 97070/i.test(s.details)));
+  });
+});
+
+describe("copilot propose-only", () => {
+  it("classifies journal lines without posting", () => {
+    const draft = ruleBasedDraft("CASH Dr 100\nSALES Cr 100");
+    assert.equal(draft.kind, "journal");
   });
 });
 

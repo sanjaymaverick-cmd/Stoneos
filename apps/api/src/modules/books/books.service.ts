@@ -103,6 +103,98 @@ export class BooksService {
     });
   }
 
+  async postSisterPurchase(
+    tx: Prisma.TransactionClient,
+    input: { buyerFactoryId: string; actorId: string; invoiceId: string; partyName: string; amount: number; clientOpId: string },
+  ) {
+    const party = await ensureParty(tx, input.buyerFactoryId, input.partyName, "supplier");
+    const minor = rupeesToMinor(input.amount);
+    return postVoucher(tx, {
+      factoryId: input.buyerFactoryId,
+      type: "journal",
+      source: "interfactory_invoice",
+      clientOpId: input.clientOpId,
+      createdBy: input.actorId,
+      sourceId: input.invoiceId,
+      partyId: party.id,
+      invoiceId: input.invoiceId,
+      memo: `Sister purchase ${input.partyName}`,
+      lines: [
+        { ledgerCode: "STOCK", debit: minor, credit: 0 },
+        { ledgerCode: "AP", debit: 0, credit: minor, partyId: party.id },
+      ],
+    });
+  }
+
+  async postSisterSettlement(
+    tx: Prisma.TransactionClient,
+    input: {
+      buyerFactoryId: string;
+      actorId: string;
+      amount: number;
+      method: string;
+      clientOpId: string;
+      partyName: string;
+      paidAt?: Date;
+    },
+  ) {
+    const party = await ensureParty(tx, input.buyerFactoryId, input.partyName, "supplier");
+    const minor = rupeesToMinor(input.amount);
+    const bank = bankLedgerForMethod(input.method);
+    return postVoucher(tx, {
+      factoryId: input.buyerFactoryId,
+      type: "payment",
+      source: "interfactory_settle",
+      clientOpId: input.clientOpId,
+      createdBy: input.actorId,
+      operationalDate: input.paidAt,
+      partyId: party.id,
+      memo: `Sister settlement ${input.partyName}`,
+      lines: [
+        { ledgerCode: "AP", debit: minor, credit: 0, partyId: party.id },
+        { ledgerCode: bank, debit: 0, credit: minor },
+      ],
+    });
+  }
+
+  async postLabourPay(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    input: { amountMinor: number; method: string; clientOpId: string; memo: string; date?: Date },
+  ) {
+    const bank = bankLedgerForMethod(input.method);
+    return postVoucher(tx, {
+      factoryId: user.factoryId,
+      type: "payment",
+      source: "muster_pay",
+      clientOpId: input.clientOpId,
+      createdBy: user.id,
+      operationalDate: input.date,
+      memo: input.memo,
+      lines: [
+        { ledgerCode: "EXP_LABOUR", debit: input.amountMinor, credit: 0 },
+        { ledgerCode: bank, debit: 0, credit: input.amountMinor },
+      ],
+    });
+  }
+
+  async postJournal(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    input: { clientOpId: string; memo: string; lines: PostLine[]; date?: Date },
+  ) {
+    return postVoucher(tx, {
+      factoryId: user.factoryId,
+      type: "journal",
+      source: "copilot_journal",
+      clientOpId: input.clientOpId,
+      createdBy: user.id,
+      operationalDate: input.date,
+      memo: input.memo,
+      lines: input.lines,
+    });
+  }
+
   async postExpense(
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,

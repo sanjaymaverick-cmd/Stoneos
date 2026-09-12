@@ -14,44 +14,11 @@ import {
   rupeesToMinor,
   shaClientOpId,
 } from "./money";
+import { classifyPartyKind, looksLikeCashNarrationSplit } from "./khata-parse";
+import { previewKhata, type KhataPreview } from "./khata-pdf";
 
-export type KhataPartyRow = {
-  name: string;
-  youllGet?: number;
-  youllGive?: number;
-  details?: string;
-};
-
-export function classifyPartyKind(name: string, youllGive: number): "customer" | "supplier" | "job" {
-  if (/\bjob\b/i.test(name) || /charging job/i.test(name)) return "job";
-  if (youllGive > 0) return "supplier";
-  return "customer";
-}
-
-export function parseKhataList(raw: string): KhataPartyRow[] {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    const parsed = JSON.parse(trimmed) as { parties?: KhataPartyRow[] } | KhataPartyRow[];
-    return Array.isArray(parsed) ? parsed : parsed.parties ?? [];
-  }
-  const lines = trimmed.split(/\r?\n/).filter((l) => l.trim());
-  const out: KhataPartyRow[] = [];
-  for (const line of lines.slice(1)) {
-    if (/total|grand total|opening balance/i.test(line)) continue;
-    const cols = line.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
-    if (cols.length < 2) continue;
-    out.push({
-      name: cols[0] ?? "",
-      youllGet: Number(String(cols[1] ?? "0").replace(/,/g, "")) || 0,
-      youllGive: Number(String(cols[2] ?? "0").replace(/,/g, "")) || 0,
-    });
-  }
-  return out.filter((r) => r.name);
-}
-
-export function looksLikeCashNarrationSplit(details: string): boolean {
-  return /cash\s+\d/i.test(details);
-}
+export type { KhataPartyRow } from "./khata-parse";
+export { classifyPartyKind, looksLikeCashNarrationSplit, parseKhataList } from "./khata-parse";
 
 @Injectable()
 export class KhataService {
@@ -60,46 +27,67 @@ export class KhataService {
     @Inject(FilesService) private files: FilesService,
   ) {}
 
+  preview(input: { fileName: string; text?: string; base64?: string }): KhataPreview {
+    const bytes = input.base64 ? Buffer.from(input.base64, "base64") : undefined;
+    return previewKhata({ fileName: input.fileName, text: input.text, bytes });
+  }
+
   async importList(
     user: AuthenticatedUser,
-    input: { fileName: string; body: string; contentType?: string },
+    input: { fileName: string; body?: string; text?: string; base64?: string; contentType?: string; confirm?: boolean },
   ) {
-    const rows = parseKhataList(input.body);
+    const text = input.body ?? input.text ?? "";
+    const preview = this.preview({ fileName: input.fileName, text, base64: input.base64 });
+    if (preview.kind === "statement") {
+      return this.importStatements(user, input, preview);
+    }
+    const rows = preview.parties;
     if (rows.length === 0) throw new BadRequestException("No parties in khata list");
     for (const row of rows) {
       if (row.details && looksLikeCashNarrationSplit(row.details)) {
         // narration only — never post a payment from "Cash 97070" / "Vipul Cash 108162"
       }
     }
-
-    let arMinor = 0;
-    let apMinor = 0;
-    for (const row of rows) {
-      arMinor += rupeesToMinor(Number(row.youllGet ?? 0));
-      apMinor += rupeesToMinor(Number(row.youllGive ?? 0));
-    }
-    if (rows.length !== KHATA_PARTY_COUNT || arMinor !== KHATA_AR_TOTAL_MINOR || apMinor !== KHATA_AP_TOTAL_MINOR) {
+    if (!preview.totalsOk) {
       throw new BadRequestException(
-        `Khata totals mismatch: parties=${rows.length} AR=${arMinor} AP=${apMinor} expected ${KHATA_PARTY_COUNT}/${KHATA_AR_TOTAL_MINOR}/${KHATA_AP_TOTAL_MINOR}`,
+        `Khata totals mismatch: parties=${preview.partyCount} AR=${preview.arMinor} AP=${preview.apMinor} expected ${KHATA_PARTY_COUNT}/${KHATA_AR_TOTAL_MINOR}/${KHATA_AP_TOTAL_MINOR}`,
       );
     }
+    if (input.confirm === false) return { preview, status: "preview" };
 
     const existing = await this.prisma.khataImportBatch.findFirst({
-      where: { factoryId: user.factoryId, partyCount: rows.length, arMinor, apMinor },
+      where: {
+        factoryId: user.factoryId,
+        partyCount: rows.length,
+        arMinor: preview.arMinor,
+        apMinor: preview.apMinor,
+      },
       orderBy: { createdAt: "asc" },
     });
     if (existing) return existing;
 
+    const payload = input.base64 ?? Buffer.from(text).toString("base64");
     const stored = await this.files.upload(user, {
       fileName: input.fileName,
-      contentType: input.contentType ?? "application/json",
-      base64: Buffer.from(input.body).toString("base64"),
+      contentType: input.contentType ?? (input.base64 ? "application/pdf" : "application/json"),
+      base64: payload,
     });
 
     const cutover = parseFactoryDate(KHATA_CUTOVER);
     return this.prisma.$transaction(
       async (tx) => {
         await ensureChart(tx, user.factoryId);
+        const batch = await tx.khataImportBatch.create({
+          data: {
+            factoryId: user.factoryId,
+            fileName: input.fileName,
+            fileId: stored.id,
+            importedBy: user.id,
+            partyCount: rows.length,
+            arMinor: preview.arMinor,
+            apMinor: preview.apMinor,
+          },
+        });
         for (const row of rows) {
           const get = Number(row.youllGet ?? 0);
           const give = Number(row.youllGive ?? 0);
@@ -146,19 +134,59 @@ export class KhataService {
             });
           }
         }
-        return tx.khataImportBatch.create({
-          data: {
-            factoryId: user.factoryId,
-            fileName: input.fileName,
-            fileId: stored.id,
-            importedBy: user.id,
-            partyCount: rows.length,
-            arMinor,
-            apMinor,
-          },
-        });
+        return batch;
       },
       { timeout: 120_000, maxWait: 20_000 },
     );
   }
+
+  private async importStatements(
+    user: AuthenticatedUser,
+    input: { fileName: string; text?: string; base64?: string; contentType?: string },
+    preview: KhataPreview,
+  ) {
+    const payload = input.base64 ?? Buffer.from(input.text ?? "").toString("base64");
+    const stored = await this.files.upload(user, {
+      fileName: input.fileName,
+      contentType: input.contentType ?? "application/pdf",
+      base64: payload,
+    });
+    const batch = await this.prisma.khataImportBatch.findFirst({
+      where: { factoryId: user.factoryId },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!batch) throw new BadRequestException("Import the customer list before statement PDFs");
+    for (const line of preview.statements) {
+      const name = line.name;
+      const party = name
+        ? await this.prisma.party.findFirst({
+            where: { factoryId: user.factoryId, nameKey: partyNameKey(name) },
+          })
+        : await this.prisma.party.findFirst({ where: { factoryId: user.factoryId } });
+      if (!party) continue;
+      await this.prisma.importedKhataLine.create({
+        data: {
+          batchId: batch.id,
+          partyId: party.id,
+          lineDate: line.date ? parseFactoryDate(normalizeDate(line.date)) : undefined,
+          details: line.details,
+          debitMinor: rupeesToMinor(line.debit),
+          creditMinor: rupeesToMinor(line.credit),
+          balanceAfter: line.balance == null ? undefined : rupeesToMinor(line.balance),
+          sourceFileId: stored.id,
+        },
+      });
+    }
+    return { batchId: batch.id, lines: preview.statements.length, postedPayments: 0 };
+  }
+}
+
+function normalizeDate(raw: string): string {
+  const m = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (!m) return KHATA_CUTOVER;
+  const d = m[1]!.padStart(2, "0");
+  const mo = m[2]!.padStart(2, "0");
+  let y = m[3]!;
+  if (y.length === 2) y = `20${y}`;
+  return `${y}-${mo}-${d}`;
 }

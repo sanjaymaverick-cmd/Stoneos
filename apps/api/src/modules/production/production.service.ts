@@ -258,10 +258,10 @@ export class ProductionService {
       throw new BadRequestException("Session is not in progress");
     }
     const blocked = session.slabs.filter((link) =>
-      ["sold", "reserved", "voided"].includes(link.slab.salesStatus),
+      ["sold", "reserved", "voided", "dispatched"].includes(link.slab.salesStatus),
     );
     if (blocked.length > 0) {
-      throw new BadRequestException("Cannot complete process on sold, reserved, or voided slabs");
+      throw new BadRequestException("Cannot complete process on sold, reserved, dispatched, or voided slabs");
     }
     const sellable = session.processType === "POLISHING";
     const finished = sellable

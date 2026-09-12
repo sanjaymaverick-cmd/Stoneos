@@ -12,7 +12,8 @@ import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { isUniqueViolation, nextDocumentNumber } from "./document-number";
 import { BooksService } from "../books/books.service";
-import { parseFactoryDateInput } from "../books/money";
+import { parseFactoryDateInput, shaClientOpId } from "../books/money";
+import { postPayableForInvoice, recordSettlement } from "./interfactory-posting";
 
 @Injectable()
 export class SalesService {
@@ -106,7 +107,7 @@ export class SalesService {
           where: { id: line.slabId, factoryId: user.factoryId },
         });
         if (!slab) throw new BadRequestException("Slab does not belong to this factory");
-        if (slab.salesStatus === "sold" || slab.salesStatus === "reserved") {
+        if (slab.salesStatus === "sold" || slab.salesStatus === "reserved" || slab.salesStatus === "dispatched") {
           throw new BadRequestException(`Slab ${slab.slabSerial} is not available`);
         }
         if (line.baseVersion != null && slab.version !== line.baseVersion) {
@@ -194,10 +195,37 @@ export class SalesService {
     });
   }
 
-  async dispatch(user: AuthenticatedUser, salesOrderId: string, slabIds: string[]) {
+  async dispatch(
+    user: AuthenticatedUser,
+    salesOrderId: string,
+    slabIds: string[],
+    extra?: { clientOpId?: string; vehicleId?: string; ewayDraftId?: string; invoiceId?: string },
+  ) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
+    const clientOpId = extra?.clientOpId ?? `dispatch:${salesOrderId}`;
     return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.syncOperation.findUnique({
+        where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId } },
+      });
+      if (existing) return existing.response;
       await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
+      const packing = await tx.inventoryLocation.findFirst({
+        where: { factoryId: user.factoryId, code: "PACKING" },
+      });
+      const deliveredLoc = await tx.inventoryLocation.findFirst({
+        where: { factoryId: user.factoryId, code: "DELIVERED" },
+      });
+      if (!packing || !deliveredLoc) throw new BadRequestException("PACKING or DELIVERED location is missing");
+      for (const slabId of slabIds) {
+        const slab = await tx.slab.findFirst({ where: { id: slabId, factoryId: user.factoryId } });
+        if (!slab) throw new BadRequestException("Slab does not belong to this factory");
+        if (slab.locationId !== packing.id) {
+          throw new BadRequestException("Slab must be in PACKING before dispatch");
+        }
+        if (slab.salesStatus === "dispatched") {
+          throw new BadRequestException("Slab is already dispatched");
+        }
+      }
       const delivery = await tx.delivery.create({
         data: {
           factoryId: user.factoryId,
@@ -210,19 +238,33 @@ export class SalesService {
       for (const slabId of slabIds) {
         await tx.slab.update({
           where: { id: slabId },
-          data: { salesStatus: "sold", version: { increment: 1 } },
+          data: { salesStatus: "dispatched", locationId: deliveredLoc.id, version: { increment: 1 } },
         });
         await tx.inventoryMovement.create({
           data: {
             factoryId: user.factoryId,
-            movementType: "DELIVERY",
+            movementType: "DISPATCH",
             slabId,
             quantity: 1,
-            idempotencyKey: `dispatch:${delivery.id}:${slabId}`,
+            idempotencyKey: `${clientOpId}:${slabId}`,
             actorId: user.id,
+            notes: extra?.ewayDraftId ? `eway:${extra.ewayDraftId}` : extra?.invoiceId,
           },
         });
       }
+      const response = delivery as unknown as Prisma.InputJsonValue;
+      await tx.syncOperation.create({
+        data: {
+          factoryId: user.factoryId,
+          clientOpId,
+          actorId: user.id,
+          method: "POST",
+          path: `/api/v1/sales-orders/${salesOrderId}/dispatch`,
+          requestHash: clientOpId,
+          statusCode: 201,
+          response,
+        },
+      });
       return delivery;
     });
   }
@@ -238,6 +280,9 @@ export class SalesService {
       if (duplicate) throw new BadRequestException("Order already invoiced");
       const lines = await tx.salesLineItem.findMany({ where: { salesOrderId: order.id } });
       const amount = lines.reduce((sum, line) => sum + Number(line.quantitySqft) * Number(line.rate), 0);
+      const customer = await tx.customer.findFirst({
+        where: { id: order.customerId, factoryId: user.factoryId },
+      });
       const invoiceNumber = await nextDocumentNumber(tx, user.factoryId, "INVOICE");
       try {
         const created = await tx.invoice.create({
@@ -248,8 +293,60 @@ export class SalesService {
             invoiceNumber,
             amount,
             idempotencyKey: clientOpId,
+            counterpartyFactoryId: customer?.counterpartyFactoryId,
           },
         });
+        if (customer?.counterpartyFactoryId) {
+          await postPayableForInvoice(tx, {
+            buyerFactoryId: customer.counterpartyFactoryId,
+            sellerFactoryId: user.factoryId,
+            invoiceId: created.id,
+            amount,
+          });
+          const sellerFactory = await tx.factory.findUnique({ where: { id: user.factoryId } });
+          await this.books.postSisterPurchase(tx, {
+            buyerFactoryId: customer.counterpartyFactoryId,
+            actorId: user.id,
+            invoiceId: created.id,
+            partyName: sellerFactory?.name ?? "Sister plant",
+            amount,
+            clientOpId: shaClientOpId([customer.counterpartyFactoryId, "if-ap", created.id]),
+          });
+          const finished = await tx.inventoryLocation.findFirst({
+            where: { factoryId: customer.counterpartyFactoryId, code: "FINISHED_STOCK" },
+          });
+          for (const line of lines) {
+            if (!line.slabId) continue;
+            const source = await tx.slab.findFirst({
+              where: { id: line.slabId, factoryId: user.factoryId },
+            });
+            if (!source || !finished) continue;
+            const copy = await tx.slab.create({
+              data: {
+                factoryId: customer.counterpartyFactoryId,
+                slabSerial: source.slabSerial,
+                varietyName: source.varietyName,
+                thicknessMm: source.thicknessMm,
+                lengthFt: source.lengthFt,
+                widthFt: source.widthFt,
+                finish: source.finish,
+                locationId: finished.id,
+                salesStatus: "in_stock",
+              },
+            });
+            await tx.inventoryMovement.create({
+              data: {
+                factoryId: customer.counterpartyFactoryId,
+                movementType: "TRANSFER",
+                slabId: copy.id,
+                quantity: 1,
+                idempotencyKey: shaClientOpId([customer.counterpartyFactoryId, "if-stock", created.id, source.id]),
+                actorId: user.id,
+                notes: `sister:${user.factoryId}:${source.id}`,
+              },
+            });
+          }
+        }
         await tx.auditEvent.create({
           data: {
             factoryId: user.factoryId,
@@ -257,11 +354,8 @@ export class SalesService {
             action: "sales.invoice",
             entityType: "invoice",
             entityId: created.id,
-            payload: { amount, invoiceNumber },
+            payload: { amount, invoiceNumber, counterpartyFactoryId: customer?.counterpartyFactoryId },
           },
-        });
-        const customer = await tx.customer.findFirst({
-          where: { id: order.customerId, factoryId: user.factoryId },
         });
         await this.books.postInvoice(tx, user, {
           invoiceId: created.id,
@@ -345,6 +439,22 @@ export class SalesService {
           clientOpId: input.clientOpId,
           paidAt: parseFactoryDateInput(input.paidAt),
         });
+        if (invoice.counterpartyFactoryId) {
+          const payable = await tx.interfactoryPayable.findUnique({
+            where: { sourceInvoiceId: invoice.id },
+          });
+          if (payable) {
+            await recordSettlement(tx, {
+              buyerFactoryId: payable.factoryId,
+              payableId: payable.id,
+              amount: input.amount,
+              method: input.method,
+              paidAt: parseFactoryDateInput(input.paidAt),
+              clientOpId: input.clientOpId,
+              sellerPaymentId: payment.id,
+            });
+          }
+        }
         return payment;
       } catch (error) {
         if (String(error).includes("Payment exceeds invoice amount")) {
@@ -374,7 +484,7 @@ export class SalesService {
       for (const slabId of slabIds) {
         const slab = await tx.slab.findFirst({ where: { id: slabId, factoryId: user.factoryId } });
         if (!slab) throw new BadRequestException("Slab does not belong to this factory");
-        if (slab.salesStatus !== "sold" && slab.salesStatus !== "reserved") {
+        if (slab.salesStatus !== "sold" && slab.salesStatus !== "reserved" && slab.salesStatus !== "dispatched") {
           throw new BadRequestException("Slab is not outbound stock for this order");
         }
       }
