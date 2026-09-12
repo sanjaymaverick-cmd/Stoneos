@@ -24,7 +24,7 @@ button, input, select, textarea { font: inherit; }
 .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .metric { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
 .metric b { display: block; font-size: 28px; }
-.metric .hint { color: var(--muted); font-size: 12px; }
+.metric .hint, .hint { color: var(--muted); font-size: 12px; }
 .metric.ok b { color: var(--ok); }
 .metric.warn b { color: var(--warn); }
 .metric.bad b { color: var(--accent); }

@@ -19,4 +19,13 @@ describe("route policy", () => {
     assert.equal(canAccessPath("supervisor", "/tally"), false);
     assert.equal(canAccessPath("owner", "/tally"), true);
   });
+
+  it("shows Books to supervisors and Intake to operators, not Khata import", () => {
+    assert.equal(canAccessPath("supervisor", "/books"), true);
+    assert.equal(canAccessPath("operator", "/books"), false);
+    assert.equal(canAccessPath("operator", "/intake"), true);
+    assert.equal(visibleRoutes("supervisor").some((r) => r.href === "/books"), true);
+    assert.equal(visibleRoutes("supervisor").some((r) => r.href === "/tally"), false);
+    assert.equal(visibleRoutes("operator").some((r) => r.label === "Tally"), false);
+  });
 });

@@ -15,6 +15,8 @@ const routes = [
   "/sales",
   "/recovery-ratio",
   "/expenses",
+  "/books",
+  "/intake",
   "/tally",
   "/files",
   "/admin/users",

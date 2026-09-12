@@ -51,10 +51,10 @@ export default function TallyPage() {
 
   return (
     <AppShell>
-      <h1>Tally import</h1>
+      <h1>Tally archive</h1>
       <p>
-        Group / inter-plant sales and payment settlements live here as a voucher log. This does not
-        move live inventory, invoices, or yard stock — those stay in StoneOS.
+        XML daybook import is archive-only (owner/manager). Live party balances live under Books.
+        This log does not move inventory, invoices, or yard stock.
       </p>
       {error ? <p className="error">{error}</p> : null}
       <div className="card">
