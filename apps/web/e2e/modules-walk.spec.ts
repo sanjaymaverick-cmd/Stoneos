@@ -13,6 +13,7 @@ const routes = [
   "/maintenance",
   "/consumables",
   "/sales",
+  "/interfactory",
   "/recovery-ratio",
   "/expenses",
   "/tally",
