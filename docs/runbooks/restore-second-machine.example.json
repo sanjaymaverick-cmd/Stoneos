@@ -1,0 +1,13 @@
+{
+  "host": "SECOND-PC-HOSTNAME",
+  "dump": "/path/to/stoneos-YYYYMMDDTHHMMSS.dump",
+  "port": 55433,
+  "seconds": 12,
+  "counts": {
+    "raw_block": "1",
+    "slab": "8",
+    "invoice": "1",
+    "payment": "1"
+  },
+  "database_url": "postgresql://stoneos:***@127.0.0.1:55433/stoneos_restore"
+}

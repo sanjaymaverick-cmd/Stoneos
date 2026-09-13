@@ -422,18 +422,24 @@ export class InventoryService {
           where: { id: slab.id },
           data: { salesStatus: "in_stock", version: { increment: 1 } },
         });
-      } else if (movement.movementType === InventoryMovementType.DELIVERY) {
-        if (!movement.slabId) throw new BadRequestException("Delivery has no slab");
+      } else if (
+        movement.movementType === InventoryMovementType.DELIVERY ||
+        movement.movementType === InventoryMovementType.DISPATCH
+      ) {
+        if (!movement.slabId) throw new BadRequestException("Dispatch has no slab");
         const slab = await tx.slab.findFirst({
           where: { id: movement.slabId, factoryId: user.factoryId },
         });
         if (!slab) throw new NotFoundException("Slab not found");
-        if (slab.salesStatus !== "sold") {
-          throw new BadRequestException("Slab is no longer marked sold");
+        if (slab.salesStatus !== "sold" && slab.salesStatus !== "dispatched") {
+          throw new BadRequestException("Slab is no longer marked dispatched");
         }
+        const packing = await tx.inventoryLocation.findFirst({
+          where: { factoryId: user.factoryId, code: "PACKING" },
+        });
         await tx.slab.update({
           where: { id: slab.id },
-          data: { salesStatus: "in_stock", version: { increment: 1 } },
+          data: { salesStatus: "in_stock", locationId: packing?.id ?? slab.locationId, version: { increment: 1 } },
         });
       } else {
         throw new BadRequestException(`No reversal path for ${movement.movementType}`);

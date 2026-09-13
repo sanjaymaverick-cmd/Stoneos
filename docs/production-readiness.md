@@ -41,9 +41,18 @@ Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.s
 - [x] `pack()` moves slabs to the PACKING location and emits a `PACKING` movement (salesStatus unchanged until dispatch)
 - [x] Invoice/pay/CN/expense each post one balanced voucher; retry `clientOpId` is a no-op
 - [x] Khata customer-list import: 46 parties, AR ₹1,25,61,248, AP ₹1,63,671 as of 2026-09-12; supervisor cannot import
+- [x] Live Khatabook PDF parser + totals lock
 - [x] Supervisor rokad/DPR intake: proposer cannot confirm; PDF is unreadable; cash drawer lock blocks further cash vouchers
 - [x] GST 18% inclusive on sales/CN vouchers (`GST_OUTPUT`); GSTR filing stays outside
-- [ ] Muster/payroll (deferred until the plant says it still needs it)
+- [x] Dispatch after PACKING (`salesStatus=dispatched`, movement DISPATCH)
+- [x] Interfactory in-app AR/AP + settlement (revert undone)
+- [x] Muster + payroll vouchers
+- [x] E-invoice + e-way + GSTR-1 export (portal upload gated on secrets)
+- [x] Second-runner restore job + second-PC runbook
+- [x] Cloud apply workflow_dispatch (no apply on push)
+- [x] Books copilot propose-only
+- [ ] Physical second-PC JSON attached (different hostname)
+- [ ] GSTN production secrets configured
 - [x] Prisma migrate deploy on empty Postgres 16 (Docker `postgres:16-alpine` in `stoneos-smoke`)
 - [x] Bootstrap refuses a second owner (CLI no-ops after lock; first run created Vedam Granites / `owner`)
 - [x] `/health/live` and `/health/ready` against Docker API image

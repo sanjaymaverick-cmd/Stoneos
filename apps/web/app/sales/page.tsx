@@ -115,7 +115,7 @@ export default function SalesPage() {
           <p key={o.id}>
             {o.customer.name} — {o.status}
             <button type="button" onClick={() => apiFetch(`/api/v1/sales-orders/${o.id}/packing`, { method: "POST", body: JSON.stringify({ slabIds: o.lines.map((l) => l.slabId).filter(Boolean) }) }).then(refresh)}>Pack</button>
-            <button type="button" onClick={() => apiFetch(`/api/v1/sales-orders/${o.id}/dispatch`, { method: "POST", body: JSON.stringify({ slabIds: o.lines.map((l) => l.slabId).filter(Boolean) }) }).then(refresh)}>Dispatch</button>
+            <button type="button" onClick={() => apiFetch(`/api/v1/sales-orders/${o.id}/dispatch`, { method: "POST", body: JSON.stringify({ slabIds: o.lines.map((l) => l.slabId).filter(Boolean), clientOpId: stableOp(`disp:${o.id}`) }) }).then(() => { clearOp(`disp:${o.id}`); return refresh(); })}>Dispatch</button>
             <button type="button" onClick={() => apiFetch(`/api/v1/sales-orders/${o.id}/invoice`, { method: "POST", body: JSON.stringify({ clientOpId: stableOp(`inv:${o.id}`) }) }).then(() => { clearOp(`inv:${o.id}`); return refresh(); })}>Invoice</button>
             {o.invoices[0] ? (
               <button type="button" onClick={() => {

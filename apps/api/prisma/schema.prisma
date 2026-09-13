@@ -53,6 +53,7 @@ enum InventoryMovementType {
   RESERVATION_RELEASE
   PACKING
   DELIVERY
+  DISPATCH
   RETURN
   ADJUSTMENT
   REVERSAL
@@ -158,6 +159,10 @@ enum VoucherSource {
   sales_cn
   expense_create
   intake_confirm
+  muster_pay
+  interfactory_invoice
+  interfactory_settle
+  copilot_journal
   manual
 }
 
@@ -170,6 +175,7 @@ enum CashDrawerStatus {
 enum IntakeKind {
   rokad
   dpr
+  journal
 }
 
 enum IntakeStatus {
@@ -223,6 +229,17 @@ model Factory {
   cashDrawerDays     CashDrawerDay[]
   khataImports       KhataImportBatch[]
   intakeDrafts       IntakeDraft[]
+  interfactoryLinksA InterfactoryLink[]     @relation("InterfactoryA")
+  interfactoryLinksB InterfactoryLink[]     @relation("InterfactoryB")
+  interfactoryPayables InterfactoryPayable[] @relation("BuyerPayables")
+  interfactorySold     InterfactoryPayable[] @relation("SellerPayables")
+  interfactorySettlements InterfactorySettlement[]
+  gstProfile         GstProfile?
+  eInvoices          EInvoice[]
+  eWayBills          EWayBill[]
+  workers            Worker[]
+  attendance         Attendance[]
+  wageSheets         WageSheet[]
 
   @@map("factory")
 }
@@ -318,18 +335,20 @@ model Supplier {
 }
 
 model Customer {
-  id          String       @id @default(uuid())
-  factoryId   String       @map("factory_id")
-  factory     Factory      @relation(fields: [factoryId], references: [id])
-  name        String
-  contactInfo String?      @map("contact_info")
-  creditLimit Decimal?     @map("credit_limit") @db.Decimal(14, 2)
-  createdAt   DateTime     @default(now()) @map("created_at")
-  version     Int          @default(0)
-  quotations  Quotation[]
-  salesOrders SalesOrder[]
-  invoices    Invoice[]
+  id                      String       @id @default(uuid())
+  factoryId               String       @map("factory_id")
+  factory                 Factory      @relation(fields: [factoryId], references: [id])
+  name                    String
+  contactInfo             String?      @map("contact_info")
+  creditLimit             Decimal?     @map("credit_limit") @db.Decimal(14, 2)
+  counterpartyFactoryId   String?      @map("counterparty_factory_id")
+  createdAt               DateTime     @default(now()) @map("created_at")
+  version                 Int          @default(0)
+  quotations              Quotation[]
+  salesOrders             SalesOrder[]
+  invoices                Invoice[]
 
+  @@unique([factoryId, counterpartyFactoryId])
   @@index([factoryId])
   @@map("customer")
 }
@@ -711,20 +730,23 @@ model DeliveryLine {
 }
 
 model Invoice {
-  id             String     @id @default(uuid())
-  factoryId      String     @map("factory_id")
-  factory        Factory    @relation(fields: [factoryId], references: [id])
-  salesOrderId   String     @map("sales_order_id")
-  salesOrder     SalesOrder @relation(fields: [salesOrderId], references: [id])
-  customerId     String     @map("customer_id")
-  customer       Customer   @relation(fields: [customerId], references: [id])
-  invoiceNumber  String     @map("invoice_number")
-  amount         Decimal    @db.Decimal(14, 2)
-  idempotencyKey String     @map("idempotency_key")
-  createdAt      DateTime   @default(now()) @map("created_at")
-  version        Int        @default(0)
-  payments       Payment[]
-  creditNotes    CreditNote[]
+  id                      String     @id @default(uuid())
+  factoryId               String     @map("factory_id")
+  factory                 Factory    @relation(fields: [factoryId], references: [id])
+  salesOrderId            String     @map("sales_order_id")
+  salesOrder              SalesOrder @relation(fields: [salesOrderId], references: [id])
+  customerId              String     @map("customer_id")
+  customer                Customer   @relation(fields: [customerId], references: [id])
+  invoiceNumber           String     @map("invoice_number")
+  amount                  Decimal    @db.Decimal(14, 2)
+  idempotencyKey          String     @map("idempotency_key")
+  counterpartyFactoryId   String?    @map("counterparty_factory_id")
+  createdAt               DateTime   @default(now()) @map("created_at")
+  version                 Int        @default(0)
+  payments                Payment[]
+  creditNotes             CreditNote[]
+  eInvoice                EInvoice?
+  interfactoryPayable     InterfactoryPayable?
 
   @@unique([factoryId, invoiceNumber])
   @@unique([factoryId, idempotencyKey])
@@ -774,6 +796,7 @@ model CreditNote {
   idempotencyKey   String          @map("idempotency_key")
   createdAt        DateTime        @default(now()) @map("created_at")
   version          Int             @default(0)
+  eInvoice         EInvoice?
 
   @@unique([factoryId, creditNoteNumber])
   @@unique([factoryId, idempotencyKey])
@@ -812,6 +835,7 @@ model Vehicle {
   active    Boolean   @default(true)
   createdAt DateTime  @default(now()) @map("created_at")
   expenses  Expense[]
+  eWayBills EWayBill[]
 
   @@index([factoryId])
   @@map("vehicle")
@@ -1039,4 +1063,204 @@ model IntakeDraft {
   @@unique([factoryId, clientOpId])
   @@index([factoryId, operationalDate])
   @@map("intake_draft")
+}
+
+model InterfactoryLink {
+  id          String   @id @default(uuid())
+  factoryAId  String   @map("factory_a_id")
+  factoryA    Factory  @relation("InterfactoryA", fields: [factoryAId], references: [id])
+  factoryBId  String   @map("factory_b_id")
+  factoryB    Factory  @relation("InterfactoryB", fields: [factoryBId], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([factoryAId, factoryBId])
+  @@map("interfactory_link")
+}
+
+model InterfactoryPayable {
+  id                String   @id @default(uuid())
+  factoryId         String   @map("factory_id")
+  factory           Factory  @relation("BuyerPayables", fields: [factoryId], references: [id])
+  sellerFactoryId   String   @map("seller_factory_id")
+  sellerFactory     Factory  @relation("SellerPayables", fields: [sellerFactoryId], references: [id])
+  sourceInvoiceId   String   @unique @map("source_invoice_id")
+  sourceInvoice     Invoice  @relation(fields: [sourceInvoiceId], references: [id])
+  amount            Decimal  @db.Decimal(14, 2)
+  creditedAmount    Decimal  @default(0) @map("credited_amount") @db.Decimal(14, 2)
+  createdAt         DateTime @default(now()) @map("created_at")
+  version           Int      @default(0)
+  settlements       InterfactorySettlement[]
+
+  @@index([factoryId])
+  @@map("interfactory_payable")
+}
+
+model InterfactorySettlement {
+  id               String              @id @default(uuid())
+  factoryId        String              @map("factory_id")
+  factory          Factory             @relation(fields: [factoryId], references: [id])
+  payableId        String              @map("payable_id")
+  payable          InterfactoryPayable @relation(fields: [payableId], references: [id])
+  sellerPaymentId  String?             @map("seller_payment_id")
+  amount           Decimal             @db.Decimal(14, 2)
+  method           String
+  paidAt           DateTime            @map("paid_at") @db.Date
+  idempotencyKey   String              @map("idempotency_key")
+  createdAt        DateTime            @default(now()) @map("created_at")
+
+  @@unique([factoryId, idempotencyKey])
+  @@index([payableId])
+  @@map("interfactory_settlement")
+}
+
+enum GstDocStatus {
+  draft
+  mock
+  live
+  failed
+}
+
+model GstProfile {
+  id          String   @id @default(uuid())
+  factoryId   String   @unique @map("factory_id")
+  factory     Factory  @relation(fields: [factoryId], references: [id])
+  gstin       String
+  legalName   String   @map("legal_name")
+  stateCode   String   @map("state_code")
+  irpSandbox  Boolean  @default(true) @map("irp_sandbox")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("gst_profile")
+}
+
+model EInvoice {
+  id            String       @id @default(uuid())
+  factoryId     String       @map("factory_id")
+  factory       Factory      @relation(fields: [factoryId], references: [id])
+  invoiceId     String?      @unique @map("invoice_id")
+  invoice       Invoice?     @relation(fields: [invoiceId], references: [id])
+  creditNoteId  String?      @unique @map("credit_note_id")
+  creditNote    CreditNote?  @relation(fields: [creditNoteId], references: [id])
+  irn           String
+  ackNo         String       @map("ack_no")
+  signedQr      String       @map("signed_qr")
+  status        GstDocStatus @default(mock)
+  source        String       @default("mock")
+  payload       Json
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  @@index([factoryId])
+  @@map("e_invoice")
+}
+
+model EWayBill {
+  id            String       @id @default(uuid())
+  factoryId     String       @map("factory_id")
+  factory       Factory      @relation(fields: [factoryId], references: [id])
+  invoiceId     String?      @map("invoice_id")
+  deliveryId    String?      @map("delivery_id")
+  vehicleId     String?      @map("vehicle_id")
+  vehicle       Vehicle?     @relation(fields: [vehicleId], references: [id])
+  ewbNo         String       @map("ewb_no")
+  distanceKm    Int          @default(0) @map("distance_km")
+  fromGstin     String?      @map("from_gstin")
+  toGstin       String?      @map("to_gstin")
+  fromPin       String?      @map("from_pin")
+  toPin         String?      @map("to_pin")
+  status        GstDocStatus @default(mock)
+  source        String       @default("mock")
+  clientOpId    String       @map("client_op_id")
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  @@unique([factoryId, clientOpId])
+  @@index([factoryId])
+  @@map("e_way_bill")
+}
+
+enum WorkerKind {
+  cutter
+  polisher
+  helper
+  driver
+  other
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  half
+  ot
+}
+
+enum WageSheetStatus {
+  draft
+  confirmed
+  paid
+}
+
+model Worker {
+  id              String     @id @default(uuid())
+  factoryId       String     @map("factory_id")
+  factory         Factory    @relation(fields: [factoryId], references: [id])
+  name            String
+  nameKey         String     @map("name_key")
+  kind            WorkerKind @default(other)
+  dailyWageMinor  Int?       @map("daily_wage_minor")
+  active          Boolean    @default(true)
+  createdAt       DateTime   @default(now()) @map("created_at")
+  attendance      Attendance[]
+  wageLines       WageLine[]
+
+  @@unique([factoryId, nameKey])
+  @@index([factoryId])
+  @@map("worker")
+}
+
+model Attendance {
+  id               String            @id @default(uuid())
+  factoryId        String            @map("factory_id")
+  factory          Factory           @relation(fields: [factoryId], references: [id])
+  workerId         String            @map("worker_id")
+  worker           Worker            @relation(fields: [workerId], references: [id])
+  operationalDate  DateTime          @map("operational_date") @db.Date
+  status           AttendanceStatus
+  otHours          Decimal?          @map("ot_hours") @db.Decimal(6, 2)
+  createdAt        DateTime          @default(now()) @map("created_at")
+
+  @@unique([workerId, operationalDate])
+  @@index([factoryId, operationalDate])
+  @@map("attendance")
+}
+
+model WageSheet {
+  id            String          @id @default(uuid())
+  factoryId     String          @map("factory_id")
+  factory       Factory         @relation(fields: [factoryId], references: [id])
+  periodStart   DateTime        @map("period_start") @db.Date
+  periodEnd     DateTime        @map("period_end") @db.Date
+  status        WageSheetStatus @default(draft)
+  clientOpId    String          @map("client_op_id")
+  proposedBy    String          @map("proposed_by")
+  confirmedBy   String?         @map("confirmed_by")
+  paidVoucherId String?         @map("paid_voucher_id")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  lines         WageLine[]
+
+  @@unique([factoryId, clientOpId])
+  @@index([factoryId])
+  @@map("wage_sheet")
+}
+
+model WageLine {
+  id           String    @id @default(uuid())
+  sheetId      String    @map("sheet_id")
+  sheet        WageSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  workerId     String    @map("worker_id")
+  worker       Worker    @relation(fields: [workerId], references: [id])
+  days         Decimal   @db.Decimal(6, 2)
+  ot           Decimal   @default(0) @db.Decimal(6, 2)
+  amountMinor  Int       @map("amount_minor")
+
+  @@unique([sheetId, workerId])
+  @@map("wage_line")
 }

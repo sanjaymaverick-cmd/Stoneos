@@ -13,6 +13,7 @@ export const SYSTEM_LEDGERS: Array<{
   { code: "BANK_SHREECHAND", name: "Shreechand", group: "asset", kind: "bank" },
   { code: "BANK_OTHER", name: "Other bank / UPI", group: "asset", kind: "bank" },
   { code: "AR", name: "Accounts receivable", group: "asset", kind: "ar" },
+  { code: "STOCK", name: "Finished stock (sister receipts)", group: "asset", kind: "other" },
   { code: "AP", name: "Accounts payable", group: "liability", kind: "ap" },
   { code: "SALES", name: "Sales", group: "income", kind: "sales" },
   { code: "CN_CONTRA", name: "Credit notes", group: "income", kind: "sales" },

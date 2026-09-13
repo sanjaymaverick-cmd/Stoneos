@@ -6,7 +6,7 @@ import { AppShell } from "../../components/AppShell";
 import { EmptyState } from "../../components/EmptyState";
 import { apiFetch } from "../../lib/api";
 import type { PublicUser } from "@stoneos/contracts";
-import { HISTORICAL_IMPORT_ROLES, canAccess } from "@stoneos/contracts";
+import { COPILOT_PROPOSE_ROLES, HISTORICAL_IMPORT_ROLES, canAccess } from "@stoneos/contracts";
 
 type Party = {
   id: string;
@@ -26,6 +26,8 @@ export default function BooksPage() {
   const [data, setData] = useState<Outstanding | null>(null);
   const [me, setMe] = useState<PublicUser | null>(null);
   const [error, setError] = useState("");
+  const [copilot, setCopilot] = useState("");
+  const [copilotMsg, setCopilotMsg] = useState("");
 
   useEffect(() => {
     apiFetch<PublicUser>("/api/v1/auth/me").then(setMe).catch(() => undefined);
@@ -35,6 +37,7 @@ export default function BooksPage() {
   }, []);
 
   const canImport = me ? canAccess(me.role, HISTORICAL_IMPORT_ROLES) : false;
+  const canCopilot = me ? canAccess(me.role, COPILOT_PROPOSE_ROLES) : false;
   const parties = data?.parties ?? [];
 
   return (
@@ -52,8 +55,18 @@ export default function BooksPage() {
       </div>
       <p>
         <Link href="/books/rokad">Rokad / cash drawer</Link>
+        {" "}· <Link href="/books/gst">GST</Link>
         {canImport ? <> · <Link href="/books/import">Khata import</Link> · <Link href="/tally">Tally archive</Link></> : null}
       </p>
+      {canCopilot ? (
+        <div className="card">
+          <h2>Propose a draft</h2>
+          <p>Classifies rokad/DPR/journal text. Does not post pay, invoice, or SQL.</p>
+          <label>Text<textarea value={copilot} onChange={(e) => setCopilot(e.target.value)} rows={4} /></label>
+          <button type="button" onClick={() => apiFetch("/api/v1/books/copilot/propose", { method: "POST", body: JSON.stringify({ text: copilot }) }).then(() => setCopilotMsg("Draft proposed — confirm on Intake")).catch((e) => setError(e instanceof Error ? e.message : "Propose failed"))}>Propose</button>
+          {copilotMsg ? <p>{copilotMsg}</p> : null}
+        </div>
+      ) : null}
       {parties.length === 0 ? (
         <EmptyState>No parties yet. Owner or manager imports the Khatabook customer list to seed opening AR/AP.</EmptyState>
       ) : (

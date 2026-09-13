@@ -1,0 +1,35 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 259 >>
+stream
+BT /F1 10 Tf 40 800 Td (Shakti enterprise) Tj ET
+BT /F1 10 Tf 40 786 Td (12/09/2026 Opening 577166 0 577166) Tj ET
+BT /F1 10 Tf 40 772 Td (12/09/2026 Cash 97070 0 97070 480096) Tj ET
+BT /F1 10 Tf 40 758 Td (12/09/2026 Vipul Cash 108162 0 108162 371934) Tj ET
+
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000551 00000 n 
+trailer << /Size 6 /Root 1 0 R >>
+startxref
+619
+%%EOF
