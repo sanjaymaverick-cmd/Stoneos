@@ -187,7 +187,7 @@ docker compose -p stoneos-smoke -f infra/compose/docker-compose.prod.yml exec -T
 - Web `http://localhost:3000/login` — no signup.
 - API `http://localhost:4000` — OpenAPI `/api/docs`.
 - Fresh volume: `owner` / `ChangeMeNow!12` (`mustChangePassword: true`).
-- If a year-run already mutated that volume: owner may be `YearRunOwner!12`. Confirm with `POST /api/v1/auth/login`.
+- If a year-run already mutated that volume: owner credential was rotated after that run; confirm current owner login out-of-band, then verify with `POST /api/v1/auth/login`.
 
 Login 10/min/IP. Do not blast.
 

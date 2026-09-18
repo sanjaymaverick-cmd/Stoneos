@@ -15,8 +15,17 @@ export interface ObjectStorage {
 export class LocalDiskStorage implements ObjectStorage {
   constructor(private root: string) {}
 
+  private resolveWithinRoot(key: string): string {
+    const root = path.resolve(this.root);
+    const full = path.resolve(root, key);
+    if (full !== root && !full.startsWith(root + path.sep)) {
+      throw new Error(`Refusing to access storage key outside root: ${key}`);
+    }
+    return full;
+  }
+
   async put(object: StoredObject): Promise<{ key: string }> {
-    const full = path.join(this.root, object.key);
+    const full = this.resolveWithinRoot(object.key);
     await mkdir(path.dirname(full), { recursive: true });
     await writeFile(full, object.bytes);
     await writeFile(`${full}.meta.json`, JSON.stringify({ contentType: object.contentType }));
@@ -24,7 +33,7 @@ export class LocalDiskStorage implements ObjectStorage {
   }
 
   async get(key: string): Promise<StoredObject> {
-    const full = path.join(this.root, key);
+    const full = this.resolveWithinRoot(key);
     const bytes = await readFile(full);
     const meta = JSON.parse(await readFile(`${full}.meta.json`, "utf8")) as { contentType: string };
     return { key, contentType: meta.contentType, bytes };

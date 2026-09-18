@@ -204,7 +204,11 @@ describe("postgres-backed workflows", () => {
 
   it("is idempotent on invoice retries and rejects overpay", async () => {
     const customer = await sales.createCustomer(owner, "Acme");
+    const finished = await prisma.inventoryLocation.findFirst({
+      where: { factoryId, code: "FINISHED_STOCK" },
+    });
     const slab = await prisma.slab.findFirst({ where: { factoryId } });
+    await prisma.slab.update({ where: { id: slab!.id }, data: { locationId: finished!.id } });
     const order = (await sales.createOrder(owner, {
       customerId: customer.id,
       orderDate: "2026-09-05",
@@ -459,6 +463,32 @@ describe("postgres-backed workflows", () => {
       slabIds: [sold.id],
     });
     await assert.rejects(() => production.completePolishing(asOwner, blocked.id), /sold|reserved|voided/i);
+  });
+
+  it("refuses to order a freshly cut, unpolished slab", async () => {
+    const { factory, asOwner } = await staffFactory("unpol");
+    const unpolished = await prisma.inventoryLocation.findFirst({
+      where: { factoryId: factory.id, code: "UNPOLISHED_STOCK" },
+    });
+    const slab = await prisma.slab.create({
+      data: {
+        factoryId: factory.id,
+        slabSerial: "UNPOL-1",
+        varietyName: "White",
+        locationId: unpolished!.id,
+      },
+    });
+    const customer = await sales.createCustomer(asOwner, "Unpolished Co");
+    await assert.rejects(
+      () =>
+        sales.createOrder(asOwner, {
+          customerId: customer.id,
+          orderDate: "2026-09-12",
+          clientOpId: "unpol-order",
+          lines: [{ slabId: slab.id, quantitySqft: 32, rate: 100 }],
+        }),
+      /not been polished/i,
+    );
   });
 
   it("derives DPR good-slab totals from slab rows, not typed day-log counts", async () => {
@@ -892,6 +922,29 @@ describe("postgres-backed workflows", () => {
     const gstr = await gst.gstr1(factory.id, "2026-09");
     assert.ok(gstr.b2b.some((r) => r.doc.startsWith("INV-")));
     assert.match(gstr.csv, /INV-/);
+  });
+
+  it("files GSTR-1 by IST calendar month, not the 07:00 operational-day cutover", async () => {
+    const { factory, asOwner } = await staffFactory("gstmonth");
+    await gst.upsertProfile(asOwner, { gstin: "08AAAAA0000A1Z6", legalName: "Vedam", stateCode: "08" });
+    const customer = await sales.createCustomer(asOwner, "Boundary Co");
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-10-01",
+      clientOpId: "gstmonth-order",
+      lines: [{ quantitySqft: 10, rate: 100 }],
+    })) as { id: string };
+    const invoice = await sales.invoice(asOwner, order.id, "gstmonth-inv");
+    // 2026-10-01T01:00:00Z is 06:30 IST: before the 07:00 operational-day start,
+    // but after 00:00 IST on 1 Oct, so it belongs in October's GSTR-1.
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { createdAt: new Date("2026-10-01T01:00:00Z") },
+    });
+    const october = await gst.gstr1(factory.id, "2026-10");
+    assert.ok(october.b2b.some((r) => r.doc === invoice.invoiceNumber));
+    const september = await gst.gstr1(factory.id, "2026-09");
+    assert.ok(!september.b2b.some((r) => r.doc === invoice.invoiceNumber));
   });
 
   it("copilot proposes a journal draft that only the other user can confirm", async () => {

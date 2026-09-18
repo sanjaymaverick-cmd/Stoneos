@@ -80,7 +80,7 @@ Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.s
 - [x] Sister-plant trade is the same sale/purchase path as any firm. No in-app factory link / dual ledger.
 - [x] Tally daybook import stores voucher type/party/amount as a log; `writesInventory: false`; does not post stock or invoices
 
-Smoke rebuild 2026-09-06 used named volume `stoneos-smoke_stoneos_pg_data`. Owner password on this stack is `YearRunOwner!12`. Year-run staff (`yrunopr`, …) **were provisioned** on that volume. A previous volume `compose_stoneos_pg_data` still exists and was not attached.
+Smoke rebuild 2026-09-06 used named volume `stoneos-smoke_stoneos_pg_data`. Owner credential on this stack was rotated after the run and is not recorded here. Year-run staff (`yrunopr`, …) **were provisioned** on that volume. A previous volume `compose_stoneos_pg_data` still exists and was not attached.
 
 **2026-09-12 this workstation:** smoke stack was up; owner Playwright walk passed (desktop+mobile). `restore-second-machine.sh` still belongs on a **different PC**. `terraform apply` not run. Copilot not enabled. `pack()` now moves slabs to PACKING. Dual RLS not claimed. Vedam Books spine + khata fixture + intake/drawer are in the API; live PDF import on smoke is still a local cutover step.
 
@@ -88,4 +88,4 @@ Year-run on this named volume (2026-09-06): 12 months, staff `yrunmgr`…`yrunau
 
 Remaining local work: run `scripts/restore-second-machine.sh` on a **different PC** against a dump from `HOST_BACKUP_DIR` and keep `var/restore-second-machine.json`. Import the live Khatabook customer-list PDFs on smoke (fixture fillers are not Vedam names). Cloud apply waits until a host is chosen. Copilot stays deferred (ADR 0009). CEO dashboard is rule-based (ADR 0010). Isolation is application `WHERE` (ADR 0005). Muster/payroll is not shipped.
 
-CI (2026-09-08): quality no longer dies on `npm audit` before tests; AWS `main.tf` is `terraform fmt`-clean; Trivy action pinned to `v0.36.0` (do not use yanked `0.24.0`). Quality job also dumps/restores the migrated schema on the CI Postgres. Playwright module-walk stays on the smoke stack (`PLAYWRIGHT_SKIP_WEBSERVER=1 STONEOS_OWNER_PASSWORD=YearRunOwner!12 npm run test:e2e --workspace=@stoneos/web`).
+CI (2026-09-08): quality no longer dies on `npm audit` before tests; AWS `main.tf` is `terraform fmt`-clean; Trivy action pinned to `v0.36.0` (do not use yanked `0.24.0`). Quality job also dumps/restores the migrated schema on the CI Postgres. Playwright module-walk stays on the smoke stack (`PLAYWRIGHT_SKIP_WEBSERVER=1 STONEOS_OWNER_PASSWORD=<rotated, set locally> npm run test:e2e --workspace=@stoneos/web`).

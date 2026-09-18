@@ -104,10 +104,14 @@ export class SalesService {
         if (!line.slabId) continue;
         const slab = await tx.slab.findFirst({
           where: { id: line.slabId, factoryId: user.factoryId },
+          include: { location: true },
         });
         if (!slab) throw new BadRequestException("Slab does not belong to this factory");
         if (slab.salesStatus === "sold" || slab.salesStatus === "reserved" || slab.salesStatus === "dispatched") {
           throw new BadRequestException(`Slab ${slab.slabSerial} is not available`);
+        }
+        if (slab.location?.code === "UNPOLISHED_STOCK") {
+          throw new BadRequestException(`Slab ${slab.slabSerial} has not been polished yet`);
         }
         if (line.baseVersion != null && slab.version !== line.baseVersion) {
           throw new ConflictException({

@@ -1,5 +1,6 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { createHash } from "node:crypto";
+import { factoryMonthStart } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { gstSplitInclusive, rupeesToMinor } from "../books/money";
@@ -147,10 +148,11 @@ export class GstService {
   async gstr1(factoryId: string, month: string) {
     const m = month.match(/^(\d{4})-(\d{2})$/);
     if (!m) throw new BadRequestException("month must be YYYY-MM");
-    const start = new Date(`${month}-01T01:30:00Z`);
+    // IST calendar-month boundaries (00:00 IST), not the 07:00 IST operational-day cutover.
+    const start = factoryMonthStart(new Date(`${month}-15T12:00:00Z`));
     const endMonth = Number(m[2]) === 12 ? 1 : Number(m[2]) + 1;
     const endYear = Number(m[2]) === 12 ? Number(m[1]) + 1 : Number(m[1]);
-    const end = new Date(`${endYear}-${String(endMonth).padStart(2, "0")}-01T01:30:00Z`);
+    const end = factoryMonthStart(new Date(`${endYear}-${String(endMonth).padStart(2, "0")}-15T12:00:00Z`));
     const invoices = await this.prisma.invoice.findMany({
       where: { factoryId, createdAt: { gte: start, lt: end } },
       include: { customer: true, eInvoice: true },

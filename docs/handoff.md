@@ -30,11 +30,11 @@ docker compose -p stoneos-smoke -f infra/compose/docker-compose.prod.yml down
 
 Postgres in this compose file is ephemeral unless Docker reuses an anonymous volume. After a wipe, bootstrap creates factory **Vedam Granites** and owner `owner` / `ChangeMeNow!12` (`mustChangePassword: true`).
 
-**Live owner password on the 2026-09-06 smoke rebuild:** `YearRunOwner!12` (bootstrap `ChangeMeNow!12` was changed on first login). Confirm with `POST /api/v1/auth/login` before telling the user.
+**Live owner password on the 2026-09-06 smoke rebuild:** rotated after that run; not recorded here (bootstrap `ChangeMeNow!12` was changed on first login). Confirm current credential out-of-band, then verify with `POST /api/v1/auth/login` before telling the user.
 
 Named volume `stoneos-smoke_stoneos_pg_data` has the 2026-09-06 bootstrap + year-run + opening SoD (factory LIVE). Year-run staff **are** on this volume after that run. An older volume `compose_stoneos_pg_data` is still on the machine and was not attached.
 
-Year-run staff (if provisioned on a volume that has them): `yrunmgr`, `yrunadm`, `yrunsup`, `yrunopr`, `yruninv`, `yrunsls`, `yrunacc`, `yrunaud` — passwords `YearRunXxx!12` (e.g. `yrunopr` / `YearRunOpr!12`).
+Year-run staff (if provisioned on a volume that has them): `yrunmgr`, `yrunadm`, `yrunsup`, `yrunopr`, `yruninv`, `yrunsls`, `yrunacc`, `yrunaud` — passwords rotated after that run; not recorded here.
 
 There is **no public signup**.
 

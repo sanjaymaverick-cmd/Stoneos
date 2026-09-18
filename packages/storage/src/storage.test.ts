@@ -29,4 +29,18 @@ describe("object storage port", () => {
       "S3CompatibleStorage",
     );
   });
+
+  it("refuses to read or write outside the storage root", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "stoneos-storage-"));
+    try {
+      const storage = new LocalDiskStorage(dir);
+      await assert.rejects(() => storage.get("../outside.txt"), /outside root/);
+      await assert.rejects(
+        () => storage.put({ key: "../outside.txt", contentType: "text/plain", bytes: Buffer.from("x") }),
+        /outside root/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
