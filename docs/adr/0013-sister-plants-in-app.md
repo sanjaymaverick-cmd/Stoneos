@@ -1,9 +1,11 @@
-# ADR 0013 — Sister plants trade in StoneOS
+# ADR 0013 — Sister yards are ordinary firms
 
 ## Status
 
-Accepted. 2026-09-12. Reverses the 12 Sep Tally-only revert for group AR.
+Superseded 2026-09-13. In-app interfactory trade is removed.
 
 ## Decision
 
-Linked factories invoice each other in-app. Seller posts sales + AR. Buyer posts AP + a stock receipt on the buyer `factoryId`. Settlement is `SELECT FOR UPDATE` like ordinary pay and writes a receipt on the seller and a payment on the buyer. Distinct `clientOpId`s are prefixed by factory. Tally XML remains `writesInventory: false`.
+A sister plant is a customer or supplier like any other firm. Sell with the normal invoice/pay/CN path. Buy with the normal expense/purchase path. Do not link factories, copy slabs across `factoryId`, or post a second ledger on the other yard.
+
+Isolation stays `WHERE factoryId = session.factoryId`. Tally XML remains an archive log (`writesInventory: false`).

@@ -18,8 +18,6 @@ import { FilesService } from "../src/modules/files/files.service";
 import { BooksService } from "../src/modules/books/books.service";
 import { KhataService } from "../src/modules/books/khata.service";
 import { IntakeService } from "../src/modules/books/intake.service";
-import { InterfactoryService } from "../src/modules/sales/interfactory.service";
-import { FactoriesService } from "../src/modules/admin/factories.service";
 import { MusterService } from "../src/modules/muster/muster.service";
 import { GstService } from "../src/modules/gst/gst.service";
 import { CopilotService } from "../src/modules/books/copilot.service";
@@ -40,8 +38,6 @@ describe("postgres-backed workflows", () => {
   let books: BooksService;
   let khata: KhataService;
   let intake: IntakeService;
-  let interfactory: InterfactoryService;
-  let factoriesSvc: FactoriesService;
   let muster: MusterService;
   let gst: GstService;
   let copilot: CopilotService;
@@ -83,8 +79,6 @@ describe("postgres-backed workflows", () => {
     const files = new FilesService(prisma as never, audit);
     khata = new KhataService(prisma as never, files);
     intake = new IntakeService(prisma as never, files, expenses, sales, production, books);
-    interfactory = new InterfactoryService(prisma as never, audit, books);
-    factoriesSvc = new FactoriesService(prisma as never, audit, inventory);
     muster = new MusterService(prisma as never, books);
     gst = new GstService(prisma as never);
     copilot = new CopilotService(prisma as never, audit);
@@ -817,75 +811,36 @@ describe("postgres-backed workflows", () => {
     assert.equal(out.youllGive, 163_671);
   });
 
-  it("links four factories, invoices a sister, and settles both AR and AP", async () => {
-    const before = await prisma.factory.count();
-    const plants = [];
-    for (const row of [
-      { name: "South Yard", ownerUsername: "southown" },
-      { name: "East Yard", ownerUsername: "eastown" },
-      { name: "West Yard", ownerUsername: "westown" },
-    ]) {
-      plants.push(await factoriesSvc.create(owner, row));
-    }
-    assert.equal(await prisma.factory.count(), before + 3);
-    const south = plants[0]!.factory;
-    await interfactory.link(owner, south.id);
-    await interfactory.link(owner, plants[1]!.factory.id);
-    await interfactory.link(owner, plants[2]!.factory.id);
-    const sisterCustomer = await prisma.customer.findFirst({
-      where: { factoryId, counterpartyFactoryId: south.id },
-    });
-    assert.ok(sisterCustomer);
-    const slab = await prisma.slab.create({
-      data: { factoryId, slabSerial: "IF-1", varietyName: "Grey" },
-    });
-    const order = (await sales.createOrder(owner, {
-      customerId: sisterCustomer!.id,
+  it("sells to another plant the same way as any customer", async () => {
+    const { factory, asOwner } = await staffFactory("firm");
+    const customer = await sales.createCustomer(asOwner, "South Yard");
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
       orderDate: "2026-09-12",
-      clientOpId: "if-order-1",
-      lines: [{ slabId: slab.id, quantitySqft: 40, rate: 180 }],
+      clientOpId: "firm-order-1",
+      lines: [{ quantitySqft: 40, rate: 180 }],
     })) as { id: string };
-    const inv = await sales.invoice(owner, order.id, "if-inv-1");
-    assert.equal(inv.counterpartyFactoryId, south.id);
-    const payable = await prisma.interfactoryPayable.findUnique({ where: { sourceInvoiceId: inv.id } });
-    assert.ok(payable);
-    assert.equal(payable!.factoryId, south.id);
-    assert.equal(Number(payable!.amount), 7200);
-    const buyerStock = await prisma.slab.findFirst({
-      where: { factoryId: south.id, slabSerial: "IF-1" },
-    });
-    assert.ok(buyerStock);
-    const hidden = await inventory.rawBlocks(south.id);
-    assert.equal(hidden.some((b) => b.serialNumber === "V101"), false);
-
-    const southOwner = await prisma.appUser.findFirst({ where: { factoryId: south.id, role: "owner" } });
-    const asSouth: AuthenticatedUser = {
-      ...owner,
-      id: southOwner!.id,
-      factoryId: south.id,
-      username: southOwner!.username,
-      role: "owner",
-    };
-    const first = await interfactory.payPayable(asSouth, payable!.id, {
+    const inv = await sales.invoice(asOwner, order.id, "firm-inv-1");
+    assert.equal(Number(inv.amount), 7200);
+    const first = await sales.pay(asOwner, inv.id, {
       amount: 7200,
       method: "neft",
       paidAt: "2026-09-12",
-      clientOpId: "if-settle-1",
+      clientOpId: "firm-pay-1",
     });
-    const retry = await interfactory.payPayable(asSouth, payable!.id, {
+    const retry = await sales.pay(asOwner, inv.id, {
       amount: 7200,
       method: "neft",
       paidAt: "2026-09-12",
-      clientOpId: "if-settle-1",
+      clientOpId: "firm-pay-1",
     });
-    assert.equal(first.payment.id, retry.payment.id);
-    const sellerPayments = await prisma.payment.count({ where: { invoiceId: inv.id } });
-    assert.equal(sellerPayments, 1);
-    const pos = await interfactory.positions(owner);
-    const southPos = pos.find((p) => p.sisterFactoryId === south.id);
-    assert.equal(southPos?.arOutstanding, 0);
-    const southPosAp = (await interfactory.positions(asSouth)).find((p) => p.sisterFactoryId === factoryId);
-    assert.equal(southPosAp?.apOutstanding, 0);
+    assert.equal(first.id, retry.id);
+    assert.equal(await prisma.payment.count({ where: { invoiceId: inv.id } }), 1);
+    const outstanding = await books.outstanding(factory.id);
+    assert.equal(outstanding.youllGet, 0);
+    const party = (await books.parties(factory.id)).find((p) => p.name === "South Yard");
+    assert.ok(party);
+    assert.equal(party.kind, "customer");
   });
 
   it("builds a wage sheet from six present days and posts one labour voucher", async () => {

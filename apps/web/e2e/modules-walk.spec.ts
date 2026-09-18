@@ -17,7 +17,6 @@ const routes = [
   "/expenses",
   "/books",
   "/intake",
-  "/interfactory",
   "/muster",
   "/tally",
   "/files",

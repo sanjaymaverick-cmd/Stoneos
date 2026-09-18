@@ -6,7 +6,7 @@ Accepted. 2026-09-12.
 
 ## Context
 
-Khatabook held party balances. Tally holds group / sister-plant settlements. StoneOS already owns yard stock, invoices, payments, and expenses. Cloning Tally Prime or keeping a second live AR book would split the factory.
+Khatabook held party balances. StoneOS owns yard stock, invoices, payments, and expenses. A sister plant is booked as a customer or supplier like any other firm. Cloning Tally Prime or keeping a second live AR book would split the factory.
 
 ## Decision
 
@@ -18,4 +18,4 @@ StoneOS posts one balanced voucher (integer paise) for each invoice, collection,
 - Opening import is not a nightly sync and does not mint INV numbers from debit narration.
 - “Cash 97070” / “Vipul Cash 108162” in Khatabook details is narration, not a payment.
 - A bot may propose intake as supervisor; it must not confirm its own draft.
-- Interfactory AR/AP stays in Tally, not a second StoneOS ledger.
+- Sister-yard trade uses the same invoice/pay/expense vouchers as any firm.

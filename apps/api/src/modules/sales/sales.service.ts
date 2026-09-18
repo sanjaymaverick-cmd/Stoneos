@@ -12,8 +12,7 @@ import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { isUniqueViolation, nextDocumentNumber } from "./document-number";
 import { BooksService } from "../books/books.service";
-import { parseFactoryDateInput, shaClientOpId } from "../books/money";
-import { postPayableForInvoice, recordSettlement } from "./interfactory-posting";
+import { parseFactoryDateInput } from "../books/money";
 
 @Injectable()
 export class SalesService {
@@ -293,60 +292,8 @@ export class SalesService {
             invoiceNumber,
             amount,
             idempotencyKey: clientOpId,
-            counterpartyFactoryId: customer?.counterpartyFactoryId,
           },
         });
-        if (customer?.counterpartyFactoryId) {
-          await postPayableForInvoice(tx, {
-            buyerFactoryId: customer.counterpartyFactoryId,
-            sellerFactoryId: user.factoryId,
-            invoiceId: created.id,
-            amount,
-          });
-          const sellerFactory = await tx.factory.findUnique({ where: { id: user.factoryId } });
-          await this.books.postSisterPurchase(tx, {
-            buyerFactoryId: customer.counterpartyFactoryId,
-            actorId: user.id,
-            invoiceId: created.id,
-            partyName: sellerFactory?.name ?? "Sister plant",
-            amount,
-            clientOpId: shaClientOpId([customer.counterpartyFactoryId, "if-ap", created.id]),
-          });
-          const finished = await tx.inventoryLocation.findFirst({
-            where: { factoryId: customer.counterpartyFactoryId, code: "FINISHED_STOCK" },
-          });
-          for (const line of lines) {
-            if (!line.slabId) continue;
-            const source = await tx.slab.findFirst({
-              where: { id: line.slabId, factoryId: user.factoryId },
-            });
-            if (!source || !finished) continue;
-            const copy = await tx.slab.create({
-              data: {
-                factoryId: customer.counterpartyFactoryId,
-                slabSerial: source.slabSerial,
-                varietyName: source.varietyName,
-                thicknessMm: source.thicknessMm,
-                lengthFt: source.lengthFt,
-                widthFt: source.widthFt,
-                finish: source.finish,
-                locationId: finished.id,
-                salesStatus: "in_stock",
-              },
-            });
-            await tx.inventoryMovement.create({
-              data: {
-                factoryId: customer.counterpartyFactoryId,
-                movementType: "TRANSFER",
-                slabId: copy.id,
-                quantity: 1,
-                idempotencyKey: shaClientOpId([customer.counterpartyFactoryId, "if-stock", created.id, source.id]),
-                actorId: user.id,
-                notes: `sister:${user.factoryId}:${source.id}`,
-              },
-            });
-          }
-        }
         await tx.auditEvent.create({
           data: {
             factoryId: user.factoryId,
@@ -354,7 +301,7 @@ export class SalesService {
             action: "sales.invoice",
             entityType: "invoice",
             entityId: created.id,
-            payload: { amount, invoiceNumber, counterpartyFactoryId: customer?.counterpartyFactoryId },
+            payload: { amount, invoiceNumber },
           },
         });
         await this.books.postInvoice(tx, user, {
@@ -439,22 +386,6 @@ export class SalesService {
           clientOpId: input.clientOpId,
           paidAt: parseFactoryDateInput(input.paidAt),
         });
-        if (invoice.counterpartyFactoryId) {
-          const payable = await tx.interfactoryPayable.findUnique({
-            where: { sourceInvoiceId: invoice.id },
-          });
-          if (payable) {
-            await recordSettlement(tx, {
-              buyerFactoryId: payable.factoryId,
-              payableId: payable.id,
-              amount: input.amount,
-              method: input.method,
-              paidAt: parseFactoryDateInput(input.paidAt),
-              clientOpId: input.clientOpId,
-              sellerPaymentId: payment.id,
-            });
-          }
-        }
         return payment;
       } catch (error) {
         if (String(error).includes("Payment exceeds invoice amount")) {
