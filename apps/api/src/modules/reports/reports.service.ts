@@ -95,7 +95,15 @@ export class ReportsService {
             line.salesOrder.status === "DELIVERED",
         )
         .reduce((sum, line) => sum + Number(line.quantitySqft), 0);
-      return { soldSqft, weightTons: Number(block.weightTons ?? 0) };
+      // A slab counts as committed once it leaves in_stock: reserved and dispatched both
+      // appear in soldSqft above, so numerator and denominator agree on "sold".
+      const unsoldSlabCount = block.slabs.filter((s) => s.salesStatus === "in_stock").length;
+      return {
+        soldSqft,
+        weightTons: Number(block.weightTons ?? 0),
+        slabCount: block.slabs.length,
+        unsoldSlabCount,
+      };
     });
     const recovery = factoryRecovery(recoveryRows);
     const invoicedTotal = Number(invoicedAll._sum.amount ?? 0);
@@ -104,7 +112,9 @@ export class ReportsService {
     const snap: CeoSnapshot = {
       factoryName: factory.name,
       operatingStatus: factory.operatingStatus,
-      recoveryRatio: recovery,
+      recoveryRatio: recovery.ratio,
+      settledBlocks: recovery.settledBlocks,
+      openBlocks: recovery.openBlocks,
       outstandingAr: invoicedTotal - creditedTotal - collectedTotal,
       invoicedMtd: Number(invoicedMtd._sum.amount ?? 0),
       collectedMtd: Number(collectedMtd._sum.amount ?? 0),
@@ -126,11 +136,21 @@ export class ReportsService {
       source: "stoneos-ledger" as const,
       briefKind: "snapshot-copilot" as const,
       recoveryBenchmark: 105,
+      recoveryBasis: {
+        settledBlocks: recovery.settledBlocks,
+        openBlocks: recovery.openBlocks,
+        soldSqft: recovery.soldSqft,
+        tons: recovery.tons,
+      },
       narrative: ceoNarrative(snap, exceptions),
       exceptions,
       blockRecoveries: recoveryRows
         .filter((r) => r.soldSqft > 0)
-        .map((r) => ({ ...r, ratio: recoveryRatio(r.soldSqft, r.weightTons) }))
+        .map((r) => ({
+          ...r,
+          settled: r.unsoldSlabCount === 0,
+          ratio: recoveryRatio(r.soldSqft, r.weightTons),
+        }))
         .slice(0, 12),
     };
   }
