@@ -1,6 +1,37 @@
 # Internal credentials
 
-There is no Clerk, Supabase, or public signup. The first owner is created by a one-time bootstrap CLI that ships in the API image. Owners and managers issue staff usernames and temporary passwords. Passwords are scrypt hashes. Generated passwords force a change before any other write.
+There is no Clerk, Supabase, or public signup. The first owner is created by a one-time bootstrap CLI that ships in the API image. The owner issues staff usernames and temporary passwords. Passwords are scrypt hashes. Generated passwords force a change before any other write.
+
+## Who may act on whose account
+
+Handing out a rank is the owner's alone. Creating an account and changing an
+existing one's role are the same call and both set a rank, so both are refused
+to everyone else — a manager who could mint roles could mint a second manager,
+or promote a deputy past the people they were hired under, and the hierarchy
+would only ever be as firm as the most junior person allowed to edit it.
+
+Everything that does not set a rank — reset a password, disable, reactivate —
+follows the chain of command strictly downward:
+
+| | owner | manager | admin | supervisor | specialists |
+|---|---|---|---|---|---|
+| **owner** | yes¹ | yes | yes | yes | yes |
+| **manager** | no | no | yes | yes | yes |
+| everyone else | no | no | no | no | no |
+
+¹ An owner may act on a co-owner but not revoke their own owner account.
+
+A manager reaching sideways is the case worth naming: two managers who disagree
+must not be able to settle it by switching each other off. Specialist roles
+(accountant, auditor, sales, inventory, operator) are level with one another for
+the same reason — an accountant is not above a storekeeper, they answer to
+different people about different things. Admin is a desk, not a rung: it
+configures the system and manages nobody.
+
+A consequence worth stating plainly: **onboarding is the owner's job.** A
+manager can keep the roster running — reset a forgotten password, disable
+someone who walked off, bring them back — but a new hire's login comes from the
+owner, and so does every promotion.
 
 ## Access lifecycle
 

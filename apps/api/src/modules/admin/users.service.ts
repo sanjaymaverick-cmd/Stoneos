@@ -9,6 +9,8 @@ import { generateTemporaryPassword, hashPassword } from "@stoneos/auth";
 import {
   OWNER_ROLE,
   STAFF_PROVISIONABLE_ROLES,
+  canAdminister,
+  canAssignRoles,
   canGrantOwner,
   canManageUsers,
   isRole,
@@ -46,8 +48,11 @@ export class UsersService {
     actor: AuthenticatedUser,
     input: { username: string; name?: string; email?: string | null; role: string },
   ) {
-    if (!canManageUsers(actor.role)) {
-      throw new ForbiddenException("Only owners and managers can manage users");
+    // Creating an account and changing an account's role are the same call, and both
+    // hand out a rank. Only the owner does that; a manager who could would be able to
+    // appoint their own peers and superiors.
+    if (!canAssignRoles(actor.role)) {
+      throw new ForbiddenException("Only the owner can assign or change a role");
     }
     if (!isRole(input.role)) throw new BadRequestException("Invalid role");
     if (input.role === OWNER_ROLE && !canGrantOwner(actor.role)) {
@@ -206,12 +211,23 @@ export class UsersService {
     return target;
   }
 
+  /**
+   * Who may act on whose account, for the verbs that do not hand out a rank:
+   * revoke, reactivate, reset a password.
+   *
+   * Strictly downward. A manager reaches everyone below them and no further — not
+   * another manager, not an owner — so nobody can be disabled by an equal in a
+   * disagreement, and the chain of command cannot be edited from the middle.
+   */
   private assertOwnerGuard(actor: AuthenticatedUser, targetRole: Role, targetId: string, verb: string) {
     if (!canManageUsers(actor.role)) {
       throw new ForbiddenException("Only owners and managers can manage users");
     }
     if (targetRole === OWNER_ROLE && !canGrantOwner(actor.role)) {
       throw new ForbiddenException(`Only an owner can ${verb} an owner account`);
+    }
+    if (!canAdminister(actor.role, targetRole)) {
+      throw new ForbiddenException(`A ${actor.role} cannot ${verb} a ${targetRole} account`);
     }
     if (targetId === actor.id && targetRole === OWNER_ROLE) {
       throw new ForbiddenException("You cannot revoke your own owner account");

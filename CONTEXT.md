@@ -3,8 +3,8 @@
 Factory-operations language. Implementation details do not belong here.
 
 - **Factory** — a tenant. All operational records belong to exactly one factory.
-- **Owner** — supreme authority for a factory. The only role that may create, modify, or revoke owner accounts. An owner cannot strip their own owner role.
-- **Manager** — may issue, reset, disable, or delete staff credentials except owners.
+- **Owner** — supreme authority for a factory. The only role that may assign a role at all: issuing a login and changing someone's role are both the owner's, nobody else's. An owner cannot strip their own owner role.
+- **Manager** — runs the people below them: reset, disable, or reactivate anyone of lower rank. Cannot issue a login, cannot change a role, and cannot touch a peer manager or an owner.
 - **Admin** — systems and configuration role. Cannot manage people and cannot touch owner accounts.
 - **Supervisor** — operational data entry and approval. No user management, no historical imports.
 - **Operator** — production and machine input only.
@@ -12,6 +12,7 @@ Factory-operations language. Implementation details do not belong here.
 - **Sales** — customers, quotations, reservations, dispatch, invoices.
 - **Accountant** — expenses, payments, Tally, exports.
 - **Auditor** — read-only commercial and inventory history.
+- **Rank** — who may act on whose account: owner, then manager, then admin, then supervisor, then the specialist roles (accountant, auditor, sales, inventory, operator) as equals. Acting on an account only ever goes downward — never on a peer, never upward — so the chain of command cannot be edited from inside it.
 - **Raw block** — purchased or opening-counted granite block. Serial unique within a factory.
 - **Cutting session** — one block on a gang saw. May span multiple operational days.
 - **Operational day** — 07:00 to 07:00. Daily production totals are derived from sessions, never typed as free-floating aggregates.

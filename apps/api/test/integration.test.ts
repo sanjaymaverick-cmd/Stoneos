@@ -223,15 +223,94 @@ describe("postgres-backed workflows", () => {
     assert.equal(onTemp("/api/v1/reports/export/slabs.csv"), false);
   });
 
-  it("rejects a manager creating an owner", async () => {
-    const manager = await users.provision(owner, { username: "mgr1", role: "manager", name: "Mgr" });
+  it("keeps the chain of command: only the owner hands out roles, and nobody edits a peer", async () => {
+    const { asOwner } = await staffFactory("hierarchy");
+
+    const manager = await users.provision(asOwner, { username: "h-mgr", role: "manager", name: "Mgr" });
+    const peerManager = await users.provision(asOwner, { username: "h-mgr2", role: "manager" });
+    const admin = await users.provision(asOwner, { username: "h-admin", role: "admin" });
+    const operator = await users.provision(asOwner, { username: "h-operator", role: "operator" });
+    const accountant = await users.provision(asOwner, { username: "h-accounts", role: "accountant" });
     const asManager: AuthenticatedUser = {
-      ...owner,
+      ...asOwner,
       id: manager.user.id,
       role: "manager",
-      username: "mgr1",
+      username: "h-mgr",
     };
-    await assert.rejects(() => users.provision(asManager, { username: "otherowner", role: "owner" }));
+
+    // Handing out a rank is the owner's alone — not creating an account, not changing
+    // an existing one's role, not even for a role far below the manager's own.
+    await assert.rejects(
+      () => users.provision(asManager, { username: "h-newhand", role: "operator" }),
+      /only the owner can assign or change a role/i,
+    );
+    await assert.rejects(
+      () => users.provision(asManager, { username: "h-operator", role: "supervisor" }),
+      /only the owner can assign or change a role/i,
+    );
+    await assert.rejects(
+      () => users.provision(asManager, { username: "h-otherowner", role: "owner" }),
+      /only the owner can assign or change a role/i,
+    );
+    assert.equal(
+      await prisma.appUser.count({ where: { username: "h-newhand" } }),
+      0,
+      "a refused provision must not have created the account",
+    );
+    assert.equal(
+      (await prisma.appUser.findUniqueOrThrow({ where: { id: operator.user.id } })).role,
+      "operator",
+      "a refused role change must leave the role alone",
+    );
+
+    // A manager still runs the people below them: reset, disable, bring back.
+    const reset = await users.resetPassword(asManager, operator.user.id);
+    assert.ok(reset.password);
+    await users.revoke(asManager, accountant.user.id);
+    const restored = await users.reactivate(asManager, accountant.user.id);
+    assert.equal(restored.reactivated, true);
+    // An admin ranks below a manager, so that reach extends there too.
+    await users.revoke(asManager, admin.user.id);
+    await users.reactivate(asManager, admin.user.id);
+
+    // But never sideways or upward. A disagreement between two managers cannot be
+    // settled by one of them switching the other off.
+    await assert.rejects(
+      () => users.revoke(asManager, peerManager.user.id),
+      /a manager cannot revoke a manager account/i,
+    );
+    await assert.rejects(
+      () => users.resetPassword(asManager, peerManager.user.id),
+      /a manager cannot reset a manager account/i,
+    );
+    await assert.rejects(
+      () => users.revoke(asManager, asOwner.id),
+      /only an owner can revoke an owner account/i,
+    );
+    assert.equal(
+      (await prisma.appUser.findUniqueOrThrow({ where: { id: peerManager.user.id } })).active,
+      true,
+      "the peer manager must still be enabled",
+    );
+
+    // An admin manages nobody at all — the role is a desk, not a rung.
+    const asAdmin: AuthenticatedUser = {
+      ...asOwner,
+      id: admin.user.id,
+      role: "admin",
+      username: "h-admin",
+    };
+    await assert.rejects(
+      () => users.revoke(asAdmin, operator.user.id),
+      /only owners and managers can manage users/i,
+    );
+
+    // The owner reaches all of them.
+    await users.revoke(asOwner, peerManager.user.id);
+    assert.equal(
+      (await prisma.appUser.findUniqueOrThrow({ where: { id: peerManager.user.id } })).active,
+      false,
+    );
   });
 
   it("isolates raw blocks across factories", async () => {
@@ -269,10 +348,10 @@ describe("postgres-backed workflows", () => {
   });
 
   it("opening approval requires a different user and then goes live", async () => {
-    const manager = await prisma.appUser.findFirst({ where: { factoryId, username: "mgr1" } });
+    const manager = await users.provision(owner, { username: "mgr1", role: "manager", name: "Mgr" });
     const asManager: AuthenticatedUser = {
       ...owner,
-      id: manager!.id,
+      id: manager.user.id,
       role: "manager",
       username: "mgr1",
     };

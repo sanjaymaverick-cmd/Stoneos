@@ -1,6 +1,10 @@
 import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
-import { USER_MANAGEMENT_ROLES, provisionUserRequestSchema } from "@stoneos/contracts";
+import {
+  ROLE_ASSIGNMENT_ROLES,
+  USER_MANAGEMENT_ROLES,
+  provisionUserRequestSchema,
+} from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
 import { ZodPipe } from "../../common/zod-pipe";
 import { UsersService } from "./users.service";
@@ -17,7 +21,9 @@ export class UsersController {
     return this.service.list(user.factoryId);
   }
 
+  /** Create an account, or change one's role. Owner only — this hands out a rank. */
   @Post()
+  @Roles(...ROLE_ASSIGNMENT_ROLES)
   provision(
     @CurrentUser() user: AuthenticatedUser,
     @Body(new ZodPipe(provisionUserRequestSchema))
