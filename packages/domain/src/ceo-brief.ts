@@ -19,6 +19,8 @@ export type CeoBriefInput = {
   openCutting: number;
   blocksOnHand: number;
   slabsOnHand: number;
+  /** Cash counter sales this month that carry no invoice and no GST document. */
+  unbilledCashMtd?: number;
   /** Blocks whose recovery is still undecided. Drives RECOVERY_NOT_MEASURABLE. */
   openBlocks?: number;
   /** Blocks the recovery ratio is measured over. */
@@ -69,6 +71,16 @@ export function ceoExceptions(input: CeoBriefInput): CeoException[] {
       code: "AR_ELEVATED",
       severity: "warn",
       message: `Outstanding collections ₹${Math.round(input.outstandingAr).toLocaleString("en-IN")}.`,
+    });
+  }
+  if ((input.unbilledCashMtd ?? 0) > 0) {
+    const share = input.invoicedMtd > 0
+      ? (input.unbilledCashMtd! / (input.invoicedMtd + input.unbilledCashMtd!)) * 100
+      : 100;
+    out.push({
+      code: "UNBILLED_CASH_SALES",
+      severity: share >= 25 ? "warn" : "info",
+      message: `₹${Math.round(input.unbilledCashMtd!).toLocaleString("en-IN")} of cash sales this month carry no invoice (${share.toFixed(0)}% of turnover). They are outside GSTR-1; the tax on a taxable supply is still due.`,
     });
   }
   if (input.maintenanceDue > 0) {

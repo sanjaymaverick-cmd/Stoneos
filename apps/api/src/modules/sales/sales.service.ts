@@ -107,6 +107,7 @@ export class SalesService {
       orderDate: string;
       lines: Array<{ slabId?: string; quantitySqft: number; rate: number; baseVersion?: number }>;
       clientOpId: string;
+      billingMode?: "gst_invoice" | "cash_unbilled";
     },
   ) {
     await this.assertCustomer(user.factoryId, input.customerId);
@@ -157,6 +158,7 @@ export class SalesService {
           factoryId: user.factoryId,
           customerId: input.customerId,
           status: "CONFIRMED",
+          billingMode: input.billingMode ?? "gst_invoice",
           orderDate: new Date(input.orderDate),
           lines: { create: input.lines },
         },
@@ -288,8 +290,24 @@ export class SalesService {
     });
   }
 
-  async invoice(user: AuthenticatedUser, salesOrderId: string, clientOpId: string) {
+  async invoice(
+    user: AuthenticatedUser,
+    salesOrderId: string,
+    clientOpId: string,
+    charges: Array<{ label: string; amount: number; taxable?: boolean }> = [],
+  ) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
+    if (order.billingMode === "cash_unbilled") {
+      throw new BadRequestException("This order is a cash sale; it cannot be invoiced");
+    }
+    const cleanCharges = charges.map((c) => {
+      const label = c.label?.trim();
+      if (!label) throw new BadRequestException("Every charge needs a label");
+      if (!Number.isFinite(c.amount) || c.amount <= 0) {
+        throw new BadRequestException(`Charge "${label}" must be a positive amount`);
+      }
+      return { label, amount: c.amount, taxable: c.taxable !== false };
+    });
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.invoice.findUnique({
         where: { factoryId_idempotencyKey: { factoryId: user.factoryId, idempotencyKey: clientOpId } },
@@ -299,12 +317,17 @@ export class SalesService {
       if (duplicate) throw new BadRequestException("Order already invoiced");
       const lines = await tx.salesLineItem.findMany({ where: { salesOrderId: order.id } });
       // Rates are quoted ex-GST, so this sum is the taxable value, not the payable.
-      const taxable = lines.reduce((sum, line) => sum + Number(line.quantitySqft) * Number(line.rate), 0);
+      const lineTotal = lines.reduce((sum, line) => sum + Number(line.quantitySqft) * Number(line.rate), 0);
+      // Packaging, demurrage, labour and the like are part of the transaction value,
+      // so they are taxed with the slabs unless explicitly billed as a reimbursement.
+      const chargeTaxable = cleanCharges.filter((c) => c.taxable).reduce((sum, c) => sum + c.amount, 0);
+      const chargeExempt = cleanCharges.filter((c) => !c.taxable).reduce((sum, c) => sum + c.amount, 0);
+      const taxable = lineTotal + chargeTaxable;
       const customer = await tx.customer.findFirst({
         where: { id: order.customerId, factoryId: user.factoryId },
       });
       const gst = await this.resolveGst(tx, user.factoryId, taxable, customer);
-      const amount = minorToRupees(gst.totalMinor);
+      const amount = minorToRupees(gst.totalMinor + rupeesToMinor(chargeExempt));
       const invoiceNumber = await nextDocumentNumber(tx, user.factoryId, "INVOICE");
       try {
         const created = await tx.invoice.create({
@@ -318,11 +341,14 @@ export class SalesService {
             cgstAmount: minorToRupees(gst.cgstMinor),
             sgstAmount: minorToRupees(gst.sgstMinor),
             igstAmount: minorToRupees(gst.igstMinor),
+            exemptAmount: chargeExempt,
             gstRatePct: gst.ratePct,
             placeOfSupply: gst.placeOfSupply,
             supplierState: gst.supplierState,
             idempotencyKey: clientOpId,
+            charges: { create: cleanCharges },
           },
+          include: { charges: true },
         });
         await tx.auditEvent.create({
           data: {
@@ -331,13 +357,21 @@ export class SalesService {
             action: "sales.invoice",
             entityType: "invoice",
             entityId: created.id,
-            payload: { amount, taxable, invoiceNumber, gstRatePct: gst.ratePct },
+            payload: {
+              amount,
+              taxable,
+              lineTotal,
+              charges: cleanCharges,
+              invoiceNumber,
+              gstRatePct: gst.ratePct,
+            },
           },
         });
         await this.books.postInvoice(tx, user, {
           invoiceId: created.id,
           customerName: customer?.name ?? "Unknown",
           gst,
+          exemptMinor: rupeesToMinor(chargeExempt),
           clientOpId,
         });
         return created;
@@ -424,6 +458,73 @@ export class SalesService {
         throw error;
       }
     }, { timeout: 30_000, maxWait: 10_000 });
+  }
+
+  /**
+   * Settle an order as a cash counter sale: no invoice, no GST document, nothing in
+   * GSTR-1. The stock has still left the yard and the cash has still arrived, so both
+   * are recorded and the revenue sits on its own ledger.
+   *
+   * This records a decision; it does not discharge a liability. Under GST a taxable
+   * supply is taxable whether or not an invoice was raised.
+   */
+  async recordCashSale(
+    user: AuthenticatedUser,
+    salesOrderId: string,
+    input: { amount: number; saleDate: string; clientOpId: string; buyerName?: string; note?: string },
+  ) {
+    if (!Number.isFinite(input.amount) || input.amount <= 0) {
+      throw new BadRequestException("Amount must be positive");
+    }
+    if (!input.clientOpId) throw new BadRequestException("clientOpId is required");
+    const order = await this.requireOrder(user.factoryId, salesOrderId);
+    if (order.billingMode !== "cash_unbilled") {
+      throw new BadRequestException("Order is not marked as a cash sale");
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.cashSale.findUnique({
+        where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId } },
+      });
+      if (existing) return existing;
+      const invoiced = await tx.invoice.findFirst({ where: { salesOrderId: order.id } });
+      if (invoiced) throw new BadRequestException("Order is already invoiced");
+
+      const sale = await tx.cashSale.create({
+        data: {
+          factoryId: user.factoryId,
+          salesOrderId: order.id,
+          buyerName: input.buyerName?.trim() || null,
+          amount: input.amount,
+          saleDate: parseFactoryDateInput(input.saleDate),
+          note: input.note?.trim() || null,
+          clientOpId: input.clientOpId,
+          recordedBy: user.id,
+        },
+      });
+      await this.books.postCashSale(tx, user, {
+        cashSaleId: sale.id,
+        amountMinor: rupeesToMinor(input.amount),
+        memo: `Cash sale${input.buyerName ? ` to ${input.buyerName.trim()}` : ""} (no invoice)`,
+        clientOpId: `cashsale:${input.clientOpId}`,
+        saleDate: parseFactoryDateInput(input.saleDate),
+      });
+      await tx.auditEvent.create({
+        data: {
+          factoryId: user.factoryId,
+          actorId: user.id,
+          action: "sales.cash_sale",
+          entityType: "cash_sale",
+          entityId: sale.id,
+          payload: {
+            salesOrderId: order.id,
+            amount: input.amount,
+            buyerName: input.buyerName ?? null,
+            unbilled: true,
+          },
+        },
+      });
+      return sale;
+    });
   }
 
   async returnSlabs(user: AuthenticatedUser, salesOrderId: string, slabIds: string[], reason: string) {

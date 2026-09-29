@@ -17,6 +17,9 @@ export const SYSTEM_LEDGERS: Array<{
   { code: "AP", name: "Accounts payable", group: "liability", kind: "ap" },
   { code: "SALES", name: "Sales", group: "income", kind: "sales" },
   { code: "CN_CONTRA", name: "Credit notes", group: "income", kind: "sales" },
+  // Unbilled counter sales stay off the sales ledger so invoiced turnover can always
+  // be reconciled against the GST returns without subtracting anything by hand.
+  { code: "SALES_UNBILLED", name: "Cash sales (no invoice)", group: "income", kind: "sales" },
   // One ledger per head: GSTR-1 reports CGST, SGST and IGST separately, and a single
   // combined ledger cannot be split back apart once posted.
   { code: "GST_OUTPUT_CGST", name: "CGST output", group: "liability", kind: "gst" },

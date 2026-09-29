@@ -62,6 +62,7 @@ export class SalesController {
       customerId: string;
       orderDate: string;
       clientOpId: string;
+      billingMode?: "gst_invoice" | "cash_unbilled";
       lines: Array<{ slabId?: string; quantitySqft: number; rate: number; baseVersion?: number }>;
     },
   ) {
@@ -93,9 +94,29 @@ export class SalesController {
   invoice(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: { clientOpId: string },
+    @Body()
+    body: {
+      clientOpId: string;
+      /** Packaging, demurrage, labour and the like. Taxed with the slabs by default. */
+      charges?: Array<{ label: string; amount: number; taxable?: boolean }>;
+    },
   ) {
-    return this.service.invoice(user, id, body.clientOpId);
+    return this.service.invoice(user, id, body.clientOpId, body.charges ?? []);
+  }
+
+  /**
+   * Settle an order in cash with no invoice. Raises no GST document and never reaches
+   * GSTR-1; the stock movement and the cash are still recorded.
+   */
+  @Post("sales-orders/:id/cash-sale")
+  @Roles(...PAYMENT_ROLES)
+  cashSale(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body()
+    body: { amount: number; saleDate: string; clientOpId: string; buyerName?: string; note?: string },
+  ) {
+    return this.service.recordCashSale(user, id, body);
   }
 
   @Post("invoices/:id/payments")

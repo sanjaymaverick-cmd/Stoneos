@@ -103,6 +103,12 @@ enum SalesOrderStatus {
   CANCELLED
 }
 
+/// How an order is settled. A cash sale raises no invoice and no GST document.
+enum BillingMode {
+  gst_invoice
+  cash_unbilled
+}
+
 enum QuotationStatus {
   DRAFT
   SENT
@@ -157,6 +163,7 @@ enum VoucherSource {
   sales_invoice
   sales_pay
   sales_cn
+  cash_sale
   expense_create
   intake_confirm
   muster_pay
@@ -235,6 +242,7 @@ model Factory {
   workers            Worker[]
   attendance         Attendance[]
   wageSheets         WageSheet[]
+  cashSales          CashSale[]
 
   @@map("factory")
 }
@@ -649,6 +657,8 @@ model SalesOrder {
   customerId  String           @map("customer_id")
   customer    Customer         @relation(fields: [customerId], references: [id])
   status      SalesOrderStatus @default(DRAFT)
+  /// gst_invoice raises a tax invoice; cash_unbilled settles in cash with no invoice.
+  billingMode BillingMode      @default(gst_invoice) @map("billing_mode")
   orderDate   DateTime         @map("order_date") @db.Date
   createdAt   DateTime         @default(now()) @map("created_at")
   version     Int              @default(0)
@@ -658,6 +668,7 @@ model SalesOrder {
   invoices    Invoice[]
   returns     CustomerReturn[]
   creditNotes CreditNote[]
+  cashSale    CashSale?
 
   @@index([factoryId, orderDate])
   @@map("sales_order")
@@ -741,6 +752,8 @@ model Invoice {
   cgstAmount     Decimal    @default(0) @map("cgst_amount") @db.Decimal(14, 2)
   sgstAmount     Decimal    @default(0) @map("sgst_amount") @db.Decimal(14, 2)
   igstAmount     Decimal    @default(0) @map("igst_amount") @db.Decimal(14, 2)
+  /// Charges billed outside the taxable value (pure reimbursements). Added to the payable untaxed.
+  exemptAmount   Decimal    @default(0) @map("exempt_amount") @db.Decimal(14, 2)
   /// Frozen at issue. Tax is a historical fact and is never recomputed from live profile rows.
   gstRatePct     Decimal    @default(0) @map("gst_rate_pct") @db.Decimal(5, 2)
   placeOfSupply  String?    @map("place_of_supply")
@@ -750,6 +763,7 @@ model Invoice {
   version        Int        @default(0)
   payments       Payment[]
   creditNotes    CreditNote[]
+  charges        InvoiceCharge[]
   eInvoice       EInvoice?
 
   @@unique([factoryId, invoiceNumber])
@@ -1227,4 +1241,45 @@ model WageLine {
 
   @@unique([sheetId, workerId])
   @@map("wage_line")
+}
+
+/// A charge billed alongside the slabs: packaging, demurrage, labour, handling.
+/// Section 15 makes ancillary charges part of the transaction value, so these are
+/// taxed with the principal supply unless explicitly marked otherwise.
+model InvoiceCharge {
+  id        String   @id @default(uuid())
+  invoiceId String   @map("invoice_id")
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  label     String
+  amount    Decimal  @db.Decimal(14, 2)
+  /// False only for a genuine pure-agent reimbursement. Default is taxed.
+  taxable   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([invoiceId])
+  @@map("invoice_charge")
+}
+
+/// A counter sale settled in cash against no invoice. Stock still leaves the yard and
+/// the cash is still booked, so the movement is auditable; it simply carries no GST
+/// document and is therefore absent from GSTR-1. Under GST a taxable supply attracts
+/// tax whether or not an invoice was raised: this records the decision, it does not
+/// discharge the liability.
+model CashSale {
+  id           String     @id @default(uuid())
+  factoryId    String     @map("factory_id")
+  factory      Factory    @relation(fields: [factoryId], references: [id])
+  salesOrderId String     @unique @map("sales_order_id")
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id])
+  buyerName    String?    @map("buyer_name")
+  amount       Decimal    @db.Decimal(14, 2)
+  saleDate     DateTime   @map("sale_date") @db.Date
+  note         String?
+  clientOpId   String     @map("client_op_id")
+  recordedBy   String     @map("recorded_by")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  @@unique([factoryId, clientOpId])
+  @@index([factoryId, saleDate])
+  @@map("cash_sale")
 }

@@ -18,14 +18,22 @@ export class BooksService {
   async postInvoice(
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
-    input: { invoiceId: string; customerName: string; gst: GstBreakdown; clientOpId: string },
+    input: {
+      invoiceId: string;
+      customerName: string;
+      gst: GstBreakdown;
+      /** Charges billed outside the taxable value. Owed by the customer, never taxed. */
+      exemptMinor?: number;
+      clientOpId: string;
+    },
   ) {
     const party = await ensureParty(tx, user.factoryId, input.customerName, "customer");
     const gst = input.gst;
     // AR is the full payable; sales is the taxable value; each tax head stands alone.
+    const exempt = input.exemptMinor ?? 0;
     const lines: PostLine[] = [
-      { ledgerCode: "AR", debit: gst.totalMinor, credit: 0, partyId: party.id },
-      { ledgerCode: "SALES", debit: 0, credit: gst.taxableMinor },
+      { ledgerCode: "AR", debit: gst.totalMinor + exempt, credit: 0, partyId: party.id },
+      { ledgerCode: "SALES", debit: 0, credit: gst.taxableMinor + exempt },
     ];
     for (const [code, amount] of gstOutputLines(gst)) {
       lines.push({ ledgerCode: code, debit: 0, credit: amount });
@@ -104,6 +112,31 @@ export class BooksService {
       invoiceId: input.invoiceId,
       memo: "Credit note",
       lines,
+    });
+  }
+
+  /**
+   * A counter sale settled in cash against no invoice. Cash is real and so is the
+   * stock that left, so both are booked; the revenue simply lands on its own ledger.
+   */
+  async postCashSale(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    input: { cashSaleId: string; amountMinor: number; memo: string; clientOpId: string; saleDate?: Date },
+  ) {
+    return postVoucher(tx, {
+      factoryId: user.factoryId,
+      type: "receipt",
+      source: "cash_sale",
+      clientOpId: input.clientOpId,
+      createdBy: user.id,
+      operationalDate: input.saleDate,
+      sourceId: input.cashSaleId,
+      memo: input.memo,
+      lines: [
+        { ledgerCode: "CASH", debit: input.amountMinor, credit: 0 },
+        { ledgerCode: "SALES_UNBILLED", debit: 0, credit: input.amountMinor },
+      ],
     });
   }
 

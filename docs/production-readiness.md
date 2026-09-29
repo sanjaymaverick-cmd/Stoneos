@@ -43,6 +43,12 @@ Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.s
 - [x] Khata customer-list import: 46 parties, AR ₹1,25,61,248, AP ₹1,63,671 as of 2026-09-12; supervisor cannot import
 - [x] Live Khatabook PDF parser + totals lock
 - [x] Supervisor rokad/DPR intake: proposer cannot confirm; PDF is unreadable; cash drawer lock blocks further cash vouchers
+- [x] Retail buyers without a GSTIN are taxed and filed as B2CS/B2CL, never B2B
+- [x] Invoice charges (packaging, demurrage, labour) taxed with the principal supply;
+      `taxable: false` reimbursements billed untaxed on `exemptAmount`
+- [x] Cash sales (`billingMode: cash_unbilled`) raise no invoice and are absent from
+      GSTR-1; cash, stock and audit are still recorded on a separate `SALES_UNBILLED`
+      ledger, reported as `excludedCashSales` and raised as `UNBILLED_CASH_SALES`
 - [x] GST 18% **exclusive** on sales/CN vouchers, split by place of supply onto
       `GST_OUTPUT_CGST` / `_SGST` / `_IGST` (intra-state 9+9, inter-state 18); rate,
       both state codes and each head frozen on the document; GSTR-1 exports per-head
