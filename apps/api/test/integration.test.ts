@@ -73,9 +73,9 @@ describe("postgres-backed workflows", () => {
     const audit = new AuditService(prisma as never);
     auth = new AuthService(prisma as never, audit);
     users = new UsersService(prisma as never, audit);
-    inventory = new InventoryService(prisma as never, audit);
-    production = new ProductionService(prisma as never, audit);
     books = new BooksService(prisma as never);
+    inventory = new InventoryService(prisma as never, audit, books);
+    production = new ProductionService(prisma as never, audit);
     sales = new SalesService(prisma as never, audit, books);
     expenses = new ExpensesService(prisma as never, books);
     const files = new FilesService(prisma as never, audit);
@@ -1276,6 +1276,122 @@ describe("postgres-backed workflows", () => {
       where: { factoryId: factory.id, action: "sales.cash_sale" },
     });
     assert.ok(audit, "a cash sale is still audited");
+  });
+
+  it("claims input credit on a block purchase at 5% and nets it against 18% output", async () => {
+    const { factory, asOwner } = await staffFactory("itc");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
+    const supplier = await inventory.createSupplier(asOwner, "Kishangarh Quarry", undefined, {
+      gstin: "08AABCQ1111K1Z0",
+    });
+
+    // A rough block is HSN 2516 at 5%, not the 18% a finished slab carries.
+    const received = (await inventory.receiveBlock(asOwner, {
+      serialNumber: "ITC-1",
+      varietyName: "Kashmir White",
+      supplierId: supplier.id,
+      clientOpId: "itc-recv",
+      weightTons: 20,
+      purchaseTaxable: 100000,
+    })) as { block: { id: string } };
+    const block = await prisma.rawBlock.findUniqueOrThrow({ where: { id: received.block.id } });
+    assert.equal(Number(block.purchaseGstRatePct), 5, "rough blocks default to the 5% slab");
+    assert.equal(Number(block.purchaseCgst), 2500);
+    assert.equal(Number(block.purchaseSgst), 2500);
+    assert.equal(Number(block.purchaseIgst), 0);
+    assert.equal(Number(block.purchaseTaxable), 100000, "cost basis excludes recoverable tax");
+    assert.equal(Number(block.invoicedAmount), 105000, "the vendor is owed the whole bill");
+
+    const ledgerTotal = async (code: string, credit = false) => {
+      const ledger = await prisma.ledger.findFirst({ where: { factoryId: factory.id, code } });
+      if (!ledger) return 0;
+      const agg = await prisma.voucherLine.aggregate({
+        where: { ledgerId: ledger.id },
+        _sum: { credit: true, debit: true },
+      });
+      const d = agg._sum.debit ?? 0;
+      const c = agg._sum.credit ?? 0;
+      return credit ? c - d : d - c;
+    };
+    assert.equal(await ledgerTotal("STOCK"), 10_000_000, "stock carries the pre-tax value");
+    assert.equal(await ledgerTotal("GST_INPUT_CGST"), 250_000);
+    assert.equal(await ledgerTotal("GST_INPUT_SGST"), 250_000);
+    assert.equal(await ledgerTotal("AP", true), 10_500_000, "the supplier is owed taxable + tax");
+
+    // A consumable on a different slab: the rate is per spend, not global.
+    await expenses.create(asOwner, {
+      category: "consumables",
+      amount: 11200,
+      taxableAmount: 10000,
+      gstRatePct: 12,
+      expenseDate: "2026-09-12",
+      clientOpId: "itc-exp",
+    });
+    const spend = await prisma.expense.findFirstOrThrow({
+      where: { factoryId: factory.id, idempotencyKey: "itc-exp" },
+    });
+    assert.equal(Number(spend.gstRatePct), 12, "consumables carry their own slab");
+    assert.equal(Number(spend.cgstAmount) + Number(spend.sgstAmount), 1200);
+    assert.equal(Number(spend.taxableAmount), 10000);
+    assert.equal(
+      await ledgerTotal("EXP_MISC"),
+      1_000_000,
+      "the expense ledger carries the pre-tax value, not the whole bill",
+    );
+
+    // Sell finished slabs at 18% and the position nets output against input.
+    const customer = await sales.createCustomer(asOwner, "Slab Buyer", undefined, {
+      gstin: "08AABCS2222L1Z0",
+    });
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-12",
+      clientOpId: "itc-order",
+      lines: [{ quantitySqft: 100, rate: 100 }],
+    })) as { id: string };
+    const invoice = await sales.invoice(asOwner, order.id, "itc-inv");
+    assert.equal(Number(invoice.gstRatePct), 18, "finished slabs stay on 18");
+
+    const position = await gst.position(factory.id, "2026-09");
+    // Output 18% of 10,000 = 1,800 split 900/900. Input 2,500+2,500 on the block plus
+    // 600+600 on the consumable = 3,100 per head.
+    assert.equal(position.output.cgst, 900);
+    assert.equal(position.input.cgst, 3100);
+    assert.equal(position.net.cgst, -2200, "more credit than liability this month");
+    assert.equal(position.netPayable, 0, "nothing to pay while credit exceeds output");
+    assert.equal(position.creditCarried, 4400, "the unused credit carries forward");
+  });
+
+  it("offers the statutory slabs and refuses anything else", async () => {
+    const { asOwner } = await staffFactory("slabs");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
+    assert.deepEqual(gst.rates().slabs, [0, 0.25, 3, 5, 12, 18, 28]);
+    assert.equal(gst.rates().defaults.rawBlock, 5);
+    assert.equal(gst.rates().defaults.finishedSlab, 18);
+
+    const supplier = await inventory.createSupplier(asOwner, "Bad Rate Quarry", undefined, {
+      gstin: "08AABCQ3333M1Z0",
+    });
+    await assert.rejects(
+      () =>
+        inventory.receiveBlock(asOwner, {
+          serialNumber: "SLAB-BAD",
+          varietyName: "White",
+          supplierId: supplier.id,
+          clientOpId: "slab-bad",
+          purchaseTaxable: 1000,
+          gstRatePct: 15,
+        }),
+      /not a statutory slab/i,
+    );
   });
 
   it("refuses a state code that contradicts the GSTIN", async () => {

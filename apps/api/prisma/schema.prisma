@@ -156,6 +156,7 @@ enum VoucherType {
   journal
   sales
   credit_note
+  purchase
 }
 
 enum VoucherSource {
@@ -164,6 +165,7 @@ enum VoucherSource {
   sales_pay
   sales_cn
   cash_sale
+  block_purchase
   expense_create
   intake_confirm
   muster_pay
@@ -329,6 +331,10 @@ model Supplier {
   factory     Factory    @relation(fields: [factoryId], references: [id])
   name        String
   contactInfo String?    @map("contact_info")
+  /// Two-digit GST state code of the place of supply for purchases from this vendor.
+  stateCode   String?    @map("state_code")
+  /// Without a supplier GSTIN there is no input tax credit to claim.
+  gstin       String?
   createdAt   DateTime   @default(now()) @map("created_at")
   version     Int        @default(0)
   rawBlocks   RawBlock[]
@@ -394,8 +400,20 @@ model RawBlock {
   volumeCft          Decimal?           @map("volume_cft") @db.Decimal(10, 3)
   qualityNote        String?            @map("quality_note")
   purchaseDate       DateTime?          @map("purchase_date") @db.Date
+  /// Total on the vendor bill, tax included. What is owed to the supplier.
   invoicedAmount     Decimal?           @map("invoiced_amount") @db.Decimal(14, 2)
   actualAmountPaid   Decimal?           @map("actual_amount_paid") @db.Decimal(14, 2)
+  /// Value before tax. This, never the tax-inclusive total, is the block's cost basis:
+  /// GST paid is recoverable as input credit and is not a cost of the stone.
+  purchaseTaxable    Decimal?           @map("purchase_taxable") @db.Decimal(14, 2)
+  purchaseCgst       Decimal            @default(0) @map("purchase_cgst") @db.Decimal(14, 2)
+  purchaseSgst       Decimal            @default(0) @map("purchase_sgst") @db.Decimal(14, 2)
+  purchaseIgst       Decimal            @default(0) @map("purchase_igst") @db.Decimal(14, 2)
+  /// Frozen at receipt. Rough blocks are 5% (HSN 2516), but the slab is chosen per receipt.
+  purchaseGstRatePct Decimal            @default(0) @map("purchase_gst_rate_pct") @db.Decimal(5, 2)
+  supplierInvoiceNo  String?            @map("supplier_invoice_no")
+  supplierGstin      String?            @map("supplier_gstin")
+  placeOfSupply      String?            @map("place_of_supply")
   ownershipType      OwnershipType      @default(COMPANY_OWNED) @map("ownership_type")
   currentStatus      String             @default("in_stock") @map("current_status")
   locationId         String?            @map("location_id")
@@ -877,6 +895,14 @@ model Expense {
   vehicleId      String?              @map("vehicle_id")
   vehicle        Vehicle?             @relation(fields: [vehicleId], references: [id])
   toWhom         String?              @map("to_whom")
+  /// Value before tax. The expense ledger carries this; the tax is input credit.
+  taxableAmount  Decimal?             @map("taxable_amount") @db.Decimal(14, 2)
+  cgstAmount     Decimal              @default(0) @map("cgst_amount") @db.Decimal(14, 2)
+  sgstAmount     Decimal              @default(0) @map("sgst_amount") @db.Decimal(14, 2)
+  igstAmount     Decimal              @default(0) @map("igst_amount") @db.Decimal(14, 2)
+  /// Frozen when booked. Consumables and services sit on several slabs.
+  gstRatePct     Decimal              @default(0) @map("gst_rate_pct") @db.Decimal(5, 2)
+  supplierGstin  String?              @map("supplier_gstin")
   idempotencyKey String?              @map("idempotency_key")
   createdAt      DateTime             @default(now()) @map("created_at")
   version        Int                  @default(0)

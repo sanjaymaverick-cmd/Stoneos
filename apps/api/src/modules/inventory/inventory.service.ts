@@ -9,6 +9,15 @@ import {
 import { InventoryKind, InventoryMovementType, Prisma } from "@prisma/client";
 import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
+import { BooksService } from "../books/books.service";
+import {
+  GST_DEFAULTS,
+  gstOnTaxable,
+  minorToRupees,
+  normaliseStateCode,
+  rupeesToMinor,
+  stateCodeFromGstin,
+} from "../books/money";
 import type { AuthenticatedUser } from "../../common/current-user";
 
 const DEFAULT_LOCATIONS: Array<{ code: string; name: string; locationType: string }> = [
@@ -29,6 +38,7 @@ export class InventoryService {
   constructor(
     @Inject(PrismaService) private prisma: PrismaService,
     @Inject(AuditService) private audit: AuditService,
+    @Inject(BooksService) private books: BooksService,
   ) {}
 
   locations(factoryId: string) {
@@ -74,9 +84,18 @@ export class InventoryService {
     return this.prisma.supplier.findMany({ where: { factoryId }, orderBy: { name: "asc" } });
   }
 
-  async createSupplier(user: AuthenticatedUser, name: string, contactInfo?: string) {
+  async createSupplier(
+    user: AuthenticatedUser,
+    name: string,
+    contactInfo?: string,
+    gst?: { stateCode?: string | null; gstin?: string | null },
+  ) {
+    const gstin = gst?.gstin?.trim().toUpperCase() || null;
+    // A vendor's GSTIN states their place of supply; trust it over a typed code.
+    const stateCode =
+      (gstin ? stateCodeFromGstin(gstin) : null) ?? normaliseStateCode(gst?.stateCode);
     const supplier = await this.prisma.supplier.create({
-      data: { factoryId: user.factoryId, name, contactInfo },
+      data: { factoryId: user.factoryId, name, contactInfo, stateCode, gstin },
     });
     await this.audit.record({
       factoryId: user.factoryId,
@@ -96,6 +115,11 @@ export class InventoryService {
       supplierId?: string;
       quarry?: string;
       weightTons?: number;
+      /** Value before tax. Rough blocks are quoted ex-GST like everything else. */
+      purchaseTaxable?: number;
+      /** Statutory slab. Defaults to 5% for rough blocks (HSN 2516). */
+      gstRatePct?: number;
+      supplierInvoiceNo?: string;
       invoicedAmount?: number;
       actualAmountPaid?: number;
       qualityNote?: string;
@@ -116,12 +140,30 @@ export class InventoryService {
         },
       });
       if (!location) throw new BadRequestException("Location not found in this factory");
+      let supplier: { id: string; name: string; stateCode: string | null; gstin: string | null } | null = null;
       if (input.supplierId) {
-        const supplier = await tx.supplier.findFirst({
+        supplier = await tx.supplier.findFirst({
           where: { id: input.supplierId, factoryId: user.factoryId },
         });
         if (!supplier) throw new BadRequestException("Supplier does not belong to this factory");
       }
+
+      // Rough blocks are 5% (HSN 2516), not the 18% a finished slab carries. The rate is
+      // chosen per receipt because a yard buys more than stone.
+      const taxable = input.purchaseTaxable ?? input.invoicedAmount ?? 0;
+      const profile = await tx.gstProfile.findUnique({ where: { factoryId: user.factoryId } });
+      const ourState = profile ? (stateCodeFromGstin(profile.gstin) ?? profile.stateCode) : null;
+      const vendorState =
+        supplier?.stateCode ?? (supplier?.gstin ? stateCodeFromGstin(supplier.gstin) : null);
+      const gst = gstOnTaxable(rupeesToMinor(taxable), {
+        // On a purchase we are the recipient: the credit heads follow whether the vendor
+        // is in our state, so our own state is the place of supply.
+        supplierStateCode: vendorState ?? ourState,
+        placeOfSupplyStateCode: ourState,
+        ratePct: input.gstRatePct,
+        defaultRatePct: GST_DEFAULTS.rawBlock,
+        registered: Boolean(profile && taxable > 0),
+      });
 
       const block = await tx.rawBlock.create({
         data: {
@@ -131,12 +173,30 @@ export class InventoryService {
           supplierId: input.supplierId,
           quarry: input.quarry,
           weightTons: input.weightTons,
-          invoicedAmount: input.invoicedAmount,
+          purchaseTaxable: taxable || undefined,
+          purchaseCgst: minorToRupees(gst.cgstMinor),
+          purchaseSgst: minorToRupees(gst.sgstMinor),
+          purchaseIgst: minorToRupees(gst.igstMinor),
+          purchaseGstRatePct: gst.ratePct,
+          supplierInvoiceNo: input.supplierInvoiceNo?.trim() || undefined,
+          supplierGstin: supplier?.gstin ?? undefined,
+          placeOfSupply: normaliseStateCode(ourState) ?? undefined,
+          // The vendor is owed the whole bill; the block is valued at the taxable amount.
+          invoicedAmount: input.invoicedAmount ?? (taxable ? minorToRupees(gst.totalMinor) : undefined),
           actualAmountPaid: input.actualAmountPaid,
           qualityNote: input.qualityNote,
           locationId: location.id,
         },
       });
+      if (taxable > 0) {
+        await this.books.postPurchase(tx, user, {
+          rawBlockId: block.id,
+          supplierName: supplier?.name ?? "Unknown supplier",
+          gst,
+          clientOpId: `purchase:${input.clientOpId}`,
+          memo: `Block ${block.serialNumber}${input.supplierInvoiceNo ? ` / ${input.supplierInvoiceNo}` : ""}`,
+        });
+      }
       await tx.inventoryMovement.create({
         data: {
           factoryId: user.factoryId,

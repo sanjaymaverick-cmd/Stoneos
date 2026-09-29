@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 import { factoryMonthStart } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
-import { normaliseStateCode, stateCodeFromGstin } from "../books/money";
+import {
+  GST_DEFAULTS,
+  GST_RATE_SLABS,
+  normaliseStateCode,
+  stateCodeFromGstin,
+} from "../books/money";
 
 /**
  * Inter-state supplies to unregistered buyers above this invoice value are reported
@@ -184,6 +189,75 @@ export class GstService {
 
   listEinvoice(factoryId: string) {
     return this.prisma.eInvoice.findMany({ where: { factoryId }, orderBy: { createdAt: "desc" } });
+  }
+
+  /** The statutory slabs an operator may choose from, and what each document defaults to. */
+  rates() {
+    return {
+      slabs: [...GST_RATE_SLABS],
+      defaults: {
+        finishedSlab: GST_DEFAULTS.finishedSlab,
+        rawBlock: GST_DEFAULTS.rawBlock,
+        expense: GST_DEFAULTS.expense,
+      },
+      note: "Rates are statutory. A value outside the slabs is rejected rather than filed.",
+    };
+  }
+
+  /**
+   * Output tax minus input credit for a month: the cash actually payable.
+   * Read from the ledgers, so it reflects what was posted rather than re-deriving tax
+   * from documents that may since have been edited.
+   */
+  async position(factoryId: string, month: string) {
+    const m = month.match(/^(\d{4})-(\d{2})$/);
+    if (!m) throw new BadRequestException("month must be YYYY-MM");
+    const start = factoryMonthStart(new Date(`${month}-15T12:00:00Z`));
+    const endMonth = Number(m[2]) === 12 ? 1 : Number(m[2]) + 1;
+    const endYear = Number(m[2]) === 12 ? Number(m[1]) + 1 : Number(m[1]);
+    const end = factoryMonthStart(
+      new Date(`${endYear}-${String(endMonth).padStart(2, "0")}-15T12:00:00Z`),
+    );
+    const ledgers = await this.prisma.ledger.findMany({
+      where: { factoryId, code: { startsWith: "GST_" } },
+    });
+    const byId = new Map(ledgers.map((l) => [l.id, l.code]));
+    const lines = await this.prisma.voucherLine.findMany({
+      where: {
+        ledgerId: { in: ledgers.map((l) => l.id) },
+        voucher: { factoryId, operationalDate: { gte: start, lt: end } },
+      },
+    });
+    const head = (code: string) =>
+      lines
+        .filter((l) => byId.get(l.ledgerId) === code)
+        .reduce((sum, l) => sum + (code.startsWith("GST_OUTPUT") ? l.credit - l.debit : l.debit - l.credit), 0);
+    const output = {
+      cgst: head("GST_OUTPUT_CGST") / 100,
+      sgst: head("GST_OUTPUT_SGST") / 100,
+      igst: head("GST_OUTPUT_IGST") / 100,
+    };
+    const input = {
+      cgst: head("GST_INPUT_CGST") / 100,
+      sgst: head("GST_INPUT_SGST") / 100,
+      igst: head("GST_INPUT_IGST") / 100,
+    };
+    // Heads are netted head-wise. Cross-utilisation has its own statutory order and is
+    // a filing decision, not something to assume here.
+    const net = {
+      cgst: output.cgst - input.cgst,
+      sgst: output.sgst - input.sgst,
+      igst: output.igst - input.igst,
+    };
+    return {
+      month,
+      output,
+      input,
+      net,
+      netPayable: Math.max(0, net.cgst) + Math.max(0, net.sgst) + Math.max(0, net.igst),
+      creditCarried: Math.max(0, -net.cgst) + Math.max(0, -net.sgst) + Math.max(0, -net.igst),
+      note: "Head-wise netting only. Cross-utilisation between heads follows its own statutory order.",
+    };
   }
 
   async gstr1(factoryId: string, month: string) {

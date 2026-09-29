@@ -1,6 +1,11 @@
 import { Body, Controller, Get, Inject, Param, Post, Query } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
-import { CEO_ROLES, HISTORICAL_IMPORT_ROLES, SALES_DATA_ROLES } from "@stoneos/contracts";
+import {
+  ANY_AUTHENTICATED_ROLE,
+  CEO_ROLES,
+  HISTORICAL_IMPORT_ROLES,
+  SALES_DATA_ROLES,
+} from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
 import { GstService } from "./gst.service";
 
@@ -67,6 +72,20 @@ export class GstController {
   @Roles(...CEO_ROLES)
   listEway(@CurrentUser() user: AuthenticatedUser) {
     return this.gst.listEway(user.factoryId);
+  }
+
+  /** The slabs an operator may pick from, with the per-document defaults. */
+  @Get("rates")
+  @Roles(...ANY_AUTHENTICATED_ROLE)
+  rates() {
+    return this.gst.rates();
+  }
+
+  /** Output tax less input credit for a month: what is actually payable. */
+  @Get("position")
+  @Roles(...CEO_ROLES)
+  position(@CurrentUser() user: AuthenticatedUser, @Query("month") month: string) {
+    return this.gst.position(user.factoryId, month);
   }
 
   @Get("gstr1")

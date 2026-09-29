@@ -13,6 +13,7 @@ import type { AuthenticatedUser } from "../../common/current-user";
 import { isUniqueViolation, nextDocumentNumber } from "./document-number";
 import { BooksService } from "../books/books.service";
 import {
+  GST_DEFAULTS,
   gstOnTaxable,
   minorToRupees,
   normaliseStateCode,
@@ -295,6 +296,8 @@ export class SalesService {
     salesOrderId: string,
     clientOpId: string,
     charges: Array<{ label: string; amount: number; taxable?: boolean }> = [],
+    /** Statutory slab for this supply. Defaults to 18% for finished slabs (HSN 6802). */
+    gstRatePct?: number,
   ) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     if (order.billingMode === "cash_unbilled") {
@@ -326,7 +329,7 @@ export class SalesService {
       const customer = await tx.customer.findFirst({
         where: { id: order.customerId, factoryId: user.factoryId },
       });
-      const gst = await this.resolveGst(tx, user.factoryId, taxable, customer);
+      const gst = await this.resolveGst(tx, user.factoryId, taxable, customer, gstRatePct);
       const amount = minorToRupees(gst.totalMinor + rupeesToMinor(chargeExempt));
       const invoiceNumber = await nextDocumentNumber(tx, user.factoryId, "INVOICE");
       try {
@@ -667,6 +670,7 @@ export class SalesService {
     factoryId: string,
     taxableRupees: number,
     customer: { stateCode?: string | null; gstin?: string | null } | null,
+    ratePct?: number,
   ) {
     const profile = await tx.gstProfile.findUnique({ where: { factoryId } });
     const supplierStateCode = profile
@@ -677,6 +681,8 @@ export class SalesService {
     return gstOnTaxable(rupeesToMinor(taxableRupees), {
       supplierStateCode,
       placeOfSupplyStateCode,
+      ratePct,
+      defaultRatePct: GST_DEFAULTS.finishedSlab,
       registered: Boolean(profile),
     });
   }

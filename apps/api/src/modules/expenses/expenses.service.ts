@@ -2,7 +2,14 @@ import { BadRequestException, Inject, Injectable } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { BooksService } from "../books/books.service";
-import { parseFactoryDateInput } from "../books/money";
+import {
+  GST_DEFAULTS,
+  gstOnTaxable,
+  minorToRupees,
+  parseFactoryDateInput,
+  rupeesToMinor,
+  stateCodeFromGstin,
+} from "../books/money";
 
 export const EXPENSE_CATEGORIES = [
   "diesel",
@@ -51,6 +58,11 @@ export class ExpensesService {
       vehicleId?: string;
       toWhom?: string;
       clientOpId?: string;
+      /** Statutory slab on this spend. Omit for a supplier who charged no GST. */
+      gstRatePct?: number;
+      /** Value before tax. Defaults to the whole amount when no GST was charged. */
+      taxableAmount?: number;
+      supplierGstin?: string;
     },
   ) {
     if (!EXPENSE_CATEGORIES.includes(input.category as (typeof EXPENSE_CATEGORIES)[number])) {
@@ -73,6 +85,24 @@ export class ExpensesService {
         if (existing) return existing;
       }
       const expenseDate = parseFactoryDateInput(input.expenseDate);
+      // Only a spend that actually carried GST yields a credit. Diesel from a
+      // registered pump does; a labour chit from an unregistered hand does not.
+      const claimsCredit = input.gstRatePct != null && input.gstRatePct > 0;
+      const profile = claimsCredit
+        ? await tx.gstProfile.findUnique({ where: { factoryId: user.factoryId } })
+        : null;
+      const ourState = profile ? (stateCodeFromGstin(profile.gstin) ?? profile.stateCode) : null;
+      const taxable = input.taxableAmount ?? input.amount;
+      const gst = claimsCredit && profile
+        ? gstOnTaxable(rupeesToMinor(taxable), {
+            supplierStateCode: input.supplierGstin
+              ? stateCodeFromGstin(input.supplierGstin)
+              : ourState,
+            placeOfSupplyStateCode: ourState,
+            ratePct: input.gstRatePct,
+            defaultRatePct: GST_DEFAULTS.expense,
+          })
+        : undefined;
       const created = await tx.expense.create({
         data: {
           factoryId: user.factoryId,
@@ -81,6 +111,12 @@ export class ExpensesService {
           expenseDate,
           vehicleId: input.vehicleId,
           toWhom: input.toWhom,
+          taxableAmount: gst ? minorToRupees(gst.taxableMinor) : input.amount,
+          cgstAmount: gst ? minorToRupees(gst.cgstMinor) : 0,
+          sgstAmount: gst ? minorToRupees(gst.sgstMinor) : 0,
+          igstAmount: gst ? minorToRupees(gst.igstMinor) : 0,
+          gstRatePct: gst ? gst.ratePct : 0,
+          supplierGstin: input.supplierGstin?.trim().toUpperCase() || undefined,
           idempotencyKey: input.clientOpId,
         },
       });
@@ -88,6 +124,7 @@ export class ExpensesService {
         expenseId: created.id,
         category: input.category,
         amount: input.amount,
+        gst,
         clientOpId: input.clientOpId ?? `expense:${created.id}`,
         method: "cash",
         date: expenseDate,

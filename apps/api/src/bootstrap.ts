@@ -66,7 +66,13 @@ async function main() {
       return created;
     });
 
-    const inventory = new InventoryService(prisma as never, { record: async () => undefined } as never);
+    // Only ensureDefaultLocations is used here, which posts nothing; the audit and
+    // books collaborators are never reached.
+    const inventory = new InventoryService(
+      prisma as never,
+      { record: async () => undefined } as never,
+      {} as never,
+    );
     await inventory.ensureDefaultLocations(factory.id);
     console.log(`Created factory ${factory.name} (${factory.id})`);
     console.log(`Owner username: ${username}`);

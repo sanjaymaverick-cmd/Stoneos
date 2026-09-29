@@ -11,7 +11,10 @@ import {
 import { assertAllowedRoles } from "../../common/session.guard.ts";
 import { operationalDateFor } from "@stoneos/domain";
 import {
+  GST_RATE_SLABS,
   gstOnTaxable,
+  isGstRateSlab,
+  resolveGstRatePct,
   stateCodeFromGstin,
   KHATA_AP_TOTAL_MINOR,
   KHATA_AR_TOTAL_MINOR,
@@ -133,6 +136,38 @@ describe("GST on an ex-GST rate", () => {
     assert.equal(gst.totalMinor, 100_000, "an unregistered factory must not invent a liability");
     assert.equal(gst.ratePct, 0);
     assert.equal(gst.cgstMinor + gst.sgstMinor + gst.igstMinor, 0);
+  });
+
+  it("charges the slab it was given, not a hardcoded 18", () => {
+    const at = (pct: number) =>
+      gstOnTaxable(rupeesToMinor(1000), {
+        supplierStateCode: "08",
+        placeOfSupplyStateCode: "08",
+        ratePct: pct,
+      });
+    // Rough blocks are 5% (HSN 2516); finished slabs are 18% (HSN 6802).
+    assert.equal(at(5).cgstMinor + at(5).sgstMinor, 5_000);
+    assert.equal(at(18).cgstMinor + at(18).sgstMinor, 18_000);
+    assert.equal(at(12).cgstMinor + at(12).sgstMinor, 12_000);
+    assert.equal(at(28).cgstMinor + at(28).sgstMinor, 28_000);
+    assert.equal(at(0).totalMinor, 100_000, "a nil-rated supply adds nothing");
+  });
+
+  it("refuses a rate that is not a statutory slab", () => {
+    // A typo like 15 or 8 would sail through every downstream sum and only surface
+    // at filing, so it is rejected at the point of entry.
+    for (const bad of [8, 15, 20, 17.5, -5]) {
+      assert.throws(
+        () => resolveGstRatePct(bad, 18),
+        /not a statutory slab/i,
+        `${bad}% must be rejected`,
+      );
+    }
+    for (const good of GST_RATE_SLABS) {
+      assert.equal(resolveGstRatePct(good, 18), good);
+      assert.equal(isGstRateSlab(good), true);
+    }
+    assert.equal(resolveGstRatePct(undefined, 5), 5, "the caller's default applies");
   });
 
   it("reads the supplying state out of the GSTIN", () => {
