@@ -17,6 +17,12 @@ Staff are not permanent, so disabling has to actually stick.
   shared while they were gone does not become live again.
 - Both revoke and reactivate are audited under their own action names.
 
+There is deliberately **no expiry date on an account**. Employment here has no
+predefined period — some staff stay ten days, some ten months — so any date set
+at issue would be a guess, and a wrong guess locks someone out mid-shift. Access
+ends when the owner ends it, and not before. Do not add automatic expiry without
+that decision being revisited.
+
 A temporary password buys nothing but the ability to replace it: every route is
 refused until it is changed, except change-password, logout, and the `/auth/me`
 the shell needs to render. Reads were previously allowed through, which opened
