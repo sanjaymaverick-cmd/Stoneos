@@ -69,12 +69,21 @@ export class UsersService {
       throw new ForbiddenException("You cannot remove your own owner role");
     }
 
+    // Re-issuing a username must never quietly bring a disabled account back.
+    // Doing so restored access with the old password still working, recorded only
+    // as a role change — which would undo a revocation without anyone seeing it.
+    // Reactivation is its own deliberate act, and it issues a new password.
+    if (existing && !existing.active) {
+      throw new BadRequestException(
+        `${username} is disabled. Reactivate the account to restore access; that issues a new password.`,
+      );
+    }
+
     if (existing) {
       const updated = await this.prisma.appUser.update({
         where: { id: existing.id },
         data: {
           role: input.role,
-          active: true,
           name: input.name ?? existing.name,
           email: input.email === undefined ? existing.email : input.email,
         },
@@ -128,6 +137,42 @@ export class UsersService {
       entityId: userId,
     });
     return { revoked: true };
+  }
+
+  /**
+   * Bring a disabled account back deliberately, with a new password.
+   *
+   * The old password is never restored: an employee who left and came back gets
+   * fresh credentials, so a password that may have been shared or written down
+   * while they were gone does not become live again.
+   */
+  async reactivate(actor: AuthenticatedUser, userId: string) {
+    const target = await this.requireSameFactory(actor, userId);
+    this.assertOwnerGuard(actor, target.role as Role, target.id, "reactivate");
+    if (target.active) {
+      return { reactivated: false, user: target, password: null };
+    }
+    const password = generateTemporaryPassword();
+    const user = await this.prisma.appUser.update({
+      where: { id: userId },
+      data: {
+        active: true,
+        passwordHash: await hashPassword(password),
+        mustChangePassword: true,
+        tokenVersion: { increment: 1 },
+      },
+    });
+    // Any session row surviving from before the revocation dies here too.
+    await this.prisma.authSession.deleteMany({ where: { userId } });
+    await this.audit.record({
+      factoryId: actor.factoryId,
+      actorId: actor.id,
+      action: "user.reactivate",
+      entityType: "app_user",
+      entityId: userId,
+      payload: { username: user.username, role: user.role },
+    });
+    return { reactivated: true, user, password };
   }
 
   async resetPassword(actor: AuthenticatedUser, userId: string) {

@@ -31,6 +31,12 @@ export class UsersController {
     return this.service.revoke(user, id);
   }
 
+  /** Restore a disabled account. Issues a new password, returned once. */
+  @Post(":id/reactivate")
+  reactivate(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
+    return this.service.reactivate(user, id);
+  }
+
   @Post(":id/reset-password")
   resetPassword(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
     return this.service.resetPassword(user, id);

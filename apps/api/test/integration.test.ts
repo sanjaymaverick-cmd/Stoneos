@@ -139,6 +139,90 @@ describe("postgres-backed workflows", () => {
     await assert.rejects(() => auth.login("owner", "ChangeMeNow!12"));
   });
 
+  it("disables an employee for good: the old password dies with the account", async () => {
+    const { factory, asOwner } = await staffFactory("lifecycle");
+
+    // 1. The owner issues a credential. The password comes back exactly once.
+    const issued = await users.provision(asOwner, { username: "lc-operator", role: "operator" });
+    assert.equal(issued.created, true);
+    assert.ok(issued.password, "a new account must return its password once");
+    assert.equal(issued.user.mustChangePassword, true);
+    const firstPassword = issued.password!;
+
+    // 2. They log in and are forced to change it before anything else.
+    const firstLogin = await auth.login("lc-operator", firstPassword);
+    assert.equal(firstLogin.user.mustChangePassword, true);
+    await auth.changePassword(
+      { ...asOwner, id: issued.user.id, role: "operator" },
+      firstPassword,
+      "OperatorChosen!2026",
+    );
+    const chosen = await auth.login("lc-operator", "OperatorChosen!2026");
+    assert.equal(chosen.user.mustChangePassword, false);
+    // The temporary password is dead the moment it is replaced.
+    await assert.rejects(() => auth.login("lc-operator", firstPassword), /Invalid username or password/i);
+
+    // 3. The owner disables them. Access stops immediately and every session dies.
+    await users.revoke(asOwner, issued.user.id);
+    assert.equal(
+      await prisma.authSession.count({ where: { userId: issued.user.id } }),
+      0,
+      "revoking must kill live sessions, not just block the next login",
+    );
+    await assert.rejects(
+      () => auth.login("lc-operator", "OperatorChosen!2026"),
+      /Invalid username or password/i,
+    );
+
+    // 4. Re-issuing the same username must NOT quietly bring them back. This was
+    //    the hole: it set active=true, kept the old password working, and recorded
+    //    only a role change.
+    await assert.rejects(
+      () => users.provision(asOwner, { username: "lc-operator", role: "operator" }),
+      /disabled/i,
+    );
+    const stillOff = await prisma.appUser.findUniqueOrThrow({ where: { id: issued.user.id } });
+    assert.equal(stillOff.active, false, "a refused provision must not have reactivated them");
+
+    // 5. Reactivation is deliberate and issues a NEW password. The old one stays dead,
+    //    so anything written down or shared while they were gone does not come back.
+    const back = await users.reactivate(asOwner, issued.user.id);
+    assert.equal(back.reactivated, true);
+    assert.ok(back.password);
+    assert.notEqual(back.password, firstPassword);
+    await assert.rejects(
+      () => auth.login("lc-operator", "OperatorChosen!2026"),
+      /Invalid username or password/i,
+    );
+    const returned = await auth.login("lc-operator", back.password!);
+    assert.equal(returned.user.mustChangePassword, true, "and they must choose a new one again");
+
+    // Both acts are on the audit trail under their own names.
+    const actions = (
+      await prisma.auditEvent.findMany({
+        where: { factoryId: factory.id, entityId: issued.user.id },
+        select: { action: true },
+      })
+    ).map((a) => a.action);
+    assert.ok(actions.includes("user.revoke"));
+    assert.ok(actions.includes("user.reactivate"));
+  });
+
+  it("lets a temporary password do nothing but replace itself", () => {
+    // Reads used to be allowed through, so a credential slip opened the CEO board,
+    // outstanding AR and the CSV exports before the password was ever changed.
+    const onTemp = (path: string) =>
+      path.endsWith("/auth/change-password") ||
+      path.endsWith("/auth/logout") ||
+      path.endsWith("/auth/me");
+    assert.equal(onTemp("/api/v1/auth/change-password"), true);
+    assert.equal(onTemp("/api/v1/auth/me"), true);
+    assert.equal(onTemp("/api/v1/auth/logout"), true);
+    assert.equal(onTemp("/api/v1/reports/ceo"), false);
+    assert.equal(onTemp("/api/v1/books/outstanding"), false);
+    assert.equal(onTemp("/api/v1/reports/export/slabs.csv"), false);
+  });
+
   it("rejects a manager creating an owner", async () => {
     const manager = await users.provision(owner, { username: "mgr1", role: "manager", name: "Mgr" });
     const asManager: AuthenticatedUser = {
