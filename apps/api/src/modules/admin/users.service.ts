@@ -20,6 +20,14 @@ import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 
+/** The state a fresh credential resets: no failures, no lock, not suspended. */
+const CLEARED_LOCKOUT = {
+  failedLoginCount: 0,
+  lockoutCount: 0,
+  lockedUntil: null,
+  suspendedAt: null,
+} as const;
+
 @Injectable()
 export class UsersService {
   constructor(
@@ -40,6 +48,9 @@ export class UsersService {
         active: true,
         mustChangePassword: true,
         createdAt: true,
+        lockedUntil: true,
+        suspendedAt: true,
+        failedLoginCount: true,
       },
     });
   }
@@ -79,8 +90,11 @@ export class UsersService {
     // as a role change — which would undo a revocation without anyone seeing it.
     // Reactivation is its own deliberate act, and it issues a new password.
     if (existing && !existing.active) {
+      const why = existing.suspendedAt
+        ? "suspended after repeated failed logins"
+        : "disabled";
       throw new BadRequestException(
-        `${username} is disabled. Reactivate the account to restore access; that issues a new password.`,
+        `${username} is ${why}. Reactivate the account to restore access; that issues a new password.`,
       );
     }
 
@@ -165,6 +179,10 @@ export class UsersService {
         passwordHash: await hashPassword(password),
         mustChangePassword: true,
         tokenVersion: { increment: 1 },
+        // New credentials wipe the lockout slate, whether the account was revoked by
+        // the owner or suspended by repeated failures. Otherwise someone brought back
+        // would be five typos from suspension again.
+        ...CLEARED_LOCKOUT,
       },
     });
     // Any session row surviving from before the revocation dies here too.
@@ -191,6 +209,9 @@ export class UsersService {
           passwordHash: await hashPassword(password),
           mustChangePassword: true,
           tokenVersion: { increment: 1 },
+          // A reset is the owner issuing new credentials, so it also lifts a timed
+          // lockout instead of making a locked-out employee wait it out as well.
+          ...CLEARED_LOCKOUT,
         },
       }),
       this.prisma.authSession.deleteMany({ where: { userId } }),

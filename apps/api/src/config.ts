@@ -24,3 +24,16 @@ export const AUTH_MAX = Number(process.env.AUTH_RATE_LIMIT_MAX ?? 10);
 export const RATE_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60_000);
 export const RATE_MAX = Number(process.env.RATE_LIMIT_MAX ?? 120);
 export const AUTHENTICATED_RATE_MAX = Number(process.env.AUTHENTICATED_RATE_LIMIT_MAX ?? 600);
+
+/**
+ * Login lockout. Two rounds, both counted per user account and held in the database
+ * so a restart does not hand an attacker a fresh counter.
+ *
+ * 10 wrong passwords lock the account for 5 minutes. After that lock expires, 5 more
+ * wrong passwords suspend it outright: the owner has to issue new credentials.
+ *
+ * The per-IP limiter in http-security.ts is a separate, coarser net and stays.
+ */
+export const LOGIN_ATTEMPTS_BEFORE_LOCK = Number(process.env.LOGIN_ATTEMPTS_BEFORE_LOCK ?? 10);
+export const LOGIN_LOCK_MINUTES = Number(process.env.LOGIN_LOCK_MINUTES ?? 5);
+export const LOGIN_ATTEMPTS_BEFORE_SUSPEND = Number(process.env.LOGIN_ATTEMPTS_BEFORE_SUSPEND ?? 5);

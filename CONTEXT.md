@@ -12,6 +12,7 @@ Factory-operations language. Implementation details do not belong here.
 - **Sales** — customers, quotations, reservations, dispatch, invoices.
 - **Accountant** — expenses, payments, Tally, exports.
 - **Auditor** — read-only commercial and inventory history.
+- **Lockout** — 10 wrong passwords lock a login for 5 minutes; 5 more after that suspend it, and only the owner issuing new credentials restores it. Counted per account, not per IP. A successful login clears the count.
 - **Rank** — who may act on whose account: owner, then manager, then admin, then supervisor, then the specialist roles (accountant, auditor, sales, inventory, operator) as equals. Acting on an account only ever goes downward — never on a peer, never upward — so the chain of command cannot be edited from inside it.
 - **Raw block** — purchased or opening-counted granite block. Serial unique within a factory.
 - **Cutting session** — one block on a gang saw. May span multiple operational days.
