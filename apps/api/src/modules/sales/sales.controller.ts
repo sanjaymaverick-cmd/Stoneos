@@ -99,9 +99,11 @@ export class SalesController {
       clientOpId: string;
       /** Packaging, demurrage, labour and the like. Taxed with the slabs by default. */
       charges?: Array<{ label: string; amount: number; taxable?: boolean }>;
+      /** Statutory slab for this supply; defaults to 18% for finished slabs. */
+      gstRatePct?: number;
     },
   ) {
-    return this.service.invoice(user, id, body.clientOpId, body.charges ?? []);
+    return this.service.invoice(user, id, body.clientOpId, body.charges ?? [], body.gstRatePct);
   }
 
   /**

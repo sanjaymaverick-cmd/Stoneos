@@ -51,9 +51,12 @@ export class InventoryController {
   @Roles(...INVENTORY_DATA_ROLES)
   createSupplier(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: { name: string; contactInfo?: string },
+    @Body() body: { name: string; contactInfo?: string; stateCode?: string; gstin?: string },
   ) {
-    return this.service.createSupplier(user, body.name, body.contactInfo);
+    return this.service.createSupplier(user, body.name, body.contactInfo, {
+      stateCode: body.stateCode,
+      gstin: body.gstin,
+    });
   }
 
   @Post("raw-blocks")
@@ -67,6 +70,11 @@ export class InventoryController {
       supplierId?: string;
       quarry?: string;
       weightTons?: number;
+      /** Value before tax. Rough blocks are quoted ex-GST like everything else. */
+      purchaseTaxable?: number;
+      /** Statutory slab; defaults to 5% for rough blocks (HSN 2516). */
+      gstRatePct?: number;
+      supplierInvoiceNo?: string;
       invoicedAmount?: number;
       actualAmountPaid?: number;
       qualityNote?: string;

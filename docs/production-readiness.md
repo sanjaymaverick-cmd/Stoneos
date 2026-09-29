@@ -43,6 +43,11 @@ Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.s
 - [x] Khata customer-list import: 46 parties, AR ₹1,25,61,248, AP ₹1,63,671 as of 2026-09-12; supervisor cannot import
 - [x] Live Khatabook PDF parser + totals lock
 - [x] Supervisor rokad/DPR intake: proposer cannot confirm; PDF is unreadable; cash drawer lock blocks further cash vouchers
+- [x] GST rate chosen per document from the statutory slabs (0/0.25/3/5/12/18/28);
+      anything else rejected at entry. Defaults 18% slabs, 5% rough blocks, 18% expense
+- [x] Block purchases post a voucher: STOCK + GST_INPUT_* debit, AP credit. Stock and
+      expense ledgers carry the pre-tax value, since GST paid is recoverable credit
+- [x] `GET /gst/position` nets output against input head-wise from the ledgers
 - [x] Retail buyers without a GSTIN are taxed and filed as B2CS/B2CL, never B2B
 - [x] Invoice charges (packaging, demurrage, labour) taxed with the principal supply;
       `taxable: false` reimbursements billed untaxed on `exemptAmount`

@@ -1,3 +1,4 @@
+import { BadRequestException } from "@nestjs/common";
 import { createHash } from "node:crypto";
 
 export function rupeesToMinor(rupees: number): number {
@@ -28,10 +29,50 @@ export function parseFactoryDateInput(value: string | Date): Date {
 }
 
 /**
- * Sale rates are quoted EXCLUSIVE of GST. Polished granite slabs are 18% (HSN 6802).
- * Invoice.amount is therefore taxable value PLUS tax — what the customer owes.
+ * Rates are quoted EXCLUSIVE of GST throughout. A document's amount is therefore
+ * taxable value PLUS tax — what is owed or payable.
  */
-export const GST_RATE = 0.18;
+
+/**
+ * The statutory GST slabs, as percentages. A rate outside this set is a typo or a
+ * misunderstanding, never a real supply, so it is rejected rather than filed.
+ * 0.25% and 3% exist for precious stones and bullion; they are listed for
+ * completeness because the set is the law's, not this factory's.
+ */
+export const GST_RATE_SLABS = [0, 0.25, 3, 5, 12, 18, 28] as const;
+export type GstRateSlab = (typeof GST_RATE_SLABS)[number];
+
+/** Defaults by what is being traded. Every one of them is overridable per document. */
+export const GST_DEFAULTS = {
+  /** Polished granite slabs, HSN 6802. */
+  finishedSlab: 18,
+  /** Rough or unworked granite blocks, HSN 2516. */
+  rawBlock: 5,
+  /** Consumables, spares and services vary; 18% is the commonest, never assume it. */
+  expense: 18,
+} as const;
+
+/** Kept for the finished-slab sale path, which is what the constant always meant. */
+export const GST_RATE = GST_DEFAULTS.finishedSlab / 100;
+
+export function isGstRateSlab(pct: number): pct is GstRateSlab {
+  return (GST_RATE_SLABS as readonly number[]).includes(pct);
+}
+
+/**
+ * Accept a rate the user chose, as a percentage. Falls back to the supplied default
+ * when nothing was chosen; throws on anything that is not a statutory slab, because a
+ * 15% or 8% line would sail through every downstream sum and only surface at filing.
+ */
+export function resolveGstRatePct(pct: number | null | undefined, fallback: number): number {
+  const value = pct ?? fallback;
+  if (!isGstRateSlab(value)) {
+    throw new BadRequestException(
+      `GST rate ${value}% is not a statutory slab. Choose one of ${GST_RATE_SLABS.join(", ")}.`,
+    );
+  }
+  return value;
+}
 
 /** A GSTIN carries the supplying state in its first two characters. */
 export function stateCodeFromGstin(gstin: string): string | null {
@@ -71,7 +112,11 @@ export function gstOnTaxable(
   opts: {
     supplierStateCode?: string | null;
     placeOfSupplyStateCode?: string | null;
-    rate?: number;
+    /** Statutory slab as a percentage (5, 12, 18 …), not a fraction. */
+    ratePct?: number;
+    /** What to charge when the caller supplied no rate. Callers pass their own: a
+     *  rough block is 5%, a finished slab 18%. There is no sensible global default. */
+    defaultRatePct?: number;
     registered?: boolean;
   },
 ): GstBreakdown {
@@ -79,7 +124,10 @@ export function gstOnTaxable(
   // An unidentified buyer is supplied where the factory stands: local counter sale.
   const placeOfSupply = normaliseStateCode(opts.placeOfSupplyStateCode) ?? supplierState;
   const registered = opts.registered ?? Boolean(supplierState);
-  const rate = registered ? (opts.rate ?? GST_RATE) : 0;
+  const ratePct = registered
+    ? resolveGstRatePct(opts.ratePct, opts.defaultRatePct ?? GST_DEFAULTS.finishedSlab)
+    : 0;
+  const rate = ratePct / 100;
   const interState = Boolean(supplierState && placeOfSupply && supplierState !== placeOfSupply);
 
   const zero = {
@@ -89,7 +137,7 @@ export function gstOnTaxable(
     igstMinor: 0,
     totalMinor: Math.max(0, taxableMinor),
     interState,
-    ratePct: rate * 100,
+    ratePct,
     placeOfSupply,
     supplierState,
   };

@@ -25,6 +25,10 @@ export const SYSTEM_LEDGERS: Array<{
   { code: "GST_OUTPUT_CGST", name: "CGST output", group: "liability", kind: "gst" },
   { code: "GST_OUTPUT_SGST", name: "SGST output", group: "liability", kind: "gst" },
   { code: "GST_OUTPUT_IGST", name: "IGST output", group: "liability", kind: "gst" },
+  // Input credit is an asset: tax paid to suppliers that offsets the output liability.
+  { code: "GST_INPUT_CGST", name: "CGST input credit", group: "asset", kind: "gst" },
+  { code: "GST_INPUT_SGST", name: "SGST input credit", group: "asset", kind: "gst" },
+  { code: "GST_INPUT_IGST", name: "IGST input credit", group: "asset", kind: "gst" },
   { code: "EXP_DIESEL", name: "Diesel", group: "expense", kind: "expense" },
   { code: "EXP_FREIGHT", name: "Freight", group: "expense", kind: "expense" },
   { code: "EXP_LABOUR", name: "Labour", group: "expense", kind: "expense" },

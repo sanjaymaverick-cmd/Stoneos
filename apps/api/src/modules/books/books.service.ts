@@ -116,6 +116,44 @@ export class BooksService {
   }
 
   /**
+   * A raw-block purchase. Stock carries the value before tax, because the GST paid is
+   * recoverable input credit rather than part of what the stone cost. The supplier is
+   * owed the whole bill.
+   */
+  async postPurchase(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    input: {
+      rawBlockId: string;
+      supplierName: string;
+      gst: GstBreakdown;
+      clientOpId: string;
+      purchaseDate?: Date;
+      memo?: string;
+    },
+  ) {
+    const party = await ensureParty(tx, user.factoryId, input.supplierName, "supplier");
+    const gst = input.gst;
+    const lines: PostLine[] = [
+      { ledgerCode: "STOCK", debit: gst.taxableMinor, credit: 0 },
+      ...gstInputLines(gst).map(([ledgerCode, amount]) => ({ ledgerCode, debit: amount, credit: 0 })),
+      { ledgerCode: "AP", debit: 0, credit: gst.totalMinor, partyId: party.id },
+    ];
+    return postVoucher(tx, {
+      factoryId: user.factoryId,
+      type: "purchase",
+      source: "block_purchase",
+      clientOpId: input.clientOpId,
+      createdBy: user.id,
+      operationalDate: input.purchaseDate,
+      sourceId: input.rawBlockId,
+      partyId: party.id,
+      memo: input.memo ?? "Raw block purchase",
+      lines,
+    });
+  }
+
+  /**
    * A counter sale settled in cash against no invoice. Cash is real and so is the
    * stock that left, so both are booked; the revenue simply lands on its own ledger.
    */
@@ -181,11 +219,33 @@ export class BooksService {
   async postExpense(
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
-    input: { expenseId: string; category: string; amount: number; clientOpId: string; method?: string; date?: Date },
+    input: {
+      expenseId: string;
+      category: string;
+      /** Total paid, tax included. */
+      amount: number;
+      /** Present when the spend carried creditable GST; absent means no credit claimed. */
+      gst?: GstBreakdown;
+      clientOpId: string;
+      method?: string;
+      date?: Date;
+    },
   ) {
     const minor = rupeesToMinor(input.amount);
     const exp = expenseLedgerForCategory(input.category);
     const bank = bankLedgerForMethod(input.method ?? "cash");
+    // The expense ledger carries the value before tax. Recoverable GST is an asset, not
+    // a cost, so charging the whole bill to expense would overstate the cost of running
+    // the plant by the credit.
+    const gst = input.gst;
+    const expenseMinor = gst ? gst.taxableMinor : minor;
+    const lines: PostLine[] = [{ ledgerCode: exp, debit: expenseMinor, credit: 0 }];
+    if (gst) {
+      for (const [ledgerCode, amount] of gstInputLines(gst)) {
+        lines.push({ ledgerCode, debit: amount, credit: 0 });
+      }
+    }
+    lines.push({ ledgerCode: bank, debit: 0, credit: minor });
     return postVoucher(tx, {
       factoryId: user.factoryId,
       type: "payment",
@@ -195,10 +255,7 @@ export class BooksService {
       operationalDate: input.date,
       sourceId: input.expenseId,
       memo: input.category,
-      lines: [
-        { ledgerCode: exp, debit: minor, credit: 0 },
-        { ledgerCode: bank, debit: 0, credit: minor },
-      ],
+      lines,
     });
   }
 
@@ -358,5 +415,14 @@ function gstOutputLines(gst: GstBreakdown): Array<[string, number]> {
   if (gst.cgstMinor > 0) out.push(["GST_OUTPUT_CGST", gst.cgstMinor]);
   if (gst.sgstMinor > 0) out.push(["GST_OUTPUT_SGST", gst.sgstMinor]);
   if (gst.igstMinor > 0) out.push(["GST_OUTPUT_IGST", gst.igstMinor]);
+  return out;
+}
+
+/** Input credit heads actually paid, as ledger/amount pairs. Zero heads are never posted. */
+function gstInputLines(gst: GstBreakdown): Array<[string, number]> {
+  const out: Array<[string, number]> = [];
+  if (gst.cgstMinor > 0) out.push(["GST_INPUT_CGST", gst.cgstMinor]);
+  if (gst.sgstMinor > 0) out.push(["GST_INPUT_SGST", gst.sgstMinor]);
+  if (gst.igstMinor > 0) out.push(["GST_INPUT_IGST", gst.igstMinor]);
   return out;
 }

@@ -4,8 +4,9 @@
 
 Accepted 2026-09-12. **Amended 2026-09-29**: GST is charged on top of the quoted rate,
 not carved out of it, and the heads follow place of supply. Further amended the same day
-for retail (B2C) buyers, ancillary charges, and unbilled cash sales. The original
-decision is superseded where the two disagree.
+for retail (B2C) buyers, ancillary charges, and unbilled cash sales, then again for
+selectable rate slabs and input tax credit. The original decision is superseded where
+they disagree.
 
 ## Decision
 
@@ -87,9 +88,58 @@ attracts tax whether or not an invoice was raised, so unbilled sales remain the 
 exposure and a matter for their accountant. StoneOS keeps the number visible rather
 than losing it.
 
+## Rates are chosen, not assumed
+
+A rate is picked per document from the statutory slabs — **0, 0.25, 3, 5, 12, 18, 28** —
+and anything else is rejected at entry. A typed 15% or 8% would otherwise pass through
+every downstream sum and only surface at filing.
+
+| Document | Default | Why |
+|---|---:|---|
+| Sales invoice | 18% | Polished slabs, HSN 6802 |
+| Raw block purchase | 5% | Rough or unworked blocks, HSN 2516 |
+| Expense / consumable | 18% | Commonest, but consumables sit on several slabs |
+
+Every default is overridable per document (`gstRatePct`). The rate is frozen on the
+document once booked. `GET /api/v1/gst/rates` serves the slabs and the defaults so the
+UI offers a choice rather than hardcoding one.
+
+The rate is per **document**, not per line. A bill mixing slabs is entered as two
+documents; that is simpler than per-line rates and matches how a yard actually buys.
+
+## Input tax credit
+
+Purchases previously posted nothing at all — no payable, no stock value, no recoverable
+tax. Receiving a block now posts a `purchase` voucher:
+
+```
+STOCK              Dr  taxable value
+GST_INPUT_CGST/…   Dr  tax paid
+  AP                   Cr  taxable + tax   (the vendor is owed the whole bill)
+```
+
+**Stock and expense ledgers carry the value before tax.** GST paid is recoverable
+credit, an asset, not a cost of the stone or of running the plant — charging the whole
+bill to stock would overstate block cost, and with it the damaged-slab write-off that
+derives from it.
+
+Credit is only claimed where it exists: a spend with no `gstRatePct` (an unregistered
+hand, a cash chit) posts its whole value to expense and claims nothing. A factory with
+no `GstProfile` claims nothing either.
+
+`GET /api/v1/gst/position?month=YYYY-MM` reads the ledgers — not the documents, which
+may since have been edited — and reports output less input per head, the net payable,
+and any credit carried forward. Netting is **head-wise only**; cross-utilisation
+between CGST, SGST and IGST follows its own statutory order and is a filing decision,
+not one to assume here.
+
+At 5% in and 18% out this factory is not in an inverted duty structure: output exceeds
+input on normal trade, so GST is settled in cash and no refund claim arises.
+
 ## Scope
 
-18% is the only rate implemented (polished granite slabs, HSN 6802). Selling anything
-at another rate — rough blocks under HSN 2516 are 5% — needs a per-item rate first.
-The B2CL threshold is a single constant (`B2CL_INVOICE_THRESHOLD`); it has moved before
-and will need revisiting rather than being assumed permanent.
+`B2CL_INVOICE_THRESHOLD` is a single constant; it has moved before and should not be
+assumed permanent. Cross-head utilisation, GSTR-3B generation, GSTR-2B reconciliation
+against supplier filings, and reverse charge are all out of scope. Nothing checks that a
+claimed credit actually appears in the supplier's return, so the credit figure is what
+this factory recorded, not what the portal will allow.
