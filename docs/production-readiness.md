@@ -43,7 +43,10 @@ Operator + auditor nav walk (2026-09-12): **2 passed** (`apps/web/e2e/role-nav.s
 - [x] Khata customer-list import: 46 parties, AR ₹1,25,61,248, AP ₹1,63,671 as of 2026-09-12; supervisor cannot import
 - [x] Live Khatabook PDF parser + totals lock
 - [x] Supervisor rokad/DPR intake: proposer cannot confirm; PDF is unreadable; cash drawer lock blocks further cash vouchers
-- [x] GST 18% inclusive on sales/CN vouchers (`GST_OUTPUT`); GSTR filing stays outside
+- [x] GST 18% **exclusive** on sales/CN vouchers, split by place of supply onto
+      `GST_OUTPUT_CGST` / `_SGST` / `_IGST` (intra-state 9+9, inter-state 18); rate,
+      both state codes and each head frozen on the document; GSTR-1 exports per-head
+      columns; GSTIN state code cross-checked against the GSTIN itself
 - [x] Dispatch after PACKING (`salesStatus=dispatched`, movement DISPATCH)
 - [x] Sister yards are ordinary customers/suppliers (no special interfactory ledger)
 - [x] Muster + payroll vouchers

@@ -4,7 +4,7 @@ import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { bankLedgerForMethod, ensureChart, expenseLedgerForCategory } from "./chart";
 import { ensureParty, postVoucher, type PostLine } from "./posting";
-import { gstSplitInclusive, minorToRupees, rupeesToMinor } from "./money";
+import { minorToRupees, rupeesToMinor, type GstBreakdown } from "./money";
 import { operationalDateFor } from "@stoneos/domain";
 
 @Injectable()
@@ -18,16 +18,18 @@ export class BooksService {
   async postInvoice(
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
-    input: { invoiceId: string; customerName: string; amount: number; clientOpId: string },
+    input: { invoiceId: string; customerName: string; gst: GstBreakdown; clientOpId: string },
   ) {
     const party = await ensureParty(tx, user.factoryId, input.customerName, "customer");
-    const minor = rupeesToMinor(input.amount);
-    const { net, gst } = gstSplitInclusive(minor);
+    const gst = input.gst;
+    // AR is the full payable; sales is the taxable value; each tax head stands alone.
     const lines: PostLine[] = [
-      { ledgerCode: "AR", debit: minor, credit: 0, partyId: party.id },
-      { ledgerCode: "SALES", debit: 0, credit: net },
+      { ledgerCode: "AR", debit: gst.totalMinor, credit: 0, partyId: party.id },
+      { ledgerCode: "SALES", debit: 0, credit: gst.taxableMinor },
     ];
-    if (gst > 0) lines.push({ ledgerCode: "GST_OUTPUT", debit: 0, credit: gst });
+    for (const [code, amount] of gstOutputLines(gst)) {
+      lines.push({ ledgerCode: code, debit: 0, credit: amount });
+    }
     return postVoucher(tx, {
       factoryId: user.factoryId,
       type: "sales",
@@ -79,16 +81,18 @@ export class BooksService {
   async postCreditNote(
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
-    input: { creditNoteId: string; invoiceId: string; customerName: string; amount: number; clientOpId: string },
+    input: { creditNoteId: string; invoiceId: string; customerName: string; gst: GstBreakdown; clientOpId: string },
   ) {
     const party = await ensureParty(tx, user.factoryId, input.customerName, "customer");
-    const minor = rupeesToMinor(input.amount);
-    const { net, gst } = gstSplitInclusive(minor);
+    const gst = input.gst;
+    // A credit note reverses the original heads: tax comes back out of the same liability.
     const lines: PostLine[] = [
-      { ledgerCode: "SALES", debit: net, credit: 0 },
-      { ledgerCode: "AR", debit: 0, credit: minor, partyId: party.id },
+      { ledgerCode: "SALES", debit: gst.taxableMinor, credit: 0 },
+      { ledgerCode: "AR", debit: 0, credit: gst.totalMinor, partyId: party.id },
     ];
-    if (gst > 0) lines.unshift({ ledgerCode: "GST_OUTPUT", debit: gst, credit: 0 });
+    for (const [code, amount] of gstOutputLines(gst)) {
+      lines.unshift({ ledgerCode: code, debit: amount, credit: 0 });
+    }
     return postVoucher(tx, {
       factoryId: user.factoryId,
       type: "credit_note",
@@ -313,4 +317,13 @@ export class BooksService {
       },
     });
   }
+}
+
+/** The tax heads actually charged, as ledger/amount pairs. Zero heads are never posted. */
+function gstOutputLines(gst: GstBreakdown): Array<[string, number]> {
+  const out: Array<[string, number]> = [];
+  if (gst.cgstMinor > 0) out.push(["GST_OUTPUT_CGST", gst.cgstMinor]);
+  if (gst.sgstMinor > 0) out.push(["GST_OUTPUT_SGST", gst.sgstMinor]);
+  if (gst.igstMinor > 0) out.push(["GST_OUTPUT_IGST", gst.igstMinor]);
+  return out;
 }

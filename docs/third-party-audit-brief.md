@@ -35,7 +35,7 @@ One application that runs a granite factory:
 | Intake | Supervisor proposes rokad/DPR; a **different** human confirms. PDF/photo is unreadable until CSV |
 | Cash | Drawer lock blocks further cash vouchers that operational day |
 | Sister yards | **Ordinary customers/suppliers**. No special interfactory ledger, no slab copy across `factoryId` |
-| GST | 18% inclusive split onto `GST_OUTPUT`. Mock IRN/e-way if secrets unset. GSTR-1 export; portal upload gated |
+| GST | 18% **exclusive**, split by place of supply onto `GST_OUTPUT_CGST`/`_SGST`/`_IGST`. Frozen on the document at issue. Mock IRN/e-way if secrets unset. GSTR-1 per-head export; portal upload gated |
 | Muster | Attendance + wage sheet; pay posts `EXP_LABOUR`; proposer ≠ confirmer; supervisor cannot pay |
 | Copilot | Propose drafts only. Must not execute SQL, pay, invoice, or confirm its own draft |
 | Tally | XML daybook is archive log only (`writesInventory: false`) |
@@ -107,7 +107,7 @@ Run `node .grok/skills/security-workflows/scripts/security-check.mjs` against a 
 ### D. Data integrity / money / GST
 
 - Vouchers always balance; debit XOR credit per line; integer paise.
-- Invoice amount is the customer total; GST 18% inclusive on sales/CN; AR still matches invoice total.
+- Invoice amount is the customer total (taxable + tax); GST 18% exclusive on sales/CN, CGST+SGST intra-state and IGST inter-state; AR still matches invoice total.
 - Credit note does not silently delete the invoice.
 - Wage pay and expense cash respect drawer lock if they post CASH.
 - GSTR-1 month is IST, not UTC-shifted.

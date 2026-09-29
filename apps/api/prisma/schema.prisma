@@ -335,6 +335,9 @@ model Customer {
   factory     Factory      @relation(fields: [factoryId], references: [id])
   name        String
   contactInfo String?      @map("contact_info")
+  /// Two-digit GST state code. Decides CGST+SGST vs IGST. Null means a local counter sale.
+  stateCode   String?      @map("state_code")
+  gstin       String?
   creditLimit Decimal?     @map("credit_limit") @db.Decimal(14, 2)
   createdAt   DateTime     @default(now()) @map("created_at")
   version     Int          @default(0)
@@ -731,7 +734,17 @@ model Invoice {
   customerId     String     @map("customer_id")
   customer       Customer   @relation(fields: [customerId], references: [id])
   invoiceNumber  String     @map("invoice_number")
+  /// Total payable: taxable value plus tax. AR and payments settle against this.
   amount         Decimal    @db.Decimal(14, 2)
+  /// Value before tax: sum of quantity x rate, since rates are quoted ex-GST.
+  taxableAmount  Decimal    @default(0) @map("taxable_amount") @db.Decimal(14, 2)
+  cgstAmount     Decimal    @default(0) @map("cgst_amount") @db.Decimal(14, 2)
+  sgstAmount     Decimal    @default(0) @map("sgst_amount") @db.Decimal(14, 2)
+  igstAmount     Decimal    @default(0) @map("igst_amount") @db.Decimal(14, 2)
+  /// Frozen at issue. Tax is a historical fact and is never recomputed from live profile rows.
+  gstRatePct     Decimal    @default(0) @map("gst_rate_pct") @db.Decimal(5, 2)
+  placeOfSupply  String?    @map("place_of_supply")
+  supplierState  String?    @map("supplier_state")
   idempotencyKey String     @map("idempotency_key")
   createdAt      DateTime   @default(now()) @map("created_at")
   version        Int        @default(0)
@@ -782,7 +795,15 @@ model CreditNote {
   customerReturnId String?         @unique @map("customer_return_id")
   customerReturn   CustomerReturn? @relation(fields: [customerReturnId], references: [id])
   creditNoteNumber String          @map("credit_note_number")
+  /// Total credited: taxable value plus the tax being reversed.
   amount           Decimal         @db.Decimal(14, 2)
+  taxableAmount    Decimal         @default(0) @map("taxable_amount") @db.Decimal(14, 2)
+  cgstAmount       Decimal         @default(0) @map("cgst_amount") @db.Decimal(14, 2)
+  sgstAmount       Decimal         @default(0) @map("sgst_amount") @db.Decimal(14, 2)
+  igstAmount       Decimal         @default(0) @map("igst_amount") @db.Decimal(14, 2)
+  gstRatePct       Decimal         @default(0) @map("gst_rate_pct") @db.Decimal(5, 2)
+  placeOfSupply    String?         @map("place_of_supply")
+  supplierState    String?         @map("supplier_state")
   reason           String
   idempotencyKey   String          @map("idempotency_key")
   createdAt        DateTime        @default(now()) @map("created_at")
