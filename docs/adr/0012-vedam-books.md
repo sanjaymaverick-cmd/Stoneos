@@ -10,7 +10,7 @@ Khatabook held party balances. StoneOS owns yard stock, invoices, payments, and 
 
 ## Decision
 
-StoneOS posts one balanced voucher (integer paise) for each invoice, collection, credit note, and expense. Chart of accounts is system-seeded per factory. Khatabook customer-list is a one-time opening import as of 2026-09-12 (owner/manager only). Party statements replace the Khatabook UI. Supervisor intake proposes rokad/DPR drafts; a different human confirms. Cash drawer lock stops further cash vouchers that operational day. Pack moves slabs to the PACKING location. GST is split on the same sales/CN vouchers (18% inclusive); GSTR is filed outside. Tally XML stays an archive log (`writesInventory: false`). Muster/payroll is not in this release.
+StoneOS posts one balanced voucher (integer paise) for each invoice, collection, credit note, and expense. Chart of accounts is system-seeded per factory. Khatabook customer-list is a one-time opening import as of 2026-09-12 (owner/manager only). Party statements replace the Khatabook UI. Supervisor intake proposes rokad/DPR drafts; a different human confirms. Cash drawer lock stops further cash vouchers that operational day. Pack moves slabs to the PACKING location. GST is charged on the same sales/CN vouchers (18% exclusive, by place of supply — see ADR 0014); GSTR is filed outside. Tally XML stays an archive log (`writesInventory: false`). Muster/payroll is not in this release.
 
 ## Consequences
 

@@ -27,7 +27,7 @@ export function ruleBasedDraft(text: string): { kind: "rokad" | "dpr" | "journal
   }
   const journalLines: PostLine[] = [];
   for (const line of lines) {
-    const m = line.match(/^(AR|AP|CASH|SALES|EXP_\w+|GST_OUTPUT|STOCK)\s+(Dr|Cr)\s+([\d.]+)$/i);
+    const m = line.match(/^(AR|AP|CASH|SALES|EXP_\w+|GST_OUTPUT_(?:CGST|SGST|IGST)|STOCK)\s+(Dr|Cr)\s+([\d.]+)$/i);
     if (!m) continue;
     const amt = Math.round(Number(m[3]) * 100);
     journalLines.push({

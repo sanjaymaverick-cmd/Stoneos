@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { factoryMonthStart } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
-import { gstSplitInclusive, rupeesToMinor } from "../books/money";
+import { normaliseStateCode, stateCodeFromGstin } from "../books/money";
 
 function mockIrn(seed: string) {
   const hex = createHash("sha256").update(seed).digest("hex").slice(0, 16).toUpperCase();
@@ -22,19 +22,34 @@ export class GstService {
     return this.prisma.gstProfile.findUnique({ where: { factoryId } });
   }
 
-  upsertProfile(
+  async upsertProfile(
     user: AuthenticatedUser,
     input: { gstin: string; legalName: string; stateCode: string; irpSandbox?: boolean },
   ) {
-    if (!input.gstin.trim()) throw new BadRequestException("GSTIN is required");
+    const gstin = input.gstin.trim().toUpperCase();
+    if (!gstin) throw new BadRequestException("GSTIN is required");
+    if (!/^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/.test(gstin)) {
+      throw new BadRequestException("GSTIN must be 15 characters, e.g. 08AAUFV3603N1ZH");
+    }
+    // The first two characters ARE the state code. A stateCode that disagrees with the
+    // GSTIN would silently route tax to the wrong heads, so refuse it outright.
+    const fromGstin = stateCodeFromGstin(gstin);
+    const claimed = normaliseStateCode(input.stateCode);
+    if (claimed && fromGstin && claimed !== fromGstin) {
+      throw new BadRequestException(
+        `State code ${claimed} contradicts GSTIN ${gstin}, which is state ${fromGstin}`,
+      );
+    }
+    const stateCode = fromGstin ?? claimed;
+    if (!stateCode) throw new BadRequestException("State code could not be resolved");
     return this.prisma.gstProfile.upsert({
       where: { factoryId: user.factoryId },
-      update: { gstin: input.gstin, legalName: input.legalName, stateCode: input.stateCode, irpSandbox: input.irpSandbox ?? true },
+      update: { gstin, legalName: input.legalName, stateCode, irpSandbox: input.irpSandbox ?? true },
       create: {
         factoryId: user.factoryId,
-        gstin: input.gstin,
+        gstin,
         legalName: input.legalName,
-        stateCode: input.stateCode,
+        stateCode,
         irpSandbox: input.irpSandbox ?? true,
       },
     });
@@ -49,16 +64,24 @@ export class GstService {
       where: { id: invoiceId, factoryId: user.factoryId },
     });
     if (!invoice) throw new NotFoundException("Invoice not found");
-    const gross = rupeesToMinor(Number(invoice.amount));
-    const split = gstSplitInclusive(gross);
+    const customer = await this.prisma.customer.findUnique({ where: { id: invoice.customerId } });
     const source = hasLiveSecrets() ? "live" : "mock";
     const irn = source === "mock" ? mockIrn(invoice.invoiceNumber) : mockIrn(`live:${invoice.invoiceNumber}`);
     const payload = {
       Version: "1.1",
       Irn: irn,
       DocDtls: { Typ: "INV", No: invoice.invoiceNumber, Dt: invoice.createdAt.toISOString().slice(0, 10) },
-      ValDtls: { AssVal: split.net / 100, IgstVal: split.gst / 100, TotInvVal: Number(invoice.amount) },
+      // Values are read off the invoice as charged, never recomputed: a later profile
+      // edit must not be able to restate a document already reported to the IRP.
+      ValDtls: {
+        AssVal: Number(invoice.taxableAmount),
+        CgstVal: Number(invoice.cgstAmount),
+        SgstVal: Number(invoice.sgstAmount),
+        IgstVal: Number(invoice.igstAmount),
+        TotInvVal: Number(invoice.amount),
+      },
       SellerDtls: { Gstin: profile.gstin, LglNm: profile.legalName, Stcd: profile.stateCode },
+      BuyerDtls: { LglNm: customer?.name, Gstin: customer?.gstin ?? undefined, Pos: invoice.placeOfSupply },
     };
     return this.prisma.eInvoice.create({
       data: {
@@ -93,7 +116,19 @@ export class GstService {
         signedQr: irn,
         status: "mock",
         source: "mock",
-        payload: { Typ: "CRN", No: cn.creditNoteNumber, Irn: irn, TotInvVal: Number(cn.amount) },
+        payload: {
+          Typ: "CRN",
+          No: cn.creditNoteNumber,
+          Irn: irn,
+          ValDtls: {
+            AssVal: Number(cn.taxableAmount),
+            CgstVal: Number(cn.cgstAmount),
+            SgstVal: Number(cn.sgstAmount),
+            IgstVal: Number(cn.igstAmount),
+            TotInvVal: Number(cn.amount),
+          },
+          Pos: cn.placeOfSupply,
+        },
       },
     });
   }
@@ -161,34 +196,57 @@ export class GstService {
       where: { factoryId, createdAt: { gte: start, lt: end } },
       include: { eInvoice: true },
     });
-    const b2b = invoices.map((inv) => {
-      const gross = rupeesToMinor(Number(inv.amount));
-      const split = gstSplitInclusive(gross);
-      return {
-        doc: inv.invoiceNumber,
-        party: inv.customer.name,
-        taxable: split.net / 100,
-        gst: split.gst / 100,
-        total: Number(inv.amount),
-        irn: inv.eInvoice?.irn,
-      };
-    });
-    const cn = notes.map((n) => {
-      const gross = rupeesToMinor(Number(n.amount));
-      const split = gstSplitInclusive(gross);
-      return {
-        doc: n.creditNoteNumber,
-        taxable: split.net / 100,
-        gst: split.gst / 100,
-        total: Number(n.amount),
-        irn: n.eInvoice?.irn,
-      };
-    });
+    // Every figure is read off the document as issued. GSTR-1 needs the heads apart:
+    // CGST and SGST for intra-state supplies, IGST for inter-state ones.
+    const b2b = invoices.map((inv) => ({
+      doc: inv.invoiceNumber,
+      party: inv.customer.name,
+      gstin: inv.customer.gstin ?? "",
+      placeOfSupply: inv.placeOfSupply ?? "",
+      ratePct: Number(inv.gstRatePct),
+      taxable: Number(inv.taxableAmount),
+      cgst: Number(inv.cgstAmount),
+      sgst: Number(inv.sgstAmount),
+      igst: Number(inv.igstAmount),
+      total: Number(inv.amount),
+      irn: inv.eInvoice?.irn,
+    }));
+    const cn = notes.map((n) => ({
+      doc: n.creditNoteNumber,
+      placeOfSupply: n.placeOfSupply ?? "",
+      ratePct: Number(n.gstRatePct),
+      taxable: Number(n.taxableAmount),
+      cgst: Number(n.cgstAmount),
+      sgst: Number(n.sgstAmount),
+      igst: Number(n.igstAmount),
+      total: Number(n.amount),
+      irn: n.eInvoice?.irn,
+    }));
+    const row = (kind: string, r: (typeof b2b)[number] | (typeof cn)[number]) =>
+      [
+        kind,
+        r.doc,
+        "gstin" in r ? r.gstin : "",
+        r.placeOfSupply,
+        r.ratePct,
+        r.taxable,
+        r.cgst,
+        r.sgst,
+        r.igst,
+        r.total,
+        r.irn ?? "",
+      ].join(",");
     const csv = [
-      "type,number,taxable,gst,total,irn",
-      ...b2b.map((r) => `INV,${r.doc},${r.taxable},${r.gst},${r.total},${r.irn ?? ""}`),
-      ...cn.map((r) => `CN,${r.doc},${r.taxable},${r.gst},${r.total},${r.irn ?? ""}`),
+      "type,number,gstin,place_of_supply,rate_pct,taxable,cgst,sgst,igst,total,irn",
+      ...b2b.map((r) => row("INV", r)),
+      ...cn.map((r) => row("CN", r)),
     ].join("\n");
-    return { month, b2b, creditNotes: cn, csv };
+    const totals = {
+      taxable: b2b.reduce((t, r) => t + r.taxable, 0) - cn.reduce((t, r) => t + r.taxable, 0),
+      cgst: b2b.reduce((t, r) => t + r.cgst, 0) - cn.reduce((t, r) => t + r.cgst, 0),
+      sgst: b2b.reduce((t, r) => t + r.sgst, 0) - cn.reduce((t, r) => t + r.sgst, 0),
+      igst: b2b.reduce((t, r) => t + r.igst, 0) - cn.reduce((t, r) => t + r.igst, 0),
+    };
+    return { month, b2b, creditNotes: cn, totals, csv };
   }
 }

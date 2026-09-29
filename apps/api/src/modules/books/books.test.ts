@@ -11,7 +11,8 @@ import {
 import { assertAllowedRoles } from "../../common/session.guard.ts";
 import { operationalDateFor } from "@stoneos/domain";
 import {
-  gstSplitInclusive,
+  gstOnTaxable,
+  stateCodeFromGstin,
   KHATA_AP_TOTAL_MINOR,
   KHATA_AR_TOTAL_MINOR,
   KHATA_PARTY_COUNT,
@@ -50,16 +51,94 @@ describe("books voucher lines", () => {
   });
 
   it("accepts a balanced invoice split with GST", () => {
-    const gross = rupeesToMinor(3200);
-    const { net, gst } = gstSplitInclusive(gross);
-    assert.equal(net + gst, gross);
+    const taxable = rupeesToMinor(3200);
+    const gst = gstOnTaxable(taxable, { supplierStateCode: "08", placeOfSupplyStateCode: "08" });
     assert.doesNotThrow(() =>
       assertVoucherLines([
-        { ledgerCode: "AR", debit: gross, credit: 0 },
-        { ledgerCode: "SALES", debit: 0, credit: net },
-        { ledgerCode: "GST_OUTPUT", debit: 0, credit: gst },
+        { ledgerCode: "AR", debit: gst.totalMinor, credit: 0 },
+        { ledgerCode: "SALES", debit: 0, credit: gst.taxableMinor },
+        { ledgerCode: "GST_OUTPUT_CGST", debit: 0, credit: gst.cgstMinor },
+        { ledgerCode: "GST_OUTPUT_SGST", debit: 0, credit: gst.sgstMinor },
       ]),
     );
+  });
+});
+
+describe("GST on an ex-GST rate", () => {
+  it("adds tax on top of the quoted value instead of carving it out", () => {
+    const gst = gstOnTaxable(rupeesToMinor(1000), {
+      supplierStateCode: "08",
+      placeOfSupplyStateCode: "08",
+    });
+    assert.equal(gst.taxableMinor, 100_000, "the quoted value is the taxable value");
+    assert.equal(gst.totalMinor, 118_000, "the customer owes 1180, not 1000");
+    assert.equal(gst.ratePct, 18);
+  });
+
+  it("splits an intra-state supply into equal CGST and SGST halves", () => {
+    const gst = gstOnTaxable(rupeesToMinor(1000), {
+      supplierStateCode: "08",
+      placeOfSupplyStateCode: "08",
+    });
+    assert.equal(gst.interState, false);
+    assert.equal(gst.cgstMinor, 9_000);
+    assert.equal(gst.sgstMinor, 9_000);
+    assert.equal(gst.igstMinor, 0);
+  });
+
+  it("charges the whole rate as IGST when the place of supply is another state", () => {
+    // Rajasthan factory (08) supplying Andhra Pradesh (37).
+    const gst = gstOnTaxable(rupeesToMinor(1000), {
+      supplierStateCode: "08",
+      placeOfSupplyStateCode: "37",
+    });
+    assert.equal(gst.interState, true);
+    assert.equal(gst.igstMinor, 18_000);
+    assert.equal(gst.cgstMinor, 0);
+    assert.equal(gst.sgstMinor, 0);
+    assert.equal(gst.totalMinor, 118_000, "the customer owes the same either way");
+  });
+
+  it("never loses a paisa when the tax is an odd number of paise", () => {
+    // 18% of 1000.05 is 180.009 -> 18001 paise, which does not halve evenly.
+    const gst = gstOnTaxable(100_005, { supplierStateCode: "08", placeOfSupplyStateCode: "08" });
+    assert.equal(gst.cgstMinor + gst.sgstMinor, gst.totalMinor - gst.taxableMinor);
+    assert.equal(gst.cgstMinor + gst.sgstMinor + gst.igstMinor, 18_001);
+  });
+
+  it("treats 8 and 08 as the same state", () => {
+    const gst = gstOnTaxable(rupeesToMinor(1000), {
+      supplierStateCode: "8",
+      placeOfSupplyStateCode: "08",
+    });
+    assert.equal(gst.interState, false, "a missing leading zero is not a different state");
+  });
+
+  it("supplies an unidentified buyer where the factory stands", () => {
+    const gst = gstOnTaxable(rupeesToMinor(1000), {
+      supplierStateCode: "08",
+      placeOfSupplyStateCode: null,
+    });
+    assert.equal(gst.interState, false);
+    assert.equal(gst.placeOfSupply, "08");
+    assert.equal(gst.cgstMinor + gst.sgstMinor, 18_000);
+  });
+
+  it("charges nothing at all when the factory is not registered", () => {
+    const gst = gstOnTaxable(rupeesToMinor(1000), {
+      supplierStateCode: null,
+      placeOfSupplyStateCode: "37",
+      registered: false,
+    });
+    assert.equal(gst.totalMinor, 100_000, "an unregistered factory must not invent a liability");
+    assert.equal(gst.ratePct, 0);
+    assert.equal(gst.cgstMinor + gst.sgstMinor + gst.igstMinor, 0);
+  });
+
+  it("reads the supplying state out of the GSTIN", () => {
+    assert.equal(stateCodeFromGstin("08AAUFV3603N1ZH"), "08");
+    assert.equal(stateCodeFromGstin("37AAUFV3603N1ZH"), "37");
+    assert.equal(stateCodeFromGstin("not-a-gstin"), null);
   });
 });
 

@@ -12,7 +12,14 @@ import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { isUniqueViolation, nextDocumentNumber } from "./document-number";
 import { BooksService } from "../books/books.service";
-import { parseFactoryDateInput } from "../books/money";
+import {
+  gstOnTaxable,
+  minorToRupees,
+  normaliseStateCode,
+  parseFactoryDateInput,
+  rupeesToMinor,
+  stateCodeFromGstin,
+} from "../books/money";
 
 @Injectable()
 export class SalesService {
@@ -26,9 +33,18 @@ export class SalesService {
     return this.prisma.customer.findMany({ where: { factoryId }, orderBy: { name: "asc" } });
   }
 
-  async createCustomer(user: AuthenticatedUser, name: string, contactInfo?: string) {
+  async createCustomer(
+    user: AuthenticatedUser,
+    name: string,
+    contactInfo?: string,
+    gst?: { stateCode?: string | null; gstin?: string | null },
+  ) {
+    const gstin = gst?.gstin?.trim().toUpperCase() || null;
+    // A buyer's GSTIN already states their place of supply; trust it over a typed code.
+    const stateCode =
+      (gstin ? stateCodeFromGstin(gstin) : null) ?? normaliseStateCode(gst?.stateCode);
     return this.prisma.customer.create({
-      data: { factoryId: user.factoryId, name, contactInfo },
+      data: { factoryId: user.factoryId, name, contactInfo, stateCode, gstin },
     });
   }
 
@@ -282,10 +298,13 @@ export class SalesService {
       const duplicate = await tx.invoice.findFirst({ where: { salesOrderId: order.id } });
       if (duplicate) throw new BadRequestException("Order already invoiced");
       const lines = await tx.salesLineItem.findMany({ where: { salesOrderId: order.id } });
-      const amount = lines.reduce((sum, line) => sum + Number(line.quantitySqft) * Number(line.rate), 0);
+      // Rates are quoted ex-GST, so this sum is the taxable value, not the payable.
+      const taxable = lines.reduce((sum, line) => sum + Number(line.quantitySqft) * Number(line.rate), 0);
       const customer = await tx.customer.findFirst({
         where: { id: order.customerId, factoryId: user.factoryId },
       });
+      const gst = await this.resolveGst(tx, user.factoryId, taxable, customer);
+      const amount = minorToRupees(gst.totalMinor);
       const invoiceNumber = await nextDocumentNumber(tx, user.factoryId, "INVOICE");
       try {
         const created = await tx.invoice.create({
@@ -295,6 +314,13 @@ export class SalesService {
             customerId: order.customerId,
             invoiceNumber,
             amount,
+            taxableAmount: minorToRupees(gst.taxableMinor),
+            cgstAmount: minorToRupees(gst.cgstMinor),
+            sgstAmount: minorToRupees(gst.sgstMinor),
+            igstAmount: minorToRupees(gst.igstMinor),
+            gstRatePct: gst.ratePct,
+            placeOfSupply: gst.placeOfSupply,
+            supplierState: gst.supplierState,
             idempotencyKey: clientOpId,
           },
         });
@@ -305,13 +331,13 @@ export class SalesService {
             action: "sales.invoice",
             entityType: "invoice",
             entityId: created.id,
-            payload: { amount, invoiceNumber },
+            payload: { amount, taxable, invoiceNumber, gstRatePct: gst.ratePct },
           },
         });
         await this.books.postInvoice(tx, user, {
           invoiceId: created.id,
           customerName: customer?.name ?? "Unknown",
-          amount,
+          gst,
           clientOpId,
         });
         return created;
@@ -409,11 +435,11 @@ export class SalesService {
       const lines = await tx.salesLineItem.findMany({
         where: { salesOrderId: order.id, slabId: { in: slabIds } },
       });
-      const creditAmount = lines.reduce(
+      const creditTaxable = lines.reduce(
         (sum, line) => sum + Number(line.quantitySqft) * Number(line.rate),
         0,
       );
-      if (invoice && creditAmount <= 0) {
+      if (invoice && creditTaxable <= 0) {
         throw new BadRequestException("Invoiced return needs a credit amount from order lines");
       }
       for (const slabId of slabIds) {
@@ -435,6 +461,12 @@ export class SalesService {
       let creditNote = null;
       if (invoice) {
         const creditNoteNumber = await nextDocumentNumber(tx, user.factoryId, "CREDIT_NOTE");
+        // Reverse the tax on the same heads the invoice charged, so a cross-state sale
+        // credits IGST and a local one credits CGST + SGST.
+        const creditCustomer = await tx.customer.findFirst({
+          where: { id: order.customerId, factoryId: user.factoryId },
+        });
+        const creditGst = await this.resolveGst(tx, user.factoryId, creditTaxable, creditCustomer);
         try {
           creditNote = await tx.creditNote.create({
             data: {
@@ -443,7 +475,14 @@ export class SalesService {
               invoiceId: invoice.id,
               customerReturnId: ret.id,
               creditNoteNumber,
-              amount: creditAmount,
+              amount: minorToRupees(creditGst.totalMinor),
+              taxableAmount: minorToRupees(creditGst.taxableMinor),
+              cgstAmount: minorToRupees(creditGst.cgstMinor),
+              sgstAmount: minorToRupees(creditGst.sgstMinor),
+              igstAmount: minorToRupees(creditGst.igstMinor),
+              gstRatePct: creditGst.ratePct,
+              placeOfSupply: creditGst.placeOfSupply,
+              supplierState: creditGst.supplierState,
               reason: reason.trim(),
               idempotencyKey: `credit:${ret.id}`,
             },
@@ -454,14 +493,11 @@ export class SalesService {
           }
           throw error;
         }
-        const customer = await tx.customer.findFirst({
-          where: { id: order.customerId, factoryId: user.factoryId },
-        });
         await this.books.postCreditNote(tx, user, {
           creditNoteId: creditNote.id,
           invoiceId: invoice.id,
-          customerName: customer?.name ?? "Unknown",
-          amount: creditAmount,
+          customerName: creditCustomer?.name ?? "Unknown",
+          gst: creditGst,
           clientOpId: `credit:${ret.id}`,
         });
       }
@@ -517,6 +553,30 @@ export class SalesService {
         weightTons: tons,
         ratio: recoveryRatio(soldSqft, tons),
       };
+    });
+  }
+
+  /**
+   * Resolve the tax on a taxable value at the moment a document is issued.
+   * The supplier state comes from the GSTIN itself, so a mistyped stateCode on the
+   * profile can never route tax to the wrong heads.
+   */
+  private async resolveGst(
+    tx: Prisma.TransactionClient,
+    factoryId: string,
+    taxableRupees: number,
+    customer: { stateCode?: string | null; gstin?: string | null } | null,
+  ) {
+    const profile = await tx.gstProfile.findUnique({ where: { factoryId } });
+    const supplierStateCode = profile
+      ? (stateCodeFromGstin(profile.gstin) ?? profile.stateCode)
+      : null;
+    const placeOfSupplyStateCode =
+      customer?.stateCode ?? (customer?.gstin ? stateCodeFromGstin(customer.gstin) : null);
+    return gstOnTaxable(rupeesToMinor(taxableRupees), {
+      supplierStateCode,
+      placeOfSupplyStateCode,
+      registered: Boolean(profile),
     });
   }
 

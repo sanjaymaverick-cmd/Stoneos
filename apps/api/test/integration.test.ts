@@ -654,6 +654,11 @@ describe("postgres-backed workflows", () => {
 
   it("posts one balanced voucher per invoice, pay, and expense, and retries are no-ops", async () => {
     const { factory, asOwner } = await staffFactory("voucher");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
     const customer = await sales.createCustomer(asOwner, "Books Co");
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
@@ -700,11 +705,16 @@ describe("postgres-backed workflows", () => {
       assert.equal(debit, credit);
     }
     const salesV = vouchers.find((v) => v.source === "sales_invoice");
-    assert.ok(salesV?.lines.some((l) => l.ledger.code === "GST_OUTPUT" && l.credit > 0));
-    const ar = salesV!.lines.find((l) => l.ledger.code === "AR");
-    assert.equal(ar?.debit, 320000);
+    // 32 sqft at 100 is 3200 taxable; a Rajasthan buyer of a Rajasthan factory pays
+    // 9% CGST + 9% SGST on top, so AR carries 3776 and sales carries 3200.
+    const line = (code: string) => salesV!.lines.find((l) => l.ledger.code === code);
+    assert.equal(line("SALES")?.credit, 320000, "sales is the taxable value");
+    assert.equal(line("GST_OUTPUT_CGST")?.credit, 28800);
+    assert.equal(line("GST_OUTPUT_SGST")?.credit, 28800);
+    assert.equal(line("GST_OUTPUT_IGST"), undefined, "a local sale posts no IGST");
+    assert.equal(line("AR")?.debit, 377600, "AR is the full payable, tax included");
     const outstanding = await books.outstanding(factory.id);
-    assert.equal(outstanding.youllGet, 2200);
+    assert.equal(outstanding.youllGet, 2776);
   });
 
   it("imports the khata customer list at 46 parties and the 12 Sep 2026 totals", async () => {
@@ -922,6 +932,130 @@ describe("postgres-backed workflows", () => {
     const gstr = await gst.gstr1(factory.id, "2026-09");
     assert.ok(gstr.b2b.some((r) => r.doc.startsWith("INV-")));
     assert.match(gstr.csv, /INV-/);
+  });
+
+  it("charges GST on top of the quoted rate and splits it by place of supply", async () => {
+    const { factory, asOwner } = await staffFactory("pos");
+    // Vedam Granites is Rajasthan: the GSTIN's first two characters are the state.
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
+
+    const bill = async (name: string, stateCode: string | undefined, tag: string) => {
+      const customer = await sales.createCustomer(asOwner, name, undefined, { stateCode });
+      const order = (await sales.createOrder(asOwner, {
+        customerId: customer.id,
+        orderDate: "2026-09-12",
+        clientOpId: `${tag}-order`,
+        lines: [{ quantitySqft: 10, rate: 100 }],
+      })) as { id: string };
+      return sales.invoice(asOwner, order.id, `${tag}-inv`);
+    };
+
+    // Rajasthan buyer: one state, so the 18% splits into 9% CGST + 9% SGST.
+    const local = await bill("Jaipur Marbles", "08", "local");
+    assert.equal(Number(local.taxableAmount), 1000, "the quoted rate is the taxable value");
+    assert.equal(Number(local.cgstAmount), 90);
+    assert.equal(Number(local.sgstAmount), 90);
+    assert.equal(Number(local.igstAmount), 0);
+    assert.equal(Number(local.amount), 1180, "the customer owes rate plus tax, not rate");
+    assert.equal(local.placeOfSupply, "08");
+    assert.equal(Number(local.gstRatePct), 18);
+
+    // Andhra Pradesh buyer: different state, so the whole 18% is IGST.
+    const outside = await bill("Ongole Stone Works", "37", "outside");
+    assert.equal(Number(outside.igstAmount), 180);
+    assert.equal(Number(outside.cgstAmount), 0);
+    assert.equal(Number(outside.sgstAmount), 0);
+    assert.equal(Number(outside.amount), 1180, "the buyer pays the same either way");
+    assert.equal(outside.placeOfSupply, "37");
+
+    // The books must carry the heads apart, never merged.
+    const ledgerTotal = async (code: string) => {
+      const ledger = await prisma.ledger.findFirst({ where: { factoryId: factory.id, code } });
+      if (!ledger) return 0;
+      const agg = await prisma.voucherLine.aggregate({
+        where: { ledgerId: ledger.id },
+        _sum: { credit: true, debit: true },
+      });
+      return (agg._sum.credit ?? 0) - (agg._sum.debit ?? 0);
+    };
+    assert.equal(await ledgerTotal("GST_OUTPUT_CGST"), 9_000, "CGST in paise");
+    assert.equal(await ledgerTotal("GST_OUTPUT_SGST"), 9_000);
+    assert.equal(await ledgerTotal("GST_OUTPUT_IGST"), 18_000);
+    assert.equal(await ledgerTotal("SALES"), 200_000, "sales is taxable value only");
+    assert.equal(await ledgerTotal("AR"), -236_000, "AR is debited with the full payable");
+
+    // AR must follow the payable, so a payment of the pre-tax figure cannot settle it.
+    await assert.rejects(
+      () =>
+        sales.pay(asOwner, local.id, {
+          amount: 1181,
+          method: "cash",
+          paidAt: "2026-09-12",
+          clientOpId: "pos-overpay",
+        }),
+      /exceeds invoice amount/i,
+    );
+    await sales.pay(asOwner, local.id, {
+      amount: 1180,
+      method: "cash",
+      paidAt: "2026-09-12",
+      clientOpId: "pos-pay",
+    });
+
+    // GSTR-1 reports the heads separately, read off the documents as issued.
+    const gstr = await gst.gstr1(factory.id, "2026-09");
+    const localRow = gstr.b2b.find((r) => r.doc === local.invoiceNumber);
+    const outsideRow = gstr.b2b.find((r) => r.doc === outside.invoiceNumber);
+    assert.deepEqual(
+      { taxable: localRow?.taxable, cgst: localRow?.cgst, sgst: localRow?.sgst, igst: localRow?.igst },
+      { taxable: 1000, cgst: 90, sgst: 90, igst: 0 },
+    );
+    assert.deepEqual(
+      { taxable: outsideRow?.taxable, cgst: outsideRow?.cgst, sgst: outsideRow?.sgst, igst: outsideRow?.igst },
+      { taxable: 2000 - 1000, cgst: 0, sgst: 0, igst: 180 },
+    );
+    assert.equal(gstr.totals.cgst, 90);
+    assert.equal(gstr.totals.sgst, 90);
+    assert.equal(gstr.totals.igst, 180);
+    assert.match(gstr.csv, /type,number,gstin,place_of_supply,rate_pct,taxable,cgst,sgst,igst,total,irn/);
+
+    // A tax figure must never move because a profile row was edited afterwards.
+    await gst.upsertProfile(asOwner, {
+      gstin: "37AAUFV3603N1ZH",
+      legalName: "Vedam Granites AP",
+      stateCode: "37",
+    });
+    const reread = await prisma.invoice.findUniqueOrThrow({ where: { id: local.id } });
+    assert.equal(Number(reread.cgstAmount), 90, "an issued invoice is frozen");
+    assert.equal(reread.supplierState, "08");
+  });
+
+  it("refuses a state code that contradicts the GSTIN", async () => {
+    const { asOwner } = await staffFactory("gstin");
+    await assert.rejects(
+      () =>
+        gst.upsertProfile(asOwner, {
+          gstin: "08AAUFV3603N1ZH",
+          legalName: "Vedam",
+          stateCode: "37",
+        }),
+      /contradicts GSTIN/i,
+    );
+    await assert.rejects(
+      () => gst.upsertProfile(asOwner, { gstin: "NOPE", legalName: "Vedam", stateCode: "08" }),
+      /15 characters/i,
+    );
+    // The GSTIN is authoritative, so a blank state code is resolved from it.
+    const saved = await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam",
+      stateCode: "",
+    });
+    assert.equal(saved.stateCode, "08");
   });
 
   it("files GSTR-1 by IST calendar month, not the 07:00 operational-day cutover", async () => {

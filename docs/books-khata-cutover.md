@@ -38,4 +38,4 @@ After a successful live PDF import (`GET /books/outstanding` You&apos;ll Get ₹
 
 ## GST
 
-Invoice amount is the customer total. Voucher splits 18% GST inclusive onto `GST_OUTPUT`. File GSTR outside StoneOS.
+Invoice amount is the customer total: taxable value plus tax, since rates are quoted ex-GST. Vouchers post 18% onto `GST_OUTPUT_CGST` + `_SGST` for a buyer in the factory's own state, or `GST_OUTPUT_IGST` for another state. File GSTR outside StoneOS.

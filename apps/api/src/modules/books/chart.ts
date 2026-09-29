@@ -17,7 +17,11 @@ export const SYSTEM_LEDGERS: Array<{
   { code: "AP", name: "Accounts payable", group: "liability", kind: "ap" },
   { code: "SALES", name: "Sales", group: "income", kind: "sales" },
   { code: "CN_CONTRA", name: "Credit notes", group: "income", kind: "sales" },
-  { code: "GST_OUTPUT", name: "GST output (file GSTR outside)", group: "liability", kind: "gst" },
+  // One ledger per head: GSTR-1 reports CGST, SGST and IGST separately, and a single
+  // combined ledger cannot be split back apart once posted.
+  { code: "GST_OUTPUT_CGST", name: "CGST output", group: "liability", kind: "gst" },
+  { code: "GST_OUTPUT_SGST", name: "SGST output", group: "liability", kind: "gst" },
+  { code: "GST_OUTPUT_IGST", name: "IGST output", group: "liability", kind: "gst" },
   { code: "EXP_DIESEL", name: "Diesel", group: "expense", kind: "expense" },
   { code: "EXP_FREIGHT", name: "Freight", group: "expense", kind: "expense" },
   { code: "EXP_LABOUR", name: "Labour", group: "expense", kind: "expense" },
