@@ -5,6 +5,12 @@ import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { normaliseStateCode, stateCodeFromGstin } from "../books/money";
 
+/**
+ * Inter-state supplies to unregistered buyers above this invoice value are reported
+ * invoice-wise in B2CL; everything else consolidates into B2CS.
+ */
+export const B2CL_INVOICE_THRESHOLD = 250_000;
+
 function mockIrn(seed: string) {
   const hex = createHash("sha256").update(seed).digest("hex").slice(0, 16).toUpperCase();
   return `MOCK-IRN-${hex}`;
@@ -198,7 +204,7 @@ export class GstService {
     });
     // Every figure is read off the document as issued. GSTR-1 needs the heads apart:
     // CGST and SGST for intra-state supplies, IGST for inter-state ones.
-    const b2b = invoices.map((inv) => ({
+    const rows = invoices.map((inv) => ({
       doc: inv.invoiceNumber,
       party: inv.customer.name,
       gstin: inv.customer.gstin ?? "",
@@ -211,6 +217,14 @@ export class GstService {
       total: Number(inv.amount),
       irn: inv.eInvoice?.irn,
     }));
+    // A retail buyer has no GSTIN and belongs in B2C, not B2B. Tax is charged either
+    // way — only the table it is reported in differs.
+    const b2b = rows.filter((r) => r.gstin !== "");
+    const b2c = rows.filter((r) => r.gstin === "");
+    // B2CL: an inter-state supply to an unregistered buyer above the invoice-value
+    // threshold is reported invoice-wise; the rest go in the consolidated B2CS table.
+    const b2cLarge = b2c.filter((r) => r.igst > 0 && r.total > B2CL_INVOICE_THRESHOLD);
+    const b2cSmall = b2c.filter((r) => !(r.igst > 0 && r.total > B2CL_INVOICE_THRESHOLD));
     const cn = notes.map((n) => ({
       doc: n.creditNoteNumber,
       placeOfSupply: n.placeOfSupply ?? "",
@@ -222,7 +236,7 @@ export class GstService {
       total: Number(n.amount),
       irn: n.eInvoice?.irn,
     }));
-    const row = (kind: string, r: (typeof b2b)[number] | (typeof cn)[number]) =>
+    const row = (kind: string, r: (typeof rows)[number] | (typeof cn)[number]) =>
       [
         kind,
         r.doc,
@@ -238,15 +252,46 @@ export class GstService {
       ].join(",");
     const csv = [
       "type,number,gstin,place_of_supply,rate_pct,taxable,cgst,sgst,igst,total,irn",
-      ...b2b.map((r) => row("INV", r)),
+      ...b2b.map((r) => row("B2B", r)),
+      ...b2cLarge.map((r) => row("B2CL", r)),
+      ...b2cSmall.map((r) => row("B2CS", r)),
       ...cn.map((r) => row("CN", r)),
     ].join("\n");
+    const sum = (list: Array<{ taxable: number; cgst: number; sgst: number; igst: number }>) => ({
+      taxable: list.reduce((t, r) => t + r.taxable, 0),
+      cgst: list.reduce((t, r) => t + r.cgst, 0),
+      sgst: list.reduce((t, r) => t + r.sgst, 0),
+      igst: list.reduce((t, r) => t + r.igst, 0),
+    });
+    const gross = sum(rows);
+    const credited = sum(cn);
     const totals = {
-      taxable: b2b.reduce((t, r) => t + r.taxable, 0) - cn.reduce((t, r) => t + r.taxable, 0),
-      cgst: b2b.reduce((t, r) => t + r.cgst, 0) - cn.reduce((t, r) => t + r.cgst, 0),
-      sgst: b2b.reduce((t, r) => t + r.sgst, 0) - cn.reduce((t, r) => t + r.sgst, 0),
-      igst: b2b.reduce((t, r) => t + r.igst, 0) - cn.reduce((t, r) => t + r.igst, 0),
+      taxable: gross.taxable - credited.taxable,
+      cgst: gross.cgst - credited.cgst,
+      sgst: gross.sgst - credited.sgst,
+      igst: gross.igst - credited.igst,
     };
-    return { month, b2b, creditNotes: cn, totals, csv };
+    // Cash counter sales carry no invoice and no GST document, so none of them appear
+    // above. Reported here only so the month's filed turnover is never mistaken for
+    // the month's total turnover.
+    const unbilled = await this.prisma.cashSale.aggregate({
+      where: { factoryId, saleDate: { gte: start, lt: end } },
+      _sum: { amount: true },
+      _count: true,
+    });
+    return {
+      month,
+      b2b,
+      b2cLarge,
+      b2cSmall,
+      creditNotes: cn,
+      totals,
+      excludedCashSales: {
+        count: unbilled._count,
+        amount: Number(unbilled._sum.amount ?? 0),
+        note: "Cash sales with no invoice. Not part of this return.",
+      },
+      csv,
+    };
   }
 }

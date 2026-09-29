@@ -49,6 +49,7 @@ export class ReportsService {
       invoicedMtd,
       collectedMtd,
       expensesMtd,
+      unbilledCashMtd,
       damagedCost,
       blocks,
     ] = await Promise.all([
@@ -73,6 +74,10 @@ export class ReportsService {
       }),
       this.prisma.expense.aggregate({
         where: { factoryId, expenseDate: { gte: monthStart } },
+        _sum: { amount: true },
+      }),
+      this.prisma.cashSale.aggregate({
+        where: { factoryId, saleDate: { gte: monthStart } },
         _sum: { amount: true },
       }),
       this.prisma.cuttingSession.aggregate({
@@ -109,6 +114,7 @@ export class ReportsService {
       invoicedMtd: Number(invoicedMtd._sum.amount ?? 0),
       collectedMtd: Number(collectedMtd._sum.amount ?? 0),
       expensesMtd: Number(expensesMtd._sum.amount ?? 0),
+      unbilledCashMtd: Number(unbilledCashMtd._sum.amount ?? 0),
       maintenanceDue,
       openCutting,
       openPolishing,

@@ -21,6 +21,7 @@ import { IntakeService } from "../src/modules/books/intake.service";
 import { MusterService } from "../src/modules/muster/muster.service";
 import { GstService } from "../src/modules/gst/gst.service";
 import { CopilotService } from "../src/modules/books/copilot.service";
+import { ReportsService } from "../src/modules/reports/reports.service";
 import type { AuthenticatedUser } from "../src/common/current-user";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,7 @@ describe("postgres-backed workflows", () => {
   let muster: MusterService;
   let gst: GstService;
   let copilot: CopilotService;
+  let reports: ReportsService;
   let factoryId = "";
   let owner: AuthenticatedUser;
 
@@ -82,6 +84,7 @@ describe("postgres-backed workflows", () => {
     muster = new MusterService(prisma as never, books);
     gst = new GstService(prisma as never);
     copilot = new CopilotService(prisma as never, audit);
+    reports = new ReportsService(prisma as never);
 
     await prisma.$executeRawUnsafe(`
       DO $$ DECLARE r RECORD;
@@ -916,7 +919,9 @@ describe("postgres-backed workflows", () => {
     const { factory, asOwner } = await staffFactory("gst");
     await assert.rejects(() => gst.einvoice(asOwner, "missing"), /GSTIN missing/i);
     await gst.upsertProfile(asOwner, { gstin: "08AAAAA0000A1Z5", legalName: "Vedam", stateCode: "08" });
-    const customer = await sales.createCustomer(asOwner, "Gst Co");
+    const customer = await sales.createCustomer(asOwner, "Gst Co", undefined, {
+      gstin: "08AABCG1234H1Z1",
+    });
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
       orderDate: "2026-09-12",
@@ -944,7 +949,10 @@ describe("postgres-backed workflows", () => {
     });
 
     const bill = async (name: string, stateCode: string | undefined, tag: string) => {
-      const customer = await sales.createCustomer(asOwner, name, undefined, { stateCode });
+      // Registered dealers, so these belong in B2B; the retail path is covered separately.
+      const customer = await sales.createCustomer(asOwner, name, undefined, {
+        gstin: `${stateCode}AABCP0000${stateCode}1Z9`,
+      });
       const order = (await sales.createOrder(asOwner, {
         customerId: customer.id,
         orderDate: "2026-09-12",
@@ -1034,6 +1042,177 @@ describe("postgres-backed workflows", () => {
     assert.equal(reread.supplierState, "08");
   });
 
+  it("taxes a retail buyer with no GSTIN and files them under B2C, not B2B", async () => {
+    const { factory, asOwner } = await staffFactory("b2c");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
+    // A walk-in with no GSTIN, in Rajasthan: still 9 + 9.
+    const local = await sales.createCustomer(asOwner, "Walk-in Ramesh", undefined, { stateCode: "08" });
+    // A retail buyer in Andhra Pradesh with no GSTIN: still 18 IGST.
+    const outside = await sales.createCustomer(asOwner, "Retail AP", undefined, { stateCode: "37" });
+
+    const billTo = async (customerId: string, tag: string, rate: number) => {
+      const order = (await sales.createOrder(asOwner, {
+        customerId,
+        orderDate: "2026-09-12",
+        clientOpId: `${tag}-order`,
+        lines: [{ quantitySqft: 10, rate }],
+      })) as { id: string };
+      return sales.invoice(asOwner, order.id, `${tag}-inv`);
+    };
+    const localInv = await billTo(local.id, "b2clocal", 100);
+    const outsideInv = await billTo(outside.id, "b2cout", 100);
+
+    assert.equal(Number(localInv.cgstAmount), 90, "no GSTIN does not mean no tax");
+    assert.equal(Number(localInv.sgstAmount), 90);
+    assert.equal(Number(outsideInv.igstAmount), 180, "out of state is IGST even for retail");
+
+    const gstr = await gst.gstr1(factory.id, "2026-09");
+    assert.equal(gstr.b2b.length, 0, "a buyer with no GSTIN is never B2B");
+    const b2cDocs = [...gstr.b2cSmall, ...gstr.b2cLarge].map((r) => r.doc);
+    assert.ok(b2cDocs.includes(localInv.invoiceNumber));
+    assert.ok(b2cDocs.includes(outsideInv.invoiceNumber));
+    assert.equal(gstr.totals.cgst + gstr.totals.sgst + gstr.totals.igst, 360, "all of it is still filed");
+    assert.match(gstr.csv, /^B2CS,/m);
+
+    // A large inter-state retail sale is reported invoice-wise, not consolidated.
+    const bigInv = await billTo(outside.id, "b2cbig", 40_000);
+    const after = await gst.gstr1(factory.id, "2026-09");
+    assert.ok(
+      after.b2cLarge.some((r) => r.doc === bigInv.invoiceNumber),
+      "an inter-state retail invoice over the threshold belongs in B2CL",
+    );
+    assert.ok(!after.b2cSmall.some((r) => r.doc === bigInv.invoiceNumber));
+  });
+
+  it("bills packaging and labour charges as part of the taxable value", async () => {
+    const { factory, asOwner } = await staffFactory("charges");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
+    const customer = await sales.createCustomer(asOwner, "Charges Co", undefined, { stateCode: "08" });
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-12",
+      clientOpId: "charges-order",
+      lines: [{ quantitySqft: 10, rate: 100 }],
+    })) as { id: string };
+    const invoice = await sales.invoice(asOwner, order.id, "charges-inv", [
+      { label: "Customised packaging", amount: 500 },
+      { label: "Loading labour", amount: 300 },
+      { label: "Demurrage", amount: 200 },
+      // A pure reimbursement billed at cost: owed, but not part of the taxable value.
+      { label: "Octroi paid on behalf", amount: 100, taxable: false },
+    ]);
+
+    // 1000 slabs + 1000 taxable charges = 2000 taxable, tax 360, plus 100 untaxed.
+    assert.equal(Number(invoice.taxableAmount), 2000, "charges join the taxable value");
+    assert.equal(Number(invoice.cgstAmount), 180);
+    assert.equal(Number(invoice.sgstAmount), 180);
+    assert.equal(Number(invoice.exemptAmount), 100);
+    assert.equal(Number(invoice.amount), 2460, "2000 + 360 tax + 100 untaxed");
+
+    const stored = await prisma.invoiceCharge.findMany({
+      where: { invoiceId: invoice.id },
+      orderBy: { label: "asc" },
+    });
+    assert.equal(stored.length, 4);
+    assert.equal(stored.filter((c) => !c.taxable).length, 1);
+
+    const voucher = await prisma.voucher.findFirst({
+      where: { factoryId: factory.id, source: "sales_invoice" },
+      include: { lines: { include: { ledger: true } } },
+    });
+    const line = (code: string) => voucher!.lines.find((l) => l.ledger.code === code);
+    assert.equal(line("AR")?.debit, 246_000, "AR carries the untaxed charge too");
+    assert.equal(line("SALES")?.credit, 210_000, "sales is taxable value plus the reimbursement");
+    assert.equal(line("GST_OUTPUT_CGST")?.credit, 18_000);
+
+    await assert.rejects(
+      () => sales.invoice(asOwner, order.id, "charges-bad", [{ label: "  ", amount: 50 }]),
+      /needs a label/i,
+    );
+    await assert.rejects(
+      () => sales.invoice(asOwner, order.id, "charges-bad2", [{ label: "Freight", amount: -5 }]),
+      /positive amount/i,
+    );
+  });
+
+  it("records a cash sale with no invoice and keeps it out of GSTR-1", async () => {
+    const { factory, asOwner } = await staffFactory("cash");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
+    const customer = await sales.createCustomer(asOwner, "Local Counter", undefined, { stateCode: "08" });
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-12",
+      clientOpId: "cash-order",
+      billingMode: "cash_unbilled",
+      lines: [{ quantitySqft: 10, rate: 100 }],
+    })) as { id: string };
+
+    // A cash-sale order cannot be turned into a tax invoice by accident.
+    await assert.rejects(() => sales.invoice(asOwner, order.id, "cash-inv"), /cannot be invoiced/i);
+
+    const sale = await sales.recordCashSale(asOwner, order.id, {
+      amount: 1000,
+      saleDate: "2026-09-12",
+      clientOpId: "cash-1",
+      buyerName: "Ramesh",
+    });
+    const retry = await sales.recordCashSale(asOwner, order.id, {
+      amount: 1000,
+      saleDate: "2026-09-12",
+      clientOpId: "cash-1",
+      buyerName: "Ramesh",
+    });
+    assert.equal(retry.id, sale.id, "a replayed clientOpId must not double-count cash");
+
+    // The cash and the revenue are booked; the revenue is quarantined on its own ledger.
+    const voucher = await prisma.voucher.findFirst({
+      where: { factoryId: factory.id, source: "cash_sale" },
+      include: { lines: { include: { ledger: true } } },
+    });
+    assert.ok(voucher, "a cash sale still posts a balanced voucher");
+    assert.equal(voucher!.lines.find((l) => l.ledger.code === "CASH")?.debit, 100_000);
+    assert.equal(voucher!.lines.find((l) => l.ledger.code === "SALES_UNBILLED")?.credit, 100_000);
+    assert.equal(
+      voucher!.lines.find((l) => l.ledger.code === "SALES"),
+      undefined,
+      "unbilled revenue must never touch the invoiced sales ledger",
+    );
+    assert.equal(await prisma.invoice.count({ where: { salesOrderId: order.id } }), 0);
+
+    // Nothing reaches the return, but the return says how much was left out.
+    const gstr = await gst.gstr1(factory.id, "2026-09");
+    assert.equal(gstr.b2b.length + gstr.b2cSmall.length + gstr.b2cLarge.length, 0);
+    assert.equal(gstr.totals.cgst + gstr.totals.sgst + gstr.totals.igst, 0);
+    assert.equal(gstr.excludedCashSales.count, 1);
+    assert.equal(gstr.excludedCashSales.amount, 1000);
+
+    // And the owner is told, rather than having to go looking.
+    const brief = await reports.ceoBrief(factory.id);
+    assert.equal(brief.unbilledCashMtd, 1000);
+    assert.ok(
+      brief.exceptions.some((e) => e.code === "UNBILLED_CASH_SALES"),
+      "unbilled turnover must surface on the CEO brief",
+    );
+
+    // An audit trail exists even though no GST document does.
+    const audit = await prisma.auditEvent.findFirst({
+      where: { factoryId: factory.id, action: "sales.cash_sale" },
+    });
+    assert.ok(audit, "a cash sale is still audited");
+  });
+
   it("refuses a state code that contradicts the GSTIN", async () => {
     const { asOwner } = await staffFactory("gstin");
     await assert.rejects(
@@ -1061,7 +1240,9 @@ describe("postgres-backed workflows", () => {
   it("files GSTR-1 by IST calendar month, not the 07:00 operational-day cutover", async () => {
     const { factory, asOwner } = await staffFactory("gstmonth");
     await gst.upsertProfile(asOwner, { gstin: "08AAAAA0000A1Z6", legalName: "Vedam", stateCode: "08" });
-    const customer = await sales.createCustomer(asOwner, "Boundary Co");
+    const customer = await sales.createCustomer(asOwner, "Boundary Co", undefined, {
+      gstin: "08AABCB5678J1Z2",
+    });
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
       orderDate: "2026-10-01",
