@@ -28,6 +28,7 @@ type CeoBrief = ShopMetrics & {
   damagedCost: number;
   recoveryRatio: number | null;
   recoveryBenchmark: number;
+  recoveryBasis?: { settledBlocks: number; openBlocks: number; soldSqft: number; tons: number };
   exceptions: Array<{ code: string; severity: string; message: string }>;
 };
 
@@ -35,6 +36,17 @@ type ChatTurn = { role: "user" | "copilot"; text: string };
 
 function inr(n: number) {
   return `₹${Math.round(n).toLocaleString("en-IN")}`;
+}
+
+/** The ratio is never shown without the basis it was measured over. */
+function recoveryHint(ceo: CeoBrief) {
+  const settled = ceo.recoveryBasis?.settledBlocks ?? 0;
+  const open = ceo.recoveryBasis?.openBlocks ?? 0;
+  if (ceo.recoveryRatio === null) {
+    return open > 0 ? `not measurable · ${open} block(s) still hold stock` : "no sold-out block yet";
+  }
+  const excluded = open > 0 ? ` · ${open} open excluded` : "";
+  return `sqft / ton · bench ${ceo.recoveryBenchmark} · ${settled} sold-out block(s)${excluded}`;
 }
 
 function recoveryClass(ratio: number | null, bench: number) {
@@ -116,7 +128,7 @@ export default function DashboardPage() {
             <div className={`metric ${recoveryClass(ceo.recoveryRatio, ceo.recoveryBenchmark)}`}>
               <span>Recovery</span>
               <b>{ceo.recoveryRatio === null ? "—" : ceo.recoveryRatio.toFixed(1)}</b>
-              <span className="hint">sqft / ton · bench {ceo.recoveryBenchmark}</span>
+              <span className="hint">{recoveryHint(ceo)}</span>
             </div>
           ) : null}
           {ceo ? (
