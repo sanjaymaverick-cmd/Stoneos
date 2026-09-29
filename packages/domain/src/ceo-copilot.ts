@@ -13,11 +13,21 @@ function inr(n: number) {
   return `₹${Math.round(n).toLocaleString("en-IN")}`;
 }
 
+/** Recovery is only ever stated with the basis it was measured over. */
+function recoverySentence(snap: CeoSnapshot): string {
+  const settled = snap.settledBlocks ?? 0;
+  const open = snap.openBlocks ?? 0;
+  if (snap.recoveryRatio === null) {
+    return open > 0
+      ? `Sale-time recovery is not measurable yet: ${open} block(s) still hold unsold slabs and none has sold out.`
+      : "Sale-time recovery has no sold-out block yet.";
+  }
+  const excluded = open > 0 ? ` ${open} block(s) still holding stock are excluded.` : "";
+  return `Sale-time recovery is ${snap.recoveryRatio.toFixed(1)} sqft/ton against the 105 benchmark, measured over ${settled} sold-out block(s).${excluded}`;
+}
+
 export function ceoNarrative(snap: CeoSnapshot, exceptions: CeoException[]): string {
-  const recovery =
-    snap.recoveryRatio === null
-      ? "Sale-time recovery has no sold tons yet."
-      : `Sale-time recovery is ${snap.recoveryRatio.toFixed(1)} sqft/ton against the 105 benchmark.`;
+  const recovery = recoverySentence(snap);
   const cash = `Invoiced this month ${inr(snap.invoicedMtd)}; collected ${inr(snap.collectedMtd)}; outstanding AR ${inr(snap.outstandingAr)}.`;
   const yard = `Yard: ${snap.blocksOnHand} blocks and ${snap.slabsOnHand} slabs on hand. Cutting WIP ${snap.openCutting}, polish WIP ${snap.openPolishing}, confirmed orders ${snap.openOrders}.`;
   const head =
@@ -53,13 +63,12 @@ export function answerCeoQuestion(question: string, snap: CeoSnapshot): { answer
     };
   }
   if (hit.topic === "recovery") {
-    return {
-      topic: "recovery",
-      answer:
-        snap.recoveryRatio === null
-          ? "No sold square feet against parent-block tons yet. Recovery is sale-time only; cutting dimensions are not used."
-          : `Factory recovery is ${snap.recoveryRatio.toFixed(1)} sqft/ton. Benchmark is 105. ${exceptions.find((e) => e.code === "RECOVERY_BELOW_BENCHMARK")?.message ?? "At or above benchmark."}`,
-    };
+    const verdict =
+      snap.recoveryRatio === null
+        ? "Recovery is sale-time only; cutting dimensions are never used."
+        : (exceptions.find((e) => e.code === "RECOVERY_BELOW_BENCHMARK")?.message ??
+          "That is at or above the benchmark.");
+    return { topic: "recovery", answer: `${recoverySentence(snap)} ${verdict}` };
   }
   if (hit.topic === "collections") {
     return {

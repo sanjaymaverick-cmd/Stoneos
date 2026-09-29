@@ -21,6 +21,7 @@ import { IntakeService } from "../src/modules/books/intake.service";
 import { MusterService } from "../src/modules/muster/muster.service";
 import { GstService } from "../src/modules/gst/gst.service";
 import { CopilotService } from "../src/modules/books/copilot.service";
+import { ReportsService } from "../src/modules/reports/reports.service";
 import type { AuthenticatedUser } from "../src/common/current-user";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,7 @@ describe("postgres-backed workflows", () => {
   let muster: MusterService;
   let gst: GstService;
   let copilot: CopilotService;
+  let reports: ReportsService;
   let factoryId = "";
   let owner: AuthenticatedUser;
 
@@ -82,6 +84,7 @@ describe("postgres-backed workflows", () => {
     muster = new MusterService(prisma as never, books);
     gst = new GstService(prisma as never);
     copilot = new CopilotService(prisma as never, audit);
+    reports = new ReportsService(prisma as never);
 
     await prisma.$executeRawUnsafe(`
       DO $$ DECLARE r RECORD;
@@ -463,6 +466,71 @@ describe("postgres-backed workflows", () => {
       slabIds: [sold.id],
     });
     await assert.rejects(() => production.completePolishing(asOwner, blocked.id), /sold|reserved|voided/i);
+  });
+
+  it("reports the CEO recovery ratio below the benchmark when the yard actually under-recovers", async () => {
+    const { factory, asOwner } = await staffFactory("recov");
+    const machine = await prisma.machine.findFirst({ where: { factoryId: factory.id, name: "B-21" } });
+    const lpm = await prisma.machine.findFirst({ where: { factoryId: factory.id, name: "LPM" } });
+    const customer = await sales.createCustomer(asOwner, "Recovery Co");
+
+    // Cut a block, polish every slab so it is sellable, and sell the lot.
+    const sellBlock = async (serial: string, tons: number, slabCount: number, sellCount: number, sqftEach: number) => {
+      const received = (await inventory.receiveBlock(asOwner, {
+        serialNumber: serial,
+        varietyName: "Kashmir White",
+        clientOpId: `${serial}-recv`,
+        weightTons: tons,
+        actualAmountPaid: 100000,
+      })) as { block: { id: string } };
+      const cut = await production.startCutting(asOwner, {
+        rawBlockId: received.block.id,
+        machineId: machine!.id,
+      });
+      const done = await production.completeCutting(asOwner, cut.id, {
+        totalSlabsCut: slabCount,
+        finalGoodSlabCount: slabCount,
+        lengthFt: 8,
+        widthFt: 4,
+      });
+      const slabIds = done.slabs.map((slab) => slab.id);
+      const polish = await production.startPolishing(asOwner, {
+        machineId: lpm!.id,
+        processType: "POLISHING",
+        slabIds,
+      });
+      await production.completePolishing(asOwner, polish.id);
+      await sales.createOrder(asOwner, {
+        customerId: customer.id,
+        orderDate: "2026-09-12",
+        clientOpId: `${serial}-order`,
+        lines: slabIds
+          .slice(0, sellCount)
+          .map((slabId) => ({ slabId, quantitySqft: sqftEach, rate: 100 })),
+      });
+      return slabIds;
+    };
+
+    // 20 tons in, 1000 sqft committed out. True recovery is 50 sqft/ton, not 105.
+    await sellBlock("RECOV-1", 20, 10, 10, 100);
+
+    const brief = await reports.ceoBrief(factory.id);
+    assert.equal(brief.recoveryRatio, 50);
+    assert.equal(brief.recoveryBasis.settledBlocks, 1);
+    assert.equal(brief.recoveryBasis.openBlocks, 0);
+    assert.equal(brief.recoveryBasis.tons, 20, "the whole block tonnage must be judged");
+    const below = brief.exceptions.find((e) => e.code === "RECOVERY_BELOW_BENCHMARK");
+    assert.ok(below, "an under-recovering yard must raise RECOVERY_BELOW_BENCHMARK");
+    assert.equal(below?.severity, "critical");
+    assert.match(brief.narrative, /50\.0 sqft\/ton/);
+
+    // A block still holding stock is excluded outright, never folded in at a discount.
+    await sellBlock("RECOV-2", 30, 5, 2, 400);
+    const withOpen = await reports.ceoBrief(factory.id);
+    assert.equal(withOpen.recoveryRatio, 50, "an open block must not move the settled ratio");
+    assert.equal(withOpen.recoveryBasis.settledBlocks, 1);
+    assert.equal(withOpen.recoveryBasis.openBlocks, 1);
+    assert.match(withOpen.narrative, /1 block\(s\) still holding stock are excluded/);
   });
 
   it("refuses to order a freshly cut, unpolished slab", async () => {

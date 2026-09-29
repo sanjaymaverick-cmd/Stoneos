@@ -19,6 +19,10 @@ export type CeoBriefInput = {
   openCutting: number;
   blocksOnHand: number;
   slabsOnHand: number;
+  /** Blocks whose recovery is still undecided. Drives RECOVERY_NOT_MEASURABLE. */
+  openBlocks?: number;
+  /** Blocks the recovery ratio is measured over. */
+  settledBlocks?: number;
 };
 
 export const CEO_RECOVERY_WARN_BELOW = RECOVERY_BENCHMARK_SQFT_PER_TON;
@@ -39,6 +43,13 @@ export function ceoExceptions(input: CeoBriefInput): CeoException[] {
       code: "RECOVERY_BELOW_BENCHMARK",
       severity: input.recoveryRatio < 90 ? "critical" : "warn",
       message: `Sale-time recovery ${input.recoveryRatio.toFixed(1)} sqft/ton is below the 105 benchmark.`,
+    });
+  }
+  if (input.recoveryRatio === null && (input.openBlocks ?? 0) > 0) {
+    out.push({
+      code: "RECOVERY_NOT_MEASURABLE",
+      severity: "info",
+      message: `No block has sold out yet. Recovery is undecided on ${input.openBlocks} block(s); the figure is withheld rather than estimated.`,
     });
   }
   if (input.outstandingAr < 0) {
@@ -91,16 +102,56 @@ export function ceoExceptions(input: CeoBriefInput): CeoException[] {
   return out;
 }
 
-/** Count only the fraction of block tons implied by sold sqft vs the 105 benchmark. */
-export function factoryRecovery(rows: Array<{ soldSqft: number; weightTons: number }>): number | null {
-  let sold = 0;
+export type BlockRecoveryInput = {
+  /** Sqft committed to customers from this block (reserved counts as sold). */
+  soldSqft: number;
+  /** Parent block tonnage. The whole of it, never a fraction implied by the benchmark. */
+  weightTons: number;
+  /** Good slabs produced from this block. Zero means the block was never cut. */
+  slabCount: number;
+  /** Slabs from this block still available to sell. Zero means the block is settled. */
+  unsoldSlabCount: number;
+};
+
+export type FactoryRecovery = {
+  /** Sqft per ton over settled blocks only. Null when no block has settled. */
+  ratio: number | null;
+  /** Blocks whose slabs are all committed, so their full tonnage is judged. */
+  settledBlocks: number;
+  /** Blocks still holding sellable slabs. Excluded: their recovery is not yet decided. */
+  openBlocks: number;
+  soldSqft: number;
+  tons: number;
+};
+
+/**
+ * Recovery over settled blocks only.
+ *
+ * A block counts once every slab cut from it is committed to a customer. Until then
+ * its recovery is undecided and it is excluded outright — it is never folded in at a
+ * discounted tonnage, because any such discount puts a floor under the ratio and hides
+ * exactly the under-recovery this metric exists to expose.
+ */
+export function factoryRecovery(rows: BlockRecoveryInput[]): FactoryRecovery {
+  let soldSqft = 0;
   let tons = 0;
+  let settledBlocks = 0;
+  let openBlocks = 0;
   for (const r of rows) {
-    if (r.soldSqft <= 0 || r.weightTons <= 0) continue;
-    sold += r.soldSqft;
-    const implied = r.soldSqft / RECOVERY_BENCHMARK_SQFT_PER_TON;
-    tons += Math.min(r.weightTons, implied);
+    if (r.weightTons <= 0 || r.slabCount <= 0) continue;
+    if (r.unsoldSlabCount > 0) {
+      openBlocks += 1;
+      continue;
+    }
+    settledBlocks += 1;
+    soldSqft += r.soldSqft;
+    tons += r.weightTons;
   }
-  if (tons <= 0) return null;
-  return sold / tons;
+  return {
+    ratio: tons > 0 ? soldSqft / tons : null,
+    settledBlocks,
+    openBlocks,
+    soldSqft,
+    tons,
+  };
 }
