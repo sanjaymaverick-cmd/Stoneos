@@ -1,6 +1,10 @@
 import { Body, Controller, Get, Inject, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
-import { ANY_AUTHENTICATED_ROLE, CEO_ROLES } from "@stoneos/contracts";
+import {
+  ANY_AUTHENTICATED_ROLE,
+  COMMERCIAL_READ_ROLES,
+  EXECUTIVE_ROLES,
+} from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
 import { PrismaService } from "../../common/prisma.service";
 import { ReportsService } from "./reports.service";
@@ -21,19 +25,19 @@ export class ReportsController {
   }
 
   @Get("ceo")
-  @Roles(...CEO_ROLES)
+  @Roles(...EXECUTIVE_ROLES)
   ceo(@CurrentUser() user: AuthenticatedUser) {
     return this.reports.ceoBrief(user.factoryId);
   }
 
   @Post("ceo/ask")
-  @Roles(...CEO_ROLES)
+  @Roles(...EXECUTIVE_ROLES)
   ask(@CurrentUser() user: AuthenticatedUser, @Body() body: { question?: string }) {
     return this.reports.ask(user.factoryId, body.question ?? "");
   }
 
   @Get("export/blocks.csv")
-  @Roles(...CEO_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   async exportBlocks(@CurrentUser() user: AuthenticatedUser) {
     const blocks = await this.prisma.rawBlock.findMany({ where: { factoryId: user.factoryId } });
     const header = "serial,variety,status,weightTons,quarry";
@@ -46,7 +50,7 @@ export class ReportsController {
   }
 
   @Get("export/slabs.csv")
-  @Roles(...CEO_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   async exportSlabs(@CurrentUser() user: AuthenticatedUser) {
     const slabs = await this.prisma.slab.findMany({ where: { factoryId: user.factoryId } });
     const header = "serial,variety,status,thicknessMm";

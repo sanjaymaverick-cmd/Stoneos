@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import {
   BOOKS_STATEMENT_ROLES,
   CASH_DRAWER_LOCK_ROLES,
-  CEO_ROLES,
+  COMMERCIAL_READ_ROLES,
   COPILOT_PROPOSE_ROLES,
   HISTORICAL_IMPORT_ROLES,
 } from "@stoneos/contracts";
@@ -36,7 +36,7 @@ export class BooksController {
   }
 
   @Get("trial-balance")
-  @Roles(...CEO_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   trial(@CurrentUser() user: AuthenticatedUser) {
     return this.books.trialBalance(user.factoryId);
   }

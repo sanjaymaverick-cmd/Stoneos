@@ -4,7 +4,7 @@ import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import {
   BOOKS_STATEMENT_ROLES,
   CASH_DRAWER_LOCK_ROLES,
-  CEO_ROLES,
+  COMMERCIAL_READ_ROLES,
   HISTORICAL_IMPORT_ROLES,
   INTAKE_DRAFT_ROLES,
 } from "@stoneos/contracts";
@@ -243,7 +243,7 @@ describe("books roles", () => {
     assert.doesNotThrow(() => assertAllowedRoles(BOOKS_STATEMENT_ROLES, "supervisor"));
     assert.throws(() => assertAllowedRoles(HISTORICAL_IMPORT_ROLES, "supervisor"), ForbiddenException);
     assert.throws(() => assertAllowedRoles(CASH_DRAWER_LOCK_ROLES, "supervisor"), ForbiddenException);
-    assert.equal(CEO_ROLES.includes("supervisor"), false);
+    assert.equal(COMMERCIAL_READ_ROLES.includes("supervisor"), false);
     assert.doesNotThrow(() => assertAllowedRoles(INTAKE_DRAFT_ROLES, "supervisor"));
   });
 });

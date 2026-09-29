@@ -56,8 +56,28 @@ export const EXPENSE_DATA_ROLES: Role[] = [
 ];
 export const PAYMENT_ROLES: Role[] = [...SALES_DATA_ROLES, ACCOUNTANT_ROLE];
 export const AUDIT_READ_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, ADMIN_ROLE, AUDITOR_ROLE];
-export const CEO_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, ACCOUNTANT_ROLE, AUDITOR_ROLE, ADMIN_ROLE];
-export const BOOKS_STATEMENT_ROLES: Role[] = [...CEO_ROLES, SUPERVISOR_ROLE];
+/**
+ * The owner's own view: the CEO dashboard and the snapshot Copilot.
+ *
+ * Deliberately narrow. A manager runs the plant and keeps every operational and
+ * commercial permission below, but the executive board is the owner's, and the auditor
+ * sees it because read-only oversight is the whole point of that role.
+ */
+export const EXECUTIVE_ROLES: Role[] = [OWNER_ROLE, AUDITOR_ROLE];
+
+/**
+ * Ordinary commercial and compliance work: trial balance, party statements, outstanding
+ * AR, GST filing, stock exports. Not the executive board — these are the routes a
+ * manager needs to chase a customer or file a return.
+ */
+export const COMMERCIAL_READ_ROLES: Role[] = [
+  OWNER_ROLE,
+  MANAGER_ROLE,
+  ACCOUNTANT_ROLE,
+  AUDITOR_ROLE,
+  ADMIN_ROLE,
+];
+export const BOOKS_STATEMENT_ROLES: Role[] = [...COMMERCIAL_READ_ROLES, SUPERVISOR_ROLE];
 export const INTAKE_DRAFT_ROLES: Role[] = [
   OWNER_ROLE,
   MANAGER_ROLE,
@@ -73,7 +93,7 @@ export const MUSTER_ATTEND_ROLES: Role[] = [
   OPERATOR_ROLE,
 ];
 export const MUSTER_PAY_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, ACCOUNTANT_ROLE];
-export const COPILOT_PROPOSE_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, ACCOUNTANT_ROLE];
+export const COPILOT_PROPOSE_ROLES: Role[] = [OWNER_ROLE, ACCOUNTANT_ROLE];
 export const ANY_AUTHENTICATED_ROLE: Role[] = [...ROLES];
 
 export const STAFF_PROVISIONABLE_ROLES: Role[] = [

@@ -5,7 +5,9 @@ import {
   ADMIN_ROLE,
   AUDITOR_ROLE,
   BOOKS_STATEMENT_ROLES,
-  CEO_ROLES,
+  COPILOT_PROPOSE_ROLES,
+  COMMERCIAL_READ_ROLES,
+  EXECUTIVE_ROLES,
   HISTORICAL_IMPORT_ROLES,
   MANAGER_ROLE,
   OPERATOR_ROLE,
@@ -42,11 +44,39 @@ describe("role policy", () => {
     assert.equal(canAccess(AUDITOR_ROLE, PAYMENT_ROLES), false);
   });
 
-  it("keeps commercial CEO metrics off the shop floor", () => {
-    assert.equal(canAccess(OWNER_ROLE, CEO_ROLES), true);
-    assert.equal(canAccess(ACCOUNTANT_ROLE, CEO_ROLES), true);
-    assert.equal(canAccess(OPERATOR_ROLE, CEO_ROLES), false);
-    assert.equal(canAccess(SALES_ROLE, CEO_ROLES), false);
+  it("keeps commercial metrics off the shop floor", () => {
+    assert.equal(canAccess(OWNER_ROLE, COMMERCIAL_READ_ROLES), true);
+    assert.equal(canAccess(ACCOUNTANT_ROLE, COMMERCIAL_READ_ROLES), true);
+    assert.equal(canAccess(OPERATOR_ROLE, COMMERCIAL_READ_ROLES), false);
+    assert.equal(canAccess(SALES_ROLE, COMMERCIAL_READ_ROLES), false);
+  });
+
+  it("keeps the executive board to the owner and the auditor", () => {
+    assert.equal(canAccess(OWNER_ROLE, EXECUTIVE_ROLES), true);
+    assert.equal(canAccess(AUDITOR_ROLE, EXECUTIVE_ROLES), true);
+    // A manager runs the plant but the executive board is the owner's.
+    assert.equal(canAccess(MANAGER_ROLE, EXECUTIVE_ROLES), false);
+    assert.equal(canAccess(ADMIN_ROLE, EXECUTIVE_ROLES), false);
+    assert.equal(canAccess(ACCOUNTANT_ROLE, EXECUTIVE_ROLES), false);
+    assert.equal(canAccess(OPERATOR_ROLE, EXECUTIVE_ROLES), false);
+  });
+
+  it("still lets a manager do the commercial work below the board", () => {
+    // Losing the board must not cost a manager the ability to chase a customer,
+    // read the trial balance or file a return.
+    assert.equal(canAccess(MANAGER_ROLE, COMMERCIAL_READ_ROLES), true);
+    assert.equal(canAccess(MANAGER_ROLE, BOOKS_STATEMENT_ROLES), true);
+    assert.equal(canAccess(MANAGER_ROLE, PAYMENT_ROLES), true);
+    assert.equal(canAccess(MANAGER_ROLE, HISTORICAL_IMPORT_ROLES), true);
+  });
+
+  it("keeps the copilot off the manager and off read-only roles", () => {
+    assert.equal(canAccess(OWNER_ROLE, COPILOT_PROPOSE_ROLES), true);
+    assert.equal(canAccess(ACCOUNTANT_ROLE, COPILOT_PROPOSE_ROLES), true);
+    assert.equal(canAccess(MANAGER_ROLE, COPILOT_PROPOSE_ROLES), false);
+    // Proposing a draft is a write, so the read-only auditor is not added here
+    // even though it can see the board.
+    assert.equal(canAccess(AUDITOR_ROLE, COPILOT_PROPOSE_ROLES), false);
   });
 
   it("keeps khata opening import off supervisors and operators", () => {

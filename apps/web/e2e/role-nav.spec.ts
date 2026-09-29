@@ -92,7 +92,7 @@ test("operator hidden nav and team provision is not usable", async ({ browser })
 test("auditor sees dashboard and audit; production writes stay out of nav", async ({ browser }) => {
   const token = await login(AUD_USER, AUD_PASS);
   const rows: Row[] = [];
-  const required = ["CEO", "Audit"];
+  const required = ["Dashboard", "Audit"];
   const productionWrites = ["Production", "Maintenance", "Consumables"];
 
   await withViewports(browser, token, async (page, vp) => {

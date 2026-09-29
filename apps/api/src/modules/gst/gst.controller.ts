@@ -2,7 +2,7 @@ import { Body, Controller, Get, Inject, Param, Post, Query } from "@nestjs/commo
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import {
   ANY_AUTHENTICATED_ROLE,
-  CEO_ROLES,
+  COMMERCIAL_READ_ROLES,
   HISTORICAL_IMPORT_ROLES,
   SALES_DATA_ROLES,
 } from "@stoneos/contracts";
@@ -16,7 +16,7 @@ export class GstController {
   constructor(@Inject(GstService) private gst: GstService) {}
 
   @Get("profile")
-  @Roles(...CEO_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   profile(@CurrentUser() user: AuthenticatedUser) {
     return this.gst.profile(user.factoryId);
   }
@@ -31,25 +31,25 @@ export class GstController {
   }
 
   @Post("einvoice/:invoiceId")
-  @Roles(...SALES_DATA_ROLES, ...CEO_ROLES)
+  @Roles(...SALES_DATA_ROLES, ...COMMERCIAL_READ_ROLES)
   einvoice(@CurrentUser() user: AuthenticatedUser, @Param("invoiceId") invoiceId: string) {
     return this.gst.einvoice(user, invoiceId);
   }
 
   @Post("einvoice/cn/:creditNoteId")
-  @Roles(...SALES_DATA_ROLES, ...CEO_ROLES)
+  @Roles(...SALES_DATA_ROLES, ...COMMERCIAL_READ_ROLES)
   einvoiceCn(@CurrentUser() user: AuthenticatedUser, @Param("creditNoteId") creditNoteId: string) {
     return this.gst.einvoiceCreditNote(user, creditNoteId);
   }
 
   @Get("einvoice")
-  @Roles(...CEO_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   listEinvoice(@CurrentUser() user: AuthenticatedUser) {
     return this.gst.listEinvoice(user.factoryId);
   }
 
   @Post("eway")
-  @Roles(...SALES_DATA_ROLES, ...CEO_ROLES)
+  @Roles(...SALES_DATA_ROLES, ...COMMERCIAL_READ_ROLES)
   eway(
     @CurrentUser() user: AuthenticatedUser,
     @Body()
@@ -69,7 +69,7 @@ export class GstController {
   }
 
   @Get("eway")
-  @Roles(...CEO_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   listEway(@CurrentUser() user: AuthenticatedUser) {
     return this.gst.listEway(user.factoryId);
   }
@@ -83,13 +83,13 @@ export class GstController {
 
   /** Output tax less input credit for a month: what is actually payable. */
   @Get("position")
-  @Roles(...CEO_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   position(@CurrentUser() user: AuthenticatedUser, @Query("month") month: string) {
     return this.gst.position(user.factoryId, month);
   }
 
   @Get("gstr1")
-  @Roles(...CEO_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   gstr1(@CurrentUser() user: AuthenticatedUser, @Query("month") month?: string) {
     const now = new Date();
     const fallback = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;

@@ -7,12 +7,13 @@ import {
   INVENTORY_DATA_ROLES,
   EXPENSE_DATA_ROLES,
   BOOKS_STATEMENT_ROLES,
+  EXECUTIVE_ROLES,
   INTAKE_DRAFT_ROLES,
   MUSTER_ATTEND_ROLES,
 } from "@stoneos/contracts";
 
 export const routes: Array<{ href: string; label: string; roles: Role[]; nav?: boolean }> = [
-  { href: "/dashboard", label: "CEO", roles: ["owner", "manager", "admin", "supervisor", "operator", "inventory", "sales", "accountant", "auditor"] },
+  { href: "/dashboard", label: "Dashboard", roles: ["owner", "manager", "admin", "supervisor", "operator", "inventory", "sales", "accountant", "auditor"] },
   { href: "/inventory", label: "Inventory", roles: INVENTORY_DATA_ROLES },
   { href: "/setup/opening-inventory", label: "Opening count", roles: INVENTORY_DATA_ROLES },
   { href: "/production", label: "Production", roles: PRODUCTION_INPUT_ROLES },
