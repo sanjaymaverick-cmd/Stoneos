@@ -1,0 +1,161 @@
+# StoneOS on an Oracle Cloud Always Free Ampere A1 instance.
+#
+# One box runs everything: Caddy terminates TLS, the app containers sit behind
+# it, and PostgreSQL keeps its data on the attached block volume. Images are
+# built ON the box rather than pulled, so there is no registry and no
+# cross-architecture build to get wrong — the box is aarch64 and builds
+# aarch64. Prisma already ships the matching engine
+# (linux-musl-arm64-openssl-3.0.x in apps/api/prisma/schema.prisma).
+#
+#   docker compose --env-file .env up -d --build
+#
+# Migrations and first-owner bootstrap are NOT part of `up`; they are one-shot
+# tasks behind the `tasks` profile. See README.md for the deploy sequence.
+
+name: stoneos
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      TZ: ${TZ:-Asia/Kolkata}
+    volumes:
+      # A bind mount onto the block volume, not a named volume: the data should
+      # sit somewhere you can see, snapshot and back up without going through
+      # Docker.
+      - ${STONEOS_DATA_DIR:?set STONEOS_DATA_DIR}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # No `ports:` — deliberately. Publishing 5432 would expose the database to
+    # the internet even with the host firewall closed, because Docker writes its
+    # own iptables rules ahead of yours. Reach it with
+    # `docker compose exec postgres psql` or an SSH tunnel.
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api.Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      # Checked at startup in production (apps/api/src/config.ts): at least 32
+      # characters and not a placeholder.
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      # Same origin as the web app, since Caddy serves both under one hostname.
+      # Browser calls are same-origin so CORS is never exercised, but this still
+      # needs to be right for any non-browser client.
+      FRONTEND_URL: ${PUBLIC_URL:?set PUBLIC_URL}
+      API_PUBLIC_URL: ${PUBLIC_URL}
+      NODE_ENV: production
+      PORT: 4000
+      TZ: ${TZ:-Asia/Kolkata}
+      STORAGE_DRIVER: local
+      STORAGE_LOCAL_DIR: /app/apps/api/data/storage
+    volumes:
+      # Uploaded rokad, DPR and khata scans. Without this they live inside the
+      # container and die with it; the S3/OCI storage driver is a stub that
+      # throws (packages/storage/src/index.ts), so local disk is the only
+      # working target and it must be on the block volume.
+      - ${STONEOS_DATA_DIR}/storage:/app/apps/api/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # /health/live is process-only. Readiness (/health) opens a database
+      # connection and would fail the container whenever the database blinks,
+      # which is not what we want from a restart policy.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/web.Dockerfile
+      args:
+        # NEXT_PUBLIC_* is baked in at BUILD time and read by the BROWSER, so
+        # this must be the public origin, never a container name or localhost.
+        # apiFetch builds `${NEXT_PUBLIC_API_URL}/api/v1/...`, so this is the
+        # bare origin with no path and no trailing slash.
+        #
+        # Changing the domain therefore means rebuilding this image:
+        #   docker compose --env-file .env up -d --build web
+        NEXT_PUBLIC_API_URL: ${PUBLIC_URL}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      # The only published ports on the box. Everything else talks over the
+      # compose network.
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates live here. Losing this directory means re-issuing, and
+      # Let's Encrypt rate-limits that — keep it on the block volume.
+      - ${STONEOS_DATA_DIR}/caddy/data:/data
+      - ${STONEOS_DATA_DIR}/caddy/config:/config
+    depends_on:
+      - web
+      - api
+
+  # ---- one-shot tasks (profile: tasks) --------------------------------------
+  # These reuse the API image. Its install keeps devDependencies, so the Prisma
+  # CLI and tsx are both present and no separate builder stage is needed.
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api.Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      TZ: ${TZ:-Asia/Kolkata}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app/apps/api
+    command: ["npx", "prisma", "migrate", "deploy", "--schema", "prisma/schema.prisma"]
+    restart: "no"
+    profiles: ["tasks"]
+
+  # First-owner bootstrap. Creates the factory and the single owner account,
+  # then refuses to run again (a bootstrap_lock row). Unlike a hosted-auth
+  # setup there is nobody to sign up first: this CREATES the login.
+  # Destroy BOOTSTRAP_TOKEN and BOOTSTRAP_OWNER_PASSWORD from .env afterwards.
+  bootstrap:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api.Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?set BOOTSTRAP_TOKEN (16+ chars)}
+      BOOTSTRAP_OWNER_USERNAME: ${BOOTSTRAP_OWNER_USERNAME:?set BOOTSTRAP_OWNER_USERNAME}
+      BOOTSTRAP_OWNER_PASSWORD: ${BOOTSTRAP_OWNER_PASSWORD:?set BOOTSTRAP_OWNER_PASSWORD (12+ chars)}
+      BOOTSTRAP_OWNER_NAME: ${BOOTSTRAP_OWNER_NAME:-StoneOS Owner}
+      FACTORY_NAME: ${FACTORY_NAME:-Vedam Granites}
+      TZ: ${TZ:-Asia/Kolkata}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app/apps/api
+    command: ["npx", "tsx", "src/bootstrap.ts"]
+    restart: "no"
+    profiles: ["tasks"]

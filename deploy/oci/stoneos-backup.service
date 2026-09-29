@@ -1,0 +1,14 @@
+[Unit]
+Description=StoneOS nightly database and file backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Adjust if the checkout lives elsewhere.
+WorkingDirectory=/opt/stoneos/deploy/oci
+ExecStart=/opt/stoneos/deploy/oci/backup.sh
+# The script exits non-zero when a dump is unreadable or an upload fails, so a
+# failed run is visible in `systemctl status` and `journalctl -u`.
+StandardOutput=journal
+StandardError=journal

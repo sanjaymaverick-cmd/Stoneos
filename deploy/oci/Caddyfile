@@ -1,0 +1,34 @@
+# One hostname serves both halves of the app, so the browser's API calls are
+# same-origin and CORS never comes into it.
+#
+# DOMAIN comes from the environment:
+#   stoneos.example.com  -> automatic Let's Encrypt TLS
+#   :80                  -> plain HTTP, for before DNS points at the box
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# `handle`, NOT `handle_path`. The API sets a global prefix of `api/v1`
+	# (apps/api/src/create-app.ts), so it expects to receive /api/v1/... intact.
+	# handle_path would strip /api and every route would 404.
+	# This also covers /api/docs, the OpenAPI UI.
+	handle /api/* {
+		reverse_proxy api:4000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+
+	# Health endpoints are deliberately NOT published. /health opens a database
+	# connection, and neither it nor /health/live belongs on the public internet.
+	# The compose healthchecks reach them inside the network; from the box use
+	# `docker compose exec api wget -qO- http://127.0.0.1:4000/health`.
+
+	log {
+		output file /data/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
