@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the StoneOS backup nightly
+
+[Timer]
+# 01:15 local time. RandomizedDelaySec spreads load; Persistent catches up a run
+# missed while the box was off.
+OnCalendar=*-*-* 01:15:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
