@@ -159,6 +159,10 @@ async function main() {
   const csvAsOp = await req("GET", "/api/v1/reports/export/blocks.csv", { token: op.body?.token });
   rec("operator cannot export CSV", csvAsOp.status === 403 ? "pass" : "fail", `GET blocks.csv as operator ${csvAsOp.status}`, csvAsOp.status === 403 ? "" : "high");
 
+  const ceoAsMgr = await req("GET", "/api/v1/reports/ceo", { token: mgr.body?.token });
+  rec("manager cannot read CEO brief", ceoAsMgr.status === 403 ? "pass" : "fail", `GET /reports/ceo as manager ${ceoAsMgr.status}`, ceoAsMgr.status === 403 ? "" : "high");
+  const booksAsMgr = await req("GET", "/api/v1/books/outstanding", { token: mgr.body?.token });
+  rec("manager keeps outstanding AR", booksAsMgr.status === 200 ? "pass" : "fail", `GET /books/outstanding as manager ${booksAsMgr.status}`, booksAsMgr.status === 200 ? "" : "high");
   const ceoAsAud = await req("GET", "/api/v1/reports/ceo", { token: aud.body?.token });
   rec("auditor can read CEO brief", ceoAsAud.status === 200 ? "pass" : "fail", `GET /reports/ceo as auditor ${ceoAsAud.status}`);
 
