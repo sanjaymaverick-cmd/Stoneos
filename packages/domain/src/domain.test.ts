@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { damagedCostAtRawBlock, recoveryRatio, RECOVERY_BENCHMARK_SQFT_PER_TON } from "./recovery.ts";
 import { damagedSlabCount, slabSerial } from "./serials.ts";
 import {
+  calendarMonthUtcRange,
   factoryMonthStart,
   formatCreditNoteNumber,
   formatInvoiceNumber,
@@ -59,5 +60,44 @@ describe("operational day", () => {
     assert.equal(indianFinancialYear(new Date("2027-03-31T23:59:00+05:30")), 2026);
     assert.equal(formatInvoiceNumber(2026, 1), "INV-2026-00001");
     assert.equal(formatCreditNoteNumber(2026, 12), "CN-2026-00012");
+  });
+});
+
+describe("calendarMonthUtcRange", () => {
+  it("bounds a month on calendar dates, so the last day is inside it", () => {
+    const { start, end } = calendarMonthUtcRange("2026-09");
+    assert.equal(start.toISOString(), "2026-09-01T00:00:00.000Z");
+    assert.equal(end.toISOString(), "2026-10-01T00:00:00.000Z");
+
+    // The regression. A DATE column reads back at UTC midnight, so a voucher on the
+    // 30th is 2026-09-30T00:00:00Z. The old instant-based end (00:00 IST = 18:30 UTC
+    // on the 30th) was truncated to the date 2026-09-30 by Postgres and excluded it,
+    // silently dropping every last-day invoice from that month's GST output.
+    const lastDay = new Date("2026-09-30T00:00:00.000Z");
+    assert.ok(lastDay >= start && lastDay < end, "the 30th belongs to September");
+
+    const firstDay = new Date("2026-09-01T00:00:00.000Z");
+    assert.ok(firstDay >= start && firstDay < end, "so does the 1st");
+
+    const nextMonth = new Date("2026-10-01T00:00:00.000Z");
+    assert.ok(!(nextMonth < end), "and the 1st of October does not");
+  });
+
+  it("rolls the year over in December and rejects junk", () => {
+    const december = calendarMonthUtcRange("2026-12");
+    assert.equal(december.end.toISOString(), "2027-01-01T00:00:00.000Z");
+    const january = calendarMonthUtcRange("2027-01");
+    assert.equal(january.start.toISOString(), "2027-01-01T00:00:00.000Z");
+    assert.throws(() => calendarMonthUtcRange("2026-9"), RangeError);
+    assert.throws(() => calendarMonthUtcRange("september"), RangeError);
+  });
+
+  it("covers every last day of 2026, including February", () => {
+    for (let month = 1; month <= 12; month += 1) {
+      const key = `2026-${String(month).padStart(2, "0")}`;
+      const { start, end } = calendarMonthUtcRange(key);
+      const lastDay = new Date(end.getTime() - 24 * 3600 * 1000);
+      assert.ok(lastDay >= start && lastDay < end, `${key} must contain ${lastDay.toISOString()}`);
+    }
   });
 });

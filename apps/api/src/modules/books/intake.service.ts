@@ -9,6 +9,14 @@ import { SalesService } from "../sales/sales.service";
 import { BooksService } from "./books.service";
 import type { PostLine } from "./posting";
 import type { AuthenticatedUser } from "../../common/current-user";
+import {
+  EXPENSE_DATA_ROLES,
+  JOURNAL_POST_ROLES,
+  PAYMENT_ROLES,
+  PRODUCTION_INPUT_ROLES,
+  canAccess,
+  type Role,
+} from "@stoneos/contracts";
 import { operationalDateFor } from "@stoneos/domain";
 import { expenseCategoryFromParticulars } from "./chart";
 import { partyNameKey, shaClientOpId } from "./money";
@@ -92,6 +100,48 @@ export class IntakeService {
     });
   }
 
+  /**
+   * What this draft will actually do, and whether the confirmer may do it.
+   *
+   * Derived from the same role sets that gate the direct routes, so the two cannot
+   * drift: if `POST /invoices/:id/payments` needs {@link PAYMENT_ROLES}, then so does
+   * confirming a rokad that contains a cash-in row.
+   */
+  private assertMayPost(
+    user: AuthenticatedUser,
+    kind: string,
+    header: string[],
+    rows: string[][],
+  ) {
+    const required: Array<{ what: string; roles: Role[] }> = [];
+
+    if (kind === "rokad") {
+      const iIn = header.indexOf("in");
+      const iOut = header.indexOf("out");
+      const amount = (row: string[], index: number) => (index >= 0 ? Number(row[index] ?? 0) : 0);
+      if (rows.some((row) => amount(row, iOut) > 0)) {
+        required.push({ what: "book an expense", roles: EXPENSE_DATA_ROLES });
+      }
+      if (rows.some((row) => amount(row, iIn) > 0)) {
+        required.push({ what: "record a customer payment", roles: PAYMENT_ROLES });
+      }
+    }
+    if (kind === "journal") {
+      required.push({ what: "post a journal", roles: JOURNAL_POST_ROLES });
+    }
+    if (kind === "dpr") {
+      required.push({ what: "complete a cutting session", roles: PRODUCTION_INPUT_ROLES });
+    }
+
+    for (const { what, roles } of required) {
+      if (!canAccess(user.role as Role, roles)) {
+        throw new ForbiddenException(
+          `This ${kind} would ${what}, which a ${user.role} cannot do. Someone who can must confirm it.`,
+        );
+      }
+    }
+  }
+
   async confirm(user: AuthenticatedUser, draftId: string) {
     const draft = await this.prisma.intakeDraft.findFirst({
       where: { id: draftId, factoryId: user.factoryId },
@@ -105,6 +155,14 @@ export class IntakeService {
     const header = parsed.header ?? [];
     const rows = parsed.rows ?? [];
     const mismatch: Prisma.InputJsonValue[] = [];
+
+    // Confirming is not a clerical act: it posts payments, expenses, journals and
+    // production. Being allowed to handle a draft never granted the right to post
+    // its contents, so an operator — who may legitimately propose a rokad — could
+    // settle a customer's invoice and book factory spend through this one call.
+    // Checked here, before anything is written, so a refusal leaves no half-applied
+    // file behind.
+    this.assertMayPost(user, draft.kind, header, rows);
 
     if (draft.kind === "rokad") {
       const iDate = header.indexOf("date");

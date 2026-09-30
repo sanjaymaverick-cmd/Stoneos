@@ -94,6 +94,11 @@ export const MUSTER_ATTEND_ROLES: Role[] = [
 ];
 export const MUSTER_PAY_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, ACCOUNTANT_ROLE];
 export const COPILOT_PROPOSE_ROLES: Role[] = [OWNER_ROLE, ACCOUNTANT_ROLE];
+/**
+ * Who may post a journal straight to the general ledger. Narrow on purpose: a journal
+ * moves money between accounts with no document behind it.
+ */
+export const JOURNAL_POST_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, ACCOUNTANT_ROLE];
 export const ANY_AUTHENTICATED_ROLE: Role[] = [...ROLES];
 
 export const STAFF_PROVISIONABLE_ROLES: Role[] = [

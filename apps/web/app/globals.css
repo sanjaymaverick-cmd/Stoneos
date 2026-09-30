@@ -52,6 +52,7 @@ th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; f
 .sync { position: sticky; top: 0; padding: 6px 16px; font-size: 13px; background: #dce8df; }
 .sync.pending { background: #f3e3c2; }
 .sync.offline { background: #ead7d4; }
+.sync.stuck { background: #e5c9c4; font-weight: 600; }
 .error { color: var(--accent); }
 .empty { color: var(--muted); margin: 0; padding: 12px 0; }
 @media (max-width: 900px) {

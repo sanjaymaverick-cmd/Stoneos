@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch, flushQueuedWrites, getToken, outbox, setActor, setToken } from "../lib/api";
+import { summariseOutbox } from "@stoneos/sync-client";
 import { visibleRoutes } from "../lib/routePolicy";
 import type { PublicUser } from "@stoneos/contracts";
 
@@ -11,7 +12,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<PublicUser | null>(null);
-  const [pending, setPending] = useState(0);
+  const [queue, setQueue] = useState({ pending: 0, blocked: 0, conflicts: 0, dead: 0, needsAttention: 0 });
   const [online, setOnline] = useState(true);
 
   useEffect(() => {
@@ -31,7 +32,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const sync = async () => {
       setOnline(navigator.onLine);
       if (navigator.onLine) await flushQueuedWrites().catch(() => undefined);
-      setPending((await outbox.list()).length);
+      setQueue(summariseOutbox(await outbox.list()));
     };
     sync();
     window.addEventListener("online", sync);
@@ -47,10 +48,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (!user) return <div className="page">Loading…</div>;
   const links = visibleRoutes(user.role);
 
+  // Work that needs a person is never reported as "Synced", and never hides behind a
+  // plain queue count. A stuck entry the operator cannot see is the same as lost.
+  const { pending, blocked, conflicts, dead, needsAttention } = queue;
+  const syncTone = needsAttention ? "stuck" : !online ? "offline" : pending || blocked ? "pending" : "";
+  const syncLabel = needsAttention
+    ? [
+        conflicts ? `${conflicts} conflicted` : null,
+        dead ? `${dead} failed` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") + " — needs attention, nothing was lost"
+    : blocked
+      ? `${blocked + pending} queued — waiting for you to sign in again`
+      : !online
+        ? "Offline — writes queued"
+        : pending
+          ? `${pending} queued writes`
+          : "Synced";
+
   return (
     <div className="shell">
-      <div className={`sync ${!online ? "offline" : pending ? "pending" : ""}`}>
-        {online ? (pending ? `${pending} queued writes` : "Synced") : "Offline — writes queued"}
+      <div className={`sync ${syncTone}`}>
+        {syncLabel}
         {user.mustChangePassword ? " · Change your temporary password" : ""}
       </div>
       <nav className="nav">

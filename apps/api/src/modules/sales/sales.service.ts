@@ -10,6 +10,8 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
+import { assertAllowedRoles } from "../../common/session.guard";
+import { PAYMENT_ROLES, type Role } from "@stoneos/contracts";
 import { isUniqueViolation, nextDocumentNumber } from "./document-number";
 import { BooksService } from "../books/books.service";
 import {
@@ -392,6 +394,11 @@ export class SalesService {
     invoiceId: string,
     input: { amount: number; method: string; paidAt: string; clientOpId: string; baseVersion?: number },
   ) {
+    // Backstop, not the primary gate. The route carries PAYMENT_ROLES, but this method
+    // is also reached from intake confirmation, where the caller's role is whatever the
+    // confirmer happens to hold. Asserting here means no future caller can widen who
+    // may settle an invoice by accident.
+    assertAllowedRoles(PAYMENT_ROLES, user.role as Role);
     if (input.amount <= 0) throw new BadRequestException("Amount must be positive");
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND factory_id = ${user.factoryId} FOR UPDATE`;
