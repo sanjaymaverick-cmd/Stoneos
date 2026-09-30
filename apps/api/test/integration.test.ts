@@ -1081,6 +1081,123 @@ describe("postgres-backed workflows", () => {
     assert.equal(receipts, 0);
   });
 
+  it("refuses to let an operator settle invoices or book spend by confirming a rokad", async () => {
+    const { factory, asOwner } = await staffFactory("intake-escalation");
+    const opRow = await users.provision(asOwner, { username: "esc-operator", role: "operator" });
+    const asOperator: AuthenticatedUser = {
+      ...asOwner,
+      id: opRow.user.id,
+      username: "esc-operator",
+      role: "operator",
+    };
+
+    // An operator may legitimately propose the day's rokad — that posts nothing.
+    const outOnly = Buffer.from(
+      "date,particulars,in,out,mode,partyName\n2026-09-12,Diesel,0,500,cash,\n",
+    ).toString("base64");
+    const draft = await intake.propose(asOwner, {
+      kind: "rokad",
+      date: "2026-09-12",
+      fileName: "rokad.csv",
+      contentType: "text/csv",
+      base64: outOnly,
+    });
+
+    // Confirming it books an expense, which an operator cannot do directly. Being
+    // allowed to handle the draft never granted that.
+    await assert.rejects(
+      () => intake.confirm(asOperator, draft.id),
+      /a operator cannot do/i,
+    );
+    assert.equal(
+      await prisma.expense.count({ where: { factoryId: factory.id } }),
+      0,
+      "a refused confirm must not have posted anything",
+    );
+    assert.equal(
+      (await prisma.intakeDraft.findUniqueOrThrow({ where: { id: draft.id } })).status,
+      "proposed",
+      "and must leave the draft confirmable by someone who may",
+    );
+
+    // Same for the cash-in side, which settles a customer invoice.
+    const inRow = Buffer.from(
+      "date,particulars,in,out,mode,partyName\n2026-09-12,On account,900,0,cash,Acme\n",
+    ).toString("base64");
+    const payDraft = await intake.propose(asOwner, {
+      kind: "rokad",
+      date: "2026-09-12",
+      fileName: "rokad2.csv",
+      contentType: "text/csv",
+      base64: inRow,
+    });
+    await assert.rejects(
+      () => intake.confirm(asOperator, payDraft.id),
+      /a operator cannot do/i,
+    );
+
+    // Someone who may post it still can — a different person, per the four-eyes rule.
+    const acctRow = await users.provision(asOwner, { username: "esc-accounts", role: "accountant" });
+    const asAccountant: AuthenticatedUser = {
+      ...asOwner,
+      id: acctRow.user.id,
+      username: "esc-accounts",
+      role: "accountant",
+    };
+    const ok = await intake.confirm(asAccountant, draft.id);
+    assert.equal(ok.status, "confirmed");
+    assert.equal(await prisma.expense.count({ where: { factoryId: factory.id } }), 1);
+  });
+
+  it("keeps a last-day-of-month invoice inside that month's GST position", async () => {
+    // voucher.operationalDate is a DATE column. The month window used to be built from
+    // instants (00:00 IST = 18:30 UTC the previous day), which Postgres truncated to a
+    // date — so the exclusive end landed ON the last day and excluded it. Every invoice
+    // raised on the 30th or 31st dropped out of that month's output tax, silently.
+    const { factory, asOwner } = await staffFactory("month-edge");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
+    await expenses.create(asOwner, {
+      category: "consumables",
+      amount: 11800,
+      taxableAmount: 10000,
+      gstRatePct: 18,
+      expenseDate: "2026-08-31",
+      clientOpId: "edge-last-day",
+    });
+    const august = await gst.position(factory.id, "2026-08");
+    assert.equal(august.input.cgst, 900, "the 31st belongs to August");
+    assert.equal(august.input.sgst, 900);
+
+    const september = await gst.position(factory.id, "2026-09");
+    assert.equal(september.input.cgst, 0, "and not to September");
+  });
+
+  it("backstops the money-moving services against any caller, not just the route", async () => {
+    // The route guards were the only gate, which is how intake reached past them.
+    // Asserting inside means a future caller cannot widen this by accident.
+    const { asOwner } = await staffFactory("backstop");
+    const opRow = await users.provision(asOwner, { username: "bs-operator", role: "operator" });
+    const asOperator: AuthenticatedUser = {
+      ...asOwner,
+      id: opRow.user.id,
+      username: "bs-operator",
+      role: "operator",
+    };
+    await assert.rejects(
+      () =>
+        expenses.create(asOperator, {
+          category: "diesel",
+          amount: 100,
+          expenseDate: "2026-09-12",
+        }),
+      /forbidden|not allowed|permission/i,
+    );
+  });
+
   it("rejects a supervisor confirming their own rokad draft and locks the cash drawer", async () => {
     const { factory, asOwner } = await staffFactory("intake");
     const supRow = await prisma.appUser.create({

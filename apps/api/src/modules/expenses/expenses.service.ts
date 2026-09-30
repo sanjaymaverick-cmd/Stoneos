@@ -1,6 +1,8 @@
 import { BadRequestException, Inject, Injectable } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
+import { assertAllowedRoles } from "../../common/session.guard";
+import { EXPENSE_DATA_ROLES, type Role } from "@stoneos/contracts";
 import { BooksService } from "../books/books.service";
 import {
   GST_DEFAULTS,
@@ -65,6 +67,8 @@ export class ExpensesService {
       supplierGstin?: string;
     },
   ) {
+    // Backstop, not the primary gate — see the same note in SalesService.pay.
+    assertAllowedRoles(EXPENSE_DATA_ROLES, user.role as Role);
     if (!EXPENSE_CATEGORIES.includes(input.category as (typeof EXPENSE_CATEGORIES)[number])) {
       throw new BadRequestException("Unknown expense category");
     }

@@ -7,6 +7,7 @@ import {
   MAX_OUTBOX_ATTEMPTS,
   MemoryOutboxStore,
   replayBody,
+  summariseOutbox,
   type OutboxItem,
 } from "./outbox.ts";
 
@@ -100,6 +101,92 @@ describe("outbox", () => {
     );
     assert.equal(sent, 0);
     assert.equal(second.failed, 1);
+  });
+
+  it("survives an expired session instead of deleting the work", async () => {
+    // This was the data loss: any 4xx marked the item dead, and the shell flushes
+    // every few seconds, so a supervisor whose token lapsed mid-shift lost every
+    // queued write before they could log back in — silently.
+    const store = new MemoryOutboxStore();
+    await store.put(item("offline-write"));
+
+    // Twenty flushes while logged out. MAX_OUTBOX_ATTEMPTS is 8, so a version that
+    // spent an attempt per 401 would have buried this long ago.
+    for (let i = 0; i < 20; i += 1) {
+      const result = await flushOutbox(
+        store,
+        async () => ({ ok: false, status: 401, body: { message: "Unauthorized" } }),
+        { userId: "u1", factoryId: "f1" },
+      );
+      assert.equal(result.blocked, 1, `flush ${i} must be blocked, not failed`);
+      assert.equal(result.failed, 0);
+    }
+    const held = (await store.list())[0];
+    assert.equal(held?.dead, undefined, "an expired session must never kill a write");
+    assert.equal(held?.attempts, 0, "a 401 must not spend a retry attempt");
+    assert.equal(held?.heldForAuth, true);
+
+    // Signing back in delivers it.
+    const after = await flushOutbox(
+      store,
+      async () => ({ ok: true, status: 200, body: {} }),
+      { userId: "u1", factoryId: "f1" },
+    );
+    assert.equal(after.flushed, 1);
+    assert.equal((await store.list()).length, 0);
+  });
+
+  it("retries a 403 but lets it die at the cap", async () => {
+    // A forced password change and a genuine denial both return 403, so it cannot be
+    // treated as permanent on sight — but it must not be retried forever either.
+    const store = new MemoryOutboxStore();
+    await store.put(item("maybe-forbidden"));
+    for (let i = 0; i < MAX_OUTBOX_ATTEMPTS; i += 1) {
+      await flushOutbox(store, async () => ({ ok: false, status: 403, body: {} }), {
+        userId: "u1",
+        factoryId: "f1",
+      });
+    }
+    assert.equal((await store.list())[0]?.dead, undefined, "still alive at the cap boundary");
+    await flushOutbox(store, async () => ({ ok: false, status: 403, body: {} }), {
+      userId: "u1",
+      factoryId: "f1",
+    });
+    assert.equal((await store.list())[0]?.dead, true, "and dead once the cap is spent");
+  });
+
+  it("retries a 429 and a 408 rather than discarding them", async () => {
+    const store = new MemoryOutboxStore();
+    await store.put(item("throttled"));
+    await store.put(item("timeout"));
+    await flushOutbox(
+      store,
+      async (queued) => ({
+        ok: false,
+        status: queued.clientOpId === "throttled" ? 429 : 408,
+        body: {},
+      }),
+      { userId: "u1", factoryId: "f1" },
+    );
+    for (const row of await store.list()) {
+      assert.equal(row.dead, undefined, `${row.clientOpId} must stay queued`);
+    }
+  });
+
+  it("summarises the queue so stuck work cannot read as synced", async () => {
+    const store = new MemoryOutboxStore();
+    await store.put(item("a"));
+    await store.put(item("held", { heldForAuth: true }));
+    await store.put(item("clash", { conflict: { code: "VERSION_CONFLICT" } }));
+    await store.put(item("gone", { dead: true }));
+    const summary = summariseOutbox(await store.list());
+    assert.deepEqual(summary, {
+      pending: 1,
+      blocked: 1,
+      conflicts: 1,
+      dead: 1,
+      needsAttention: 2,
+    });
   });
 
   it("keeps the item when send throws a network error", async () => {
