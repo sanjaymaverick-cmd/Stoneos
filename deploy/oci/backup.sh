@@ -67,7 +67,10 @@ log "wrote $DUMP ($(du -h "$DUMP" | cut -f1))"
 
 # A dump pg_restore cannot read is not a backup. Listing the archive table of
 # contents catches truncation and corruption now rather than during an emergency.
-if ! docker compose exec -T postgres pg_restore --list /dev/stdin < "$DUMP" > /dev/null 2>&1; then
+# pg_restore treats an explicit /dev/stdin path as a regular archive path and
+# fails to read this Docker-piped stream. With no archive argument it reads
+# standard input, which is also how restore.sh consumes the dump.
+if ! docker compose exec -T postgres pg_restore --list < "$DUMP" > /dev/null 2>&1; then
 	log "FAILED: $DUMP is not a readable pg_restore archive"
 	exit 1
 fi
