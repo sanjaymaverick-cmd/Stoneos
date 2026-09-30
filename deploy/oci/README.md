@@ -117,6 +117,35 @@ will be forced to change the password before you can write anything.
 `BOOTSTRAP_OWNER_PASSWORD`. The CLI refuses to run twice regardless (it writes a
 `bootstrap_lock` row), but that password should not sit on disk.
 
+There is no default owner password anywhere in this repository. The one you put
+in `.env` *is* the owner login, it exists only from the moment bootstrap runs,
+and the app forces you to replace it on first use.
+
+---
+
+## If you lock yourself out
+
+The lockout policy applies to every account including the owner: **10 wrong
+passwords lock the login for 5 minutes, and 5 more after that suspend it.** On
+deployment day this is a live risk — the bootstrap password is generated, long,
+and easy to mistype, and a suspended sole owner has nobody left inside the app
+who can issue new credentials.
+
+The way back does not go through the app:
+
+```bash
+cd /opt/stoneos/deploy/oci
+docker compose --env-file .env --profile tasks run --rm unlock owner
+```
+
+That clears the failure counters, lifts any timed lock, un-suspends the account,
+kills stale sessions and prints a **new** temporary password, which must be
+changed on first login. Pass `--keep-password` to lift a lock without issuing a
+new password. Either way it records itself in the audit trail as
+`auth.unlock_cli`.
+
+Paste the bootstrap password rather than typing it, and you will not need this.
+
 ---
 
 ## Changing the domain means rebuilding the web image

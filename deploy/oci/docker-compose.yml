@@ -159,3 +159,27 @@ services:
     command: ["npx", "tsx", "src/bootstrap.ts"]
     restart: "no"
     profiles: ["tasks"]
+
+  # Lift a login lockout without going through the app. The lockout policy applies
+  # to the owner too, so a suspended sole owner has nobody left inside who can
+  # issue them new credentials — this is the way back, and it needs shell access
+  # to the box, which is a fair bar for the one account that can do everything.
+  #
+  #   docker compose --env-file .env --profile tasks run --rm unlock <username>
+  #   docker compose --env-file .env --profile tasks run --rm unlock <username> --keep-password
+  #
+  # Prints a new temporary password unless --keep-password is passed.
+  unlock:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api.Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      TZ: ${TZ:-Asia/Kolkata}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app/apps/api
+    entrypoint: ["npx", "tsx", "src/unlock.ts"]
+    restart: "no"
+    profiles: ["tasks"]

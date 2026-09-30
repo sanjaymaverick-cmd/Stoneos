@@ -264,6 +264,16 @@ model AppUser {
   createdAt          DateTime @default(now()) @map("created_at")
   version            Int      @default(0)
 
+  /// Consecutive failed logins since the last success or lockout.
+  failedLoginCount Int       @default(0) @map("failed_login_count")
+  /// Set while a timed lockout is in force. Login is refused until it passes.
+  lockedUntil      DateTime? @map("locked_until")
+  /// Timed lockouts served since the last success. The second round suspends.
+  lockoutCount     Int       @default(0) @map("lockout_count")
+  /// Set when repeated failures suspended the account, to tell that apart from
+  /// an owner deliberately revoking someone. Both leave active = false.
+  suspendedAt      DateTime? @map("suspended_at")
+
   sessions AuthSession[]
 
   @@index([factoryId])

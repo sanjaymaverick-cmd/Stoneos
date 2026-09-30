@@ -4,18 +4,27 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../../components/AppShell";
 import { EmptyState } from "../../../components/EmptyState";
 import { apiFetch } from "../../../lib/api";
-import { STAFF_PROVISIONABLE_ROLES } from "@stoneos/contracts";
+import { STAFF_PROVISIONABLE_ROLES, canAssignRoles, type PublicUser } from "@stoneos/contracts";
 
 export default function UsersPage() {
   const [users, setUsers] = useState<Array<{ id: string; username: string; role: string; active: boolean }>>([]);
   const [username, setUsername] = useState("");
   const [role, setRole] = useState("operator");
   const [password, setPassword] = useState<string | null>(null);
+  const [me, setMe] = useState<PublicUser | null>(null);
 
   async function refresh() {
     setUsers(await apiFetch("/api/v1/admin/users"));
   }
-  useEffect(() => { refresh().catch(() => undefined); }, []);
+  useEffect(() => {
+    refresh().catch(() => undefined);
+    apiFetch<PublicUser>("/api/v1/auth/me").then(setMe).catch(() => undefined);
+  }, []);
+
+  // Issuing a login sets a rank, and only the owner does that. A manager sees the
+  // roster — they still run the people under them — but not the form, because the
+  // API would refuse it anyway.
+  const mayIssue = me ? canAssignRoles(me.role) : false;
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -31,7 +40,12 @@ export default function UsersPage() {
   return (
     <AppShell>
       <h1>Team access</h1>
-      <p>Owners and managers issue credentials. The generated password is shown once.</p>
+      <p>
+        {mayIssue
+          ? "Only the owner issues credentials and sets roles. The generated password is shown once."
+          : "Only the owner issues credentials and sets roles."}
+      </p>
+      {mayIssue ? (
       <div className="card">
         <form onSubmit={onSubmit}>
           <label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} required /></label>
@@ -44,8 +58,9 @@ export default function UsersPage() {
         </form>
         {password ? <p>One-time password: <code>{password}</code></p> : null}
       </div>
+      ) : null}
       {users.length === 0 ? (
-        <EmptyState>No staff accounts yet. Issue a login above. Owners appear after bootstrap.</EmptyState>
+        <EmptyState>No staff accounts yet. The owner issues logins here. Owners appear after bootstrap.</EmptyState>
       ) : (
       <table>
         <thead><tr><th>Username</th><th>Role</th><th>Active</th></tr></thead>

@@ -9,6 +9,8 @@ import { generateTemporaryPassword, hashPassword } from "@stoneos/auth";
 import {
   OWNER_ROLE,
   STAFF_PROVISIONABLE_ROLES,
+  canAdminister,
+  canAssignRoles,
   canGrantOwner,
   canManageUsers,
   isRole,
@@ -17,6 +19,14 @@ import {
 import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
+
+/** The state a fresh credential resets: no failures, no lock, not suspended. */
+const CLEARED_LOCKOUT = {
+  failedLoginCount: 0,
+  lockoutCount: 0,
+  lockedUntil: null,
+  suspendedAt: null,
+} as const;
 
 @Injectable()
 export class UsersService {
@@ -38,6 +48,9 @@ export class UsersService {
         active: true,
         mustChangePassword: true,
         createdAt: true,
+        lockedUntil: true,
+        suspendedAt: true,
+        failedLoginCount: true,
       },
     });
   }
@@ -46,8 +59,11 @@ export class UsersService {
     actor: AuthenticatedUser,
     input: { username: string; name?: string; email?: string | null; role: string },
   ) {
-    if (!canManageUsers(actor.role)) {
-      throw new ForbiddenException("Only owners and managers can manage users");
+    // Creating an account and changing an account's role are the same call, and both
+    // hand out a rank. Only the owner does that; a manager who could would be able to
+    // appoint their own peers and superiors.
+    if (!canAssignRoles(actor.role)) {
+      throw new ForbiddenException("Only the owner can assign or change a role");
     }
     if (!isRole(input.role)) throw new BadRequestException("Invalid role");
     if (input.role === OWNER_ROLE && !canGrantOwner(actor.role)) {
@@ -69,12 +85,24 @@ export class UsersService {
       throw new ForbiddenException("You cannot remove your own owner role");
     }
 
+    // Re-issuing a username must never quietly bring a disabled account back.
+    // Doing so restored access with the old password still working, recorded only
+    // as a role change — which would undo a revocation without anyone seeing it.
+    // Reactivation is its own deliberate act, and it issues a new password.
+    if (existing && !existing.active) {
+      const why = existing.suspendedAt
+        ? "suspended after repeated failed logins"
+        : "disabled";
+      throw new BadRequestException(
+        `${username} is ${why}. Reactivate the account to restore access; that issues a new password.`,
+      );
+    }
+
     if (existing) {
       const updated = await this.prisma.appUser.update({
         where: { id: existing.id },
         data: {
           role: input.role,
-          active: true,
           name: input.name ?? existing.name,
           email: input.email === undefined ? existing.email : input.email,
         },
@@ -130,6 +158,46 @@ export class UsersService {
     return { revoked: true };
   }
 
+  /**
+   * Bring a disabled account back deliberately, with a new password.
+   *
+   * The old password is never restored: an employee who left and came back gets
+   * fresh credentials, so a password that may have been shared or written down
+   * while they were gone does not become live again.
+   */
+  async reactivate(actor: AuthenticatedUser, userId: string) {
+    const target = await this.requireSameFactory(actor, userId);
+    this.assertOwnerGuard(actor, target.role as Role, target.id, "reactivate");
+    if (target.active) {
+      return { reactivated: false, user: target, password: null };
+    }
+    const password = generateTemporaryPassword();
+    const user = await this.prisma.appUser.update({
+      where: { id: userId },
+      data: {
+        active: true,
+        passwordHash: await hashPassword(password),
+        mustChangePassword: true,
+        tokenVersion: { increment: 1 },
+        // New credentials wipe the lockout slate, whether the account was revoked by
+        // the owner or suspended by repeated failures. Otherwise someone brought back
+        // would be five typos from suspension again.
+        ...CLEARED_LOCKOUT,
+      },
+    });
+    // Any session row surviving from before the revocation dies here too.
+    await this.prisma.authSession.deleteMany({ where: { userId } });
+    await this.audit.record({
+      factoryId: actor.factoryId,
+      actorId: actor.id,
+      action: "user.reactivate",
+      entityType: "app_user",
+      entityId: userId,
+      payload: { username: user.username, role: user.role },
+    });
+    return { reactivated: true, user, password };
+  }
+
   async resetPassword(actor: AuthenticatedUser, userId: string) {
     const target = await this.requireSameFactory(actor, userId);
     this.assertOwnerGuard(actor, target.role as Role, target.id, "reset");
@@ -141,6 +209,9 @@ export class UsersService {
           passwordHash: await hashPassword(password),
           mustChangePassword: true,
           tokenVersion: { increment: 1 },
+          // A reset is the owner issuing new credentials, so it also lifts a timed
+          // lockout instead of making a locked-out employee wait it out as well.
+          ...CLEARED_LOCKOUT,
         },
       }),
       this.prisma.authSession.deleteMany({ where: { userId } }),
@@ -161,12 +232,23 @@ export class UsersService {
     return target;
   }
 
+  /**
+   * Who may act on whose account, for the verbs that do not hand out a rank:
+   * revoke, reactivate, reset a password.
+   *
+   * Strictly downward. A manager reaches everyone below them and no further — not
+   * another manager, not an owner — so nobody can be disabled by an equal in a
+   * disagreement, and the chain of command cannot be edited from the middle.
+   */
   private assertOwnerGuard(actor: AuthenticatedUser, targetRole: Role, targetId: string, verb: string) {
     if (!canManageUsers(actor.role)) {
       throw new ForbiddenException("Only owners and managers can manage users");
     }
     if (targetRole === OWNER_ROLE && !canGrantOwner(actor.role)) {
       throw new ForbiddenException(`Only an owner can ${verb} an owner account`);
+    }
+    if (!canAdminister(actor.role, targetRole)) {
+      throw new ForbiddenException(`A ${actor.role} cannot ${verb} a ${targetRole} account`);
     }
     if (targetId === actor.id && targetRole === OWNER_ROLE) {
       throw new ForbiddenException("You cannot revoke your own owner account");

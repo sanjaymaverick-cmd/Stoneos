@@ -107,6 +107,52 @@ export const STAFF_PROVISIONABLE_ROLES: Role[] = [
   AUDITOR_ROLE,
 ];
 
+/**
+ * Where each role sits in the chain of command.
+ *
+ * Used only to decide who may act on whose account. The numbers are ordinal, not a
+ * permission scale: two roles sharing a rank are peers, and a peer can never administer
+ * a peer. Specialist roles (accountant, auditor, sales, inventory, operator) are
+ * deliberately level — an accountant is not above a storekeeper, they answer to
+ * different people about different things.
+ */
+export const ROLE_RANK: Record<Role, number> = {
+  owner: 100,
+  manager: 80,
+  admin: 60,
+  supervisor: 40,
+  accountant: 20,
+  auditor: 20,
+  sales: 20,
+  inventory: 20,
+  operator: 20,
+};
+
+/**
+ * Who a role sits above, and may therefore reset, disable or reactivate.
+ *
+ * The owner is above everyone, including other owners — a second owner is a co-owner,
+ * not a subordinate, and the self-guard in the service stops the last one locking
+ * themselves out. Everybody else must outrank the target strictly.
+ */
+export function canAdminister(actor: Role, target: Role): boolean {
+  if (actor === OWNER_ROLE) return true;
+  if (!canManageUsers(actor)) return false;
+  return ROLE_RANK[actor] > ROLE_RANK[target];
+}
+
+/**
+ * Handing out a role — creating an account or changing an existing one's role — is the
+ * owner's alone. A manager who could mint roles could mint a second manager, or promote
+ * a deputy past the people they were hired under; the hierarchy would only ever be as
+ * firm as the most junior person allowed to edit it.
+ */
+export const ROLE_ASSIGNMENT_ROLES: Role[] = [OWNER_ROLE];
+
+export function canAssignRoles(role: Role): boolean {
+  return role === OWNER_ROLE;
+}
+
 export function isRole(value: string): value is Role {
   return (ROLES as readonly string[]).includes(value);
 }

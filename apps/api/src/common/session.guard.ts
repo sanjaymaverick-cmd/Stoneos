@@ -63,8 +63,16 @@ export class SessionGuard implements CanActivate {
     request.user = authUser;
 
     const path: string = request.path ?? "";
-    const isPasswordChange = path.endsWith("/auth/change-password") || path.endsWith("/auth/logout");
-    if (user.mustChangePassword && !isPasswordChange && request.method !== "GET") {
+    // A temporary password buys nothing but the ability to replace it. Reads were
+    // previously allowed, so a credential slip opened the CEO board, outstanding AR
+    // and the CSV exports before it was ever changed.
+    const allowedOnTempPassword =
+      path.endsWith("/auth/change-password") ||
+      path.endsWith("/auth/logout") ||
+      // The app shell reads this on every page to know who is signed in; without it
+      // the change-password screen cannot render.
+      path.endsWith("/auth/me");
+    if (user.mustChangePassword && !allowedOnTempPassword) {
       throw new ForbiddenException("Temporary password must be changed before continuing");
     }
 

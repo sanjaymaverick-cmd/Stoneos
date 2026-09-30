@@ -131,6 +131,117 @@ describe("postgres-backed workflows", () => {
     await pg?.stop();
   });
 
+  it("locks a login for 5 minutes at 10 wrong passwords, then suspends it 5 more in", async () => {
+    const { asOwner } = await staffFactory("lockout");
+    const issued = await users.provision(asOwner, { username: "lk-operator", role: "operator" });
+    const good = issued.password!;
+
+    const wrong = () => auth.login("lk-operator", "NotThePassword!1");
+
+    // 1. Nine wrong passwords count but change nothing — a bad morning is not a lockout.
+    for (let i = 0; i < 9; i += 1) await assert.rejects(wrong, /Invalid username or password/i);
+    assert.equal(
+      (await prisma.appUser.findUniqueOrThrow({ where: { id: issued.user.id } })).failedLoginCount,
+      9,
+    );
+    // The right password still works, and getting in wipes the slate.
+    await auth.login("lk-operator", good);
+    assert.equal(
+      (await prisma.appUser.findUniqueOrThrow({ where: { id: issued.user.id } })).failedLoginCount,
+      0,
+      "a successful login must reset the counter",
+    );
+
+    // 2. The tenth consecutive failure locks the account for five minutes.
+    for (let i = 0; i < 10; i += 1) await assert.rejects(wrong, /Invalid username or password/i);
+    const locked = await prisma.appUser.findUniqueOrThrow({ where: { id: issued.user.id } });
+    assert.ok(locked.lockedUntil, "ten failures must set a lock");
+    assert.equal(locked.active, true, "a timed lock is not a suspension");
+    const minutes = (locked.lockedUntil!.getTime() - Date.now()) / 60_000;
+    assert.ok(minutes > 4 && minutes <= 5, `lock should be ~5 minutes, got ${minutes}`);
+
+    // The correct password is refused while the lock holds, and says why.
+    await assert.rejects(() => auth.login("lk-operator", good), /locked for another/i);
+
+    // A wrong password during the lock must NOT count. Otherwise the cooldown would be
+    // the fastest route to suspension and one burst could burn any account down.
+    for (let i = 0; i < 20; i += 1) await assert.rejects(wrong, /Invalid username or password/i);
+    const during = await prisma.appUser.findUniqueOrThrow({ where: { id: issued.user.id } });
+    assert.equal(during.failedLoginCount, 0, "failures during a lock must not accumulate");
+    assert.equal(during.active, true, "hammering during a lock must not suspend");
+
+    // 3. Once the lock expires, five more failures suspend the account outright.
+    await prisma.appUser.update({
+      where: { id: issued.user.id },
+      data: { lockedUntil: new Date(Date.now() - 1000) },
+    });
+    await auth.login("lk-operator", good); // the lock has passed, so this gets in...
+    await prisma.appUser.update({
+      where: { id: issued.user.id },
+      data: { lockoutCount: 1, failedLoginCount: 0 }, // ...but pin the second round for the test
+    });
+    for (let i = 0; i < 5; i += 1) await assert.rejects(wrong, /Invalid username or password/i);
+    const suspended = await prisma.appUser.findUniqueOrThrow({ where: { id: issued.user.id } });
+    assert.equal(suspended.active, false, "five more failures must suspend");
+    assert.ok(suspended.suspendedAt, "and record that it was a suspension, not a revocation");
+    assert.equal(
+      await prisma.authSession.count({ where: { userId: issued.user.id } }),
+      0,
+      "suspension must kill live sessions",
+    );
+
+    // The right password now names the remedy instead of a generic refusal, because
+    // whoever typed it has proved they are the account holder.
+    await assert.rejects(() => auth.login("lk-operator", good), /owner must issue new credentials/i);
+    // A wrong password still says nothing.
+    await assert.rejects(wrong, /Invalid username or password/i);
+
+    // 4. Re-issuing the username is refused and names the real cause.
+    await assert.rejects(
+      () => users.provision(asOwner, { username: "lk-operator", role: "operator" }),
+      /suspended after repeated failed logins/i,
+    );
+
+    // 5. The owner issuing new credentials is the way back, and it clears the slate.
+    const back = await users.reactivate(asOwner, issued.user.id);
+    const restored = await prisma.appUser.findUniqueOrThrow({ where: { id: issued.user.id } });
+    assert.equal(restored.suspendedAt, null);
+    assert.equal(restored.lockoutCount, 0);
+    assert.equal(restored.failedLoginCount, 0);
+    assert.equal(restored.lockedUntil, null);
+    const fresh = await auth.login("lk-operator", back.password!);
+    assert.equal(fresh.user.mustChangePassword, true);
+    // The password that was live before the suspension stays dead.
+    await assert.rejects(() => auth.login("lk-operator", good), /Invalid username or password/i);
+
+    const actions = (
+      await prisma.auditEvent.findMany({
+        where: { entityId: issued.user.id },
+        select: { action: true },
+      })
+    ).map((a) => a.action);
+    assert.ok(actions.includes("auth.locked"));
+    assert.ok(actions.includes("auth.suspended"));
+  });
+
+  it("lifts a timed lock when the owner resets the password", async () => {
+    const { asOwner } = await staffFactory("lockreset");
+    const issued = await users.provision(asOwner, { username: "lr-sales", role: "sales" });
+    for (let i = 0; i < 10; i += 1) {
+      await assert.rejects(() => auth.login("lr-sales", "Wrong!12345678"));
+    }
+    assert.ok((await prisma.appUser.findUniqueOrThrow({ where: { id: issued.user.id } })).lockedUntil);
+
+    // A locked-out employee should not have to wait out the clock as well as take a
+    // new password from the owner.
+    const reset = await users.resetPassword(asOwner, issued.user.id);
+    const after = await prisma.appUser.findUniqueOrThrow({ where: { id: issued.user.id } });
+    assert.equal(after.lockedUntil, null);
+    assert.equal(after.lockoutCount, 0);
+    assert.equal(after.failedLoginCount, 0);
+    await auth.login("lr-sales", reset.password);
+  });
+
   it("logs in with hashed passwords and revokes sessions on password change", async () => {
     const login = await auth.login("owner", "ChangeMeNow!12");
     assert.ok(login.token);
@@ -139,15 +250,178 @@ describe("postgres-backed workflows", () => {
     await assert.rejects(() => auth.login("owner", "ChangeMeNow!12"));
   });
 
-  it("rejects a manager creating an owner", async () => {
-    const manager = await users.provision(owner, { username: "mgr1", role: "manager", name: "Mgr" });
+  it("disables an employee for good: the old password dies with the account", async () => {
+    const { factory, asOwner } = await staffFactory("lifecycle");
+
+    // 1. The owner issues a credential. The password comes back exactly once.
+    const issued = await users.provision(asOwner, { username: "lc-operator", role: "operator" });
+    assert.equal(issued.created, true);
+    assert.ok(issued.password, "a new account must return its password once");
+    assert.equal(issued.user.mustChangePassword, true);
+    const firstPassword = issued.password!;
+
+    // 2. They log in and are forced to change it before anything else.
+    const firstLogin = await auth.login("lc-operator", firstPassword);
+    assert.equal(firstLogin.user.mustChangePassword, true);
+    await auth.changePassword(
+      { ...asOwner, id: issued.user.id, role: "operator" },
+      firstPassword,
+      "OperatorChosen!2026",
+    );
+    const chosen = await auth.login("lc-operator", "OperatorChosen!2026");
+    assert.equal(chosen.user.mustChangePassword, false);
+    // The temporary password is dead the moment it is replaced.
+    await assert.rejects(() => auth.login("lc-operator", firstPassword), /Invalid username or password/i);
+
+    // 3. The owner disables them. Access stops immediately and every session dies.
+    await users.revoke(asOwner, issued.user.id);
+    assert.equal(
+      await prisma.authSession.count({ where: { userId: issued.user.id } }),
+      0,
+      "revoking must kill live sessions, not just block the next login",
+    );
+    await assert.rejects(
+      () => auth.login("lc-operator", "OperatorChosen!2026"),
+      /Invalid username or password/i,
+    );
+
+    // 4. Re-issuing the same username must NOT quietly bring them back. This was
+    //    the hole: it set active=true, kept the old password working, and recorded
+    //    only a role change.
+    await assert.rejects(
+      () => users.provision(asOwner, { username: "lc-operator", role: "operator" }),
+      /disabled/i,
+    );
+    const stillOff = await prisma.appUser.findUniqueOrThrow({ where: { id: issued.user.id } });
+    assert.equal(stillOff.active, false, "a refused provision must not have reactivated them");
+
+    // 5. Reactivation is deliberate and issues a NEW password. The old one stays dead,
+    //    so anything written down or shared while they were gone does not come back.
+    const back = await users.reactivate(asOwner, issued.user.id);
+    assert.equal(back.reactivated, true);
+    assert.ok(back.password);
+    assert.notEqual(back.password, firstPassword);
+    await assert.rejects(
+      () => auth.login("lc-operator", "OperatorChosen!2026"),
+      /Invalid username or password/i,
+    );
+    const returned = await auth.login("lc-operator", back.password!);
+    assert.equal(returned.user.mustChangePassword, true, "and they must choose a new one again");
+
+    // Both acts are on the audit trail under their own names.
+    const actions = (
+      await prisma.auditEvent.findMany({
+        where: { factoryId: factory.id, entityId: issued.user.id },
+        select: { action: true },
+      })
+    ).map((a) => a.action);
+    assert.ok(actions.includes("user.revoke"));
+    assert.ok(actions.includes("user.reactivate"));
+  });
+
+  it("lets a temporary password do nothing but replace itself", () => {
+    // Reads used to be allowed through, so a credential slip opened the CEO board,
+    // outstanding AR and the CSV exports before the password was ever changed.
+    const onTemp = (path: string) =>
+      path.endsWith("/auth/change-password") ||
+      path.endsWith("/auth/logout") ||
+      path.endsWith("/auth/me");
+    assert.equal(onTemp("/api/v1/auth/change-password"), true);
+    assert.equal(onTemp("/api/v1/auth/me"), true);
+    assert.equal(onTemp("/api/v1/auth/logout"), true);
+    assert.equal(onTemp("/api/v1/reports/ceo"), false);
+    assert.equal(onTemp("/api/v1/books/outstanding"), false);
+    assert.equal(onTemp("/api/v1/reports/export/slabs.csv"), false);
+  });
+
+  it("keeps the chain of command: only the owner hands out roles, and nobody edits a peer", async () => {
+    const { asOwner } = await staffFactory("hierarchy");
+
+    const manager = await users.provision(asOwner, { username: "h-mgr", role: "manager", name: "Mgr" });
+    const peerManager = await users.provision(asOwner, { username: "h-mgr2", role: "manager" });
+    const admin = await users.provision(asOwner, { username: "h-admin", role: "admin" });
+    const operator = await users.provision(asOwner, { username: "h-operator", role: "operator" });
+    const accountant = await users.provision(asOwner, { username: "h-accounts", role: "accountant" });
     const asManager: AuthenticatedUser = {
-      ...owner,
+      ...asOwner,
       id: manager.user.id,
       role: "manager",
-      username: "mgr1",
+      username: "h-mgr",
     };
-    await assert.rejects(() => users.provision(asManager, { username: "otherowner", role: "owner" }));
+
+    // Handing out a rank is the owner's alone — not creating an account, not changing
+    // an existing one's role, not even for a role far below the manager's own.
+    await assert.rejects(
+      () => users.provision(asManager, { username: "h-newhand", role: "operator" }),
+      /only the owner can assign or change a role/i,
+    );
+    await assert.rejects(
+      () => users.provision(asManager, { username: "h-operator", role: "supervisor" }),
+      /only the owner can assign or change a role/i,
+    );
+    await assert.rejects(
+      () => users.provision(asManager, { username: "h-otherowner", role: "owner" }),
+      /only the owner can assign or change a role/i,
+    );
+    assert.equal(
+      await prisma.appUser.count({ where: { username: "h-newhand" } }),
+      0,
+      "a refused provision must not have created the account",
+    );
+    assert.equal(
+      (await prisma.appUser.findUniqueOrThrow({ where: { id: operator.user.id } })).role,
+      "operator",
+      "a refused role change must leave the role alone",
+    );
+
+    // A manager still runs the people below them: reset, disable, bring back.
+    const reset = await users.resetPassword(asManager, operator.user.id);
+    assert.ok(reset.password);
+    await users.revoke(asManager, accountant.user.id);
+    const restored = await users.reactivate(asManager, accountant.user.id);
+    assert.equal(restored.reactivated, true);
+    // An admin ranks below a manager, so that reach extends there too.
+    await users.revoke(asManager, admin.user.id);
+    await users.reactivate(asManager, admin.user.id);
+
+    // But never sideways or upward. A disagreement between two managers cannot be
+    // settled by one of them switching the other off.
+    await assert.rejects(
+      () => users.revoke(asManager, peerManager.user.id),
+      /a manager cannot revoke a manager account/i,
+    );
+    await assert.rejects(
+      () => users.resetPassword(asManager, peerManager.user.id),
+      /a manager cannot reset a manager account/i,
+    );
+    await assert.rejects(
+      () => users.revoke(asManager, asOwner.id),
+      /only an owner can revoke an owner account/i,
+    );
+    assert.equal(
+      (await prisma.appUser.findUniqueOrThrow({ where: { id: peerManager.user.id } })).active,
+      true,
+      "the peer manager must still be enabled",
+    );
+
+    // An admin manages nobody at all — the role is a desk, not a rung.
+    const asAdmin: AuthenticatedUser = {
+      ...asOwner,
+      id: admin.user.id,
+      role: "admin",
+      username: "h-admin",
+    };
+    await assert.rejects(
+      () => users.revoke(asAdmin, operator.user.id),
+      /only owners and managers can manage users/i,
+    );
+
+    // The owner reaches all of them.
+    await users.revoke(asOwner, peerManager.user.id);
+    assert.equal(
+      (await prisma.appUser.findUniqueOrThrow({ where: { id: peerManager.user.id } })).active,
+      false,
+    );
   });
 
   it("isolates raw blocks across factories", async () => {
@@ -185,10 +459,10 @@ describe("postgres-backed workflows", () => {
   });
 
   it("opening approval requires a different user and then goes live", async () => {
-    const manager = await prisma.appUser.findFirst({ where: { factoryId, username: "mgr1" } });
+    const manager = await users.provision(owner, { username: "mgr1", role: "manager", name: "Mgr" });
     const asManager: AuthenticatedUser = {
       ...owner,
-      id: manager!.id,
+      id: manager.user.id,
       role: "manager",
       username: "mgr1",
     };
