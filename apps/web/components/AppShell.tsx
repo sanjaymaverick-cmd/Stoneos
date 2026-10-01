@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiFetch, flushQueuedWrites, getToken, outbox, setActor, setToken } from "../lib/api";
+import { apiFetch, clearCachedReads, flushQueuedWrites, getToken, outbox, setActor, setToken } from "../lib/api";
 import { summariseOutbox } from "@stoneos/sync-client";
 import { visibleRoutes } from "../lib/routePolicy";
 import type { PublicUser } from "@stoneos/contracts";
@@ -69,10 +69,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="shell">
-      <div className={`sync ${syncTone}`}>
+      <Link href="/sync" className={`sync ${syncTone}`}>
         {syncLabel}
         {user.mustChangePassword ? " · Change your temporary password" : ""}
-      </div>
+      </Link>
       <nav className="nav">
         <span className="brand">StoneOS</span>
         {links.map((link) => (
@@ -86,6 +86,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             await apiFetch("/api/v1/auth/logout", { method: "POST" }).catch(() => undefined);
             setToken(null);
             setActor(null);
+            await clearCachedReads();
             router.replace("/login");
           }}
         >

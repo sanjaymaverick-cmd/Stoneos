@@ -6,9 +6,10 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/outbox.test.ts"
+    "test": "node --import tsx --test src/outbox.test.ts src/refs.test.ts"
   },
   "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }
