@@ -2,6 +2,10 @@
 
 Continue this StoneOS session from `origin/main`. Repo: https://github.com/sanjaymaverick-cmd/Stoneos — workspace `D:\\work Dir\\stoneOS`.
 
+## Deployed (read first if you are deploying)
+
+The app is live on an Oracle Cloud Ampere box at https://stoneos.duckdns.org, running `main`. To update it, follow [`docs/runbooks/oci-deploy-handoff.md`](runbooks/oci-deploy-handoff.md) — merge to `main`, then `deploy/oci/redeploy.sh` on the server, `deploy/oci/status.sh` to watch. That page lists the SSH key, the PowerShell quoting trap, rollback, and the open backup item.
+
 ## Intent
 
 Local-first granite factory platform. Build and test on this workstation. Host later on **AWS, OCI, or similar** — **do not `terraform apply`** until the user names a platform. Copilot/grounded AI is deferred (ADR 0009). The CEO dashboard is **rule-based ledger math** (ADR 0010), not a model.
