@@ -4,7 +4,9 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { EmptyState } from "../../components/EmptyState";
+import { canAccess, MUSTER_PAY_ROLES, type PublicUser } from "@stoneos/contracts";
 import { apiFetch, isQueued } from "../../lib/api";
+import { todayIst } from "../../lib/format";
 import { bodyOf, queuedAt, useOutbox } from "../../lib/useOutbox";
 
 type Worker = { id: string; name: string; kind: string; dailyWageMinor?: number | null };
@@ -18,6 +20,7 @@ export default function MusterPage() {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [canHire, setCanHire] = useState(false);
   const { items, refresh: refreshQueue } = useOutbox();
   // Marks made offline for the date on screen, newest per worker.
   const queuedMarks = new Map(
@@ -26,6 +29,12 @@ export default function MusterPage() {
       .filter((b) => b.date === date)
       .map((b) => [b.workerId, b.status]),
   );
+
+  useEffect(() => {
+    apiFetch<PublicUser>("/api/v1/auth/me")
+      .then((me) => setCanHire(canAccess(me.role, MUSTER_PAY_ROLES)))
+      .catch(() => undefined);
+  }, []);
 
   async function refresh(d = date) {
     setWorkers(await apiFetch("/api/v1/muster/workers"));
@@ -55,14 +64,18 @@ export default function MusterPage() {
       {error ? <p className="error" role="alert">{error}</p> : null}
       {notice ? <p className="muted" role="status">{notice}</p> : null}
       <div className="card">
+        {canHire ? (
         <form onSubmit={addWorker}>
           <label>Worker<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
           <label>Daily wage<input value={wage} onChange={(e) => setWage(e.target.value)} /></label>
           <button type="submit">Add worker</button>
         </form>
+        ) : (
+          <p className="muted">Workers are added by the owner, a manager or the accountant, because they set the daily wage. You can mark attendance below.</p>
+        )}
       </div>
       <div className="card">
-        <label>Date<input type="date" value={date} onChange={(e) => { setDate(e.target.value); refresh(e.target.value).catch(() => undefined); }} /></label>
+        <label>Date<input type="date" value={date} max={todayIst()} onChange={(e) => { setDate(e.target.value); refresh(e.target.value).catch(() => undefined); }} /></label>
         {workers.length === 0 ? <EmptyState>No workers yet.</EmptyState> : workers.map((w) => (
           <p key={w.id}>
             {w.name}

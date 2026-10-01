@@ -20,7 +20,7 @@ import {
   gstOnTaxable,
   minorToRupees,
   normaliseStateCode,
-  parseFactoryDateInput,
+  parseBusinessDate,
   rupeesToMinor,
   stateCodeFromGstin,
 } from "../books/money";
@@ -192,7 +192,7 @@ export class SalesService {
           customerId: input.customerId,
           status: "CONFIRMED",
           billingMode: input.billingMode ?? "gst_invoice",
-          orderDate: new Date(input.orderDate),
+          orderDate: parseBusinessDate(input.orderDate, "orderDate"),
           lines: {
             create: kept.map(({ slabId, quantitySqft, rate }) => ({ slabId, quantitySqft, rate })),
           },
@@ -477,6 +477,7 @@ export class SalesService {
     // may settle an invoice by accident.
     assertAllowedRoles(PAYMENT_ROLES, user.role as Role);
     if (input.amount <= 0) throw new BadRequestException("Amount must be positive");
+    const paidAt = parseBusinessDate(input.paidAt, "paidAt");
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND factory_id = ${user.factoryId} FOR UPDATE`;
       const invoice = await tx.invoice.findFirst({
@@ -507,7 +508,7 @@ export class SalesService {
             invoiceId: invoice.id,
             amount: input.amount,
             method: input.method,
-            paidAt: parseFactoryDateInput(input.paidAt),
+            paidAt,
             idempotencyKey: input.clientOpId,
           },
         });
@@ -535,7 +536,7 @@ export class SalesService {
           amount: input.amount,
           method: input.method,
           clientOpId: input.clientOpId,
-          paidAt: parseFactoryDateInput(input.paidAt),
+          paidAt,
         });
         return payment;
       } catch (error) {
@@ -564,6 +565,7 @@ export class SalesService {
       throw new BadRequestException("Amount must be positive");
     }
     if (!input.clientOpId) throw new BadRequestException("clientOpId is required");
+    const saleDate = parseBusinessDate(input.saleDate, "saleDate");
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     if (order.billingMode !== "cash_unbilled") {
       throw new BadRequestException("Order is not marked as a cash sale");
@@ -582,7 +584,7 @@ export class SalesService {
           salesOrderId: order.id,
           buyerName: input.buyerName?.trim() || null,
           amount: input.amount,
-          saleDate: parseFactoryDateInput(input.saleDate),
+          saleDate,
           note: input.note?.trim() || null,
           clientOpId: input.clientOpId,
           recordedBy: user.id,
@@ -593,7 +595,7 @@ export class SalesService {
         amountMinor: rupeesToMinor(input.amount),
         memo: `Cash sale${input.buyerName ? ` to ${input.buyerName.trim()}` : ""} (no invoice)`,
         clientOpId: `cashsale:${input.clientOpId}`,
-        saleDate: parseFactoryDateInput(input.saleDate),
+        saleDate,
       });
       await tx.auditEvent.create({
         data: {
