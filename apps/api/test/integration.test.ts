@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { SalesService } from "../src/modules/sales/sales.service";
 import { ExpensesService } from "../src/modules/expenses/expenses.service";
 import { AuditService } from "../src/common/audit.service";
+import { IdempotencyService } from "../src/common/idempotency";
 import { FilesService } from "../src/modules/files/files.service";
 import { BooksService } from "../src/modules/books/books.service";
 import { KhataService } from "../src/modules/books/khata.service";
@@ -1646,7 +1647,7 @@ describe("postgres-backed workflows", () => {
     const customer = await sales.createCustomer(asOwner, "Local Counter", undefined, { stateCode: "08" });
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
-      orderDate: "2026-09-12",
+      orderDate: currentFactoryDate(),
       clientOpId: "cash-order",
       billingMode: "cash_unbilled",
       lines: [{ quantitySqft: 10, rate: 100 }],
@@ -1777,7 +1778,7 @@ describe("postgres-backed workflows", () => {
     });
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
-      orderDate: "2026-09-12",
+      orderDate: currentFactoryDate(),
       clientOpId: "itc-order",
       lines: [{ quantitySqft: 100, rate: 100 }],
     })) as { id: string };
@@ -1880,5 +1881,142 @@ describe("postgres-backed workflows", () => {
     await intake.confirm(asManager, draft.id);
     const v = await prisma.voucher.findFirst({ where: { factoryId: factory.id, source: "copilot_journal" } });
     assert.ok(v);
+  });
+
+  it("answers a replayed clientOpId with the first result and refuses it from anyone else", async () => {
+    const { asOwner, asManager } = await staffFactory("idem");
+    const store = new IdempotencyService(prisma as never);
+    const path = "/api/v1/cutting-sessions/abc/complete";
+    assert.equal(await store.lookup(asOwner, "idem-op-0001", "POST", path), null);
+    await store.remember(asOwner, "idem-op-0001", "POST", path, 201, { session: { id: "s1" }, slabs: [{ id: "x" }] });
+    // A second remember (e.g. a service that stored its own row first) is not an error.
+    await store.remember(asOwner, "idem-op-0001", "POST", path, 201, { other: true });
+    const replay = await store.lookup(asOwner, "idem-op-0001", "POST", `${path}?x=1`);
+    assert.deepEqual(replay?.response, { session: { id: "s1" }, slabs: [{ id: "x" }] });
+    await assert.rejects(() => store.lookup(asManager, "idem-op-0001", "POST", path), /different request/);
+    await assert.rejects(() => store.lookup(asOwner, "idem-op-0001", "POST", "/api/v1/expenses"), /different request/);
+  });
+
+  it("recognises a key the sales service stored itself", async () => {
+    const { factory, asOwner } = await staffFactory("idemsvc");
+    const finished = await prisma.inventoryLocation.findFirst({ where: { factoryId: factory.id, code: "FINISHED_STOCK" } });
+    const slab = await prisma.slab.create({
+      data: { factoryId: factory.id, slabSerial: "IDS-1", varietyName: "White", locationId: finished!.id },
+    });
+    const customer = await sales.createCustomer(asOwner, "Idem Co");
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-20",
+      clientOpId: "idem-order-001",
+      lines: [{ slabId: slab.id, quantitySqft: 10, rate: 100 }],
+    })) as { id: string };
+    const store = new IdempotencyService(prisma as never);
+    const replay = await store.lookup(asOwner, "idem-order-001", "POST", "/api/v1/sales-orders");
+    assert.equal((replay?.response as { id: string }).id, order.id);
+  });
+
+  it("keeps an offline order for the slabs still free and lists the ones sold first", async () => {
+    const { factory, asOwner, asManager } = await staffFactory("partial");
+    const finished = await prisma.inventoryLocation.findFirst({ where: { factoryId: factory.id, code: "FINISHED_STOCK" } });
+    const [a, b] = await Promise.all(
+      ["PART-A", "PART-B"].map((slabSerial) =>
+        prisma.slab.create({ data: { factoryId: factory.id, slabSerial, varietyName: "Black", locationId: finished!.id } }),
+      ),
+    );
+    const customer = await sales.createCustomer(asOwner, "Online Buyer");
+    // The online salesman takes slab A first.
+    await sales.createOrder(asManager, {
+      customerId: customer.id,
+      orderDate: "2026-09-20",
+      clientOpId: "partial-online",
+      lines: [{ slabId: a.id, quantitySqft: 40, rate: 100 }],
+    });
+    // Without partial, the offline order is refused whole, as before.
+    await assert.rejects(
+      () =>
+        sales.createOrder(asOwner, {
+          customerId: customer.id,
+          orderDate: "2026-09-20",
+          clientOpId: "partial-strict",
+          lines: [{ slabId: a.id, quantitySqft: 40, rate: 100 }, { slabId: b.id, quantitySqft: 40, rate: 100 }],
+        }),
+      /not available/,
+    );
+    const offline = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-20",
+      clientOpId: "partial-offline",
+      partial: true,
+      lines: [{ slabId: a.id, quantitySqft: 40, rate: 100 }, { slabId: b.id, quantitySqft: 40, rate: 100 }],
+    })) as { id: string; lines: Array<{ slabId: string }>; droppedSlabs: Array<{ slabId: string; slabSerial: string }> };
+    assert.deepEqual(offline.lines.map((l) => l.slabId), [b.id]);
+    assert.deepEqual(offline.droppedSlabs.map((d) => d.slabSerial), ["PART-A"]);
+
+    // Packing and dispatch replayed for both slabs ship only the one the order kept.
+    const packed = (await sales.pack(asOwner, offline.id, [a.id, b.id], true)) as { lines: unknown[]; skippedSlabs: string[] };
+    assert.equal(packed.lines.length, 1);
+    assert.deepEqual(packed.skippedSlabs, [a.id]);
+    const shipped = (await sales.dispatch(asOwner, offline.id, [a.id, b.id], {
+      clientOpId: "partial-dispatch",
+      partial: true,
+    })) as { lines: unknown[]; skippedSlabs: string[] };
+    assert.equal(shipped.lines.length, 1);
+    assert.deepEqual(shipped.skippedSlabs, [a.id]);
+    const slabA = await prisma.slab.findUnique({ where: { id: a.id } });
+    assert.equal(slabA?.salesStatus, "reserved", "the online buyer's slab is untouched");
+
+    // An offline order whose every slab is gone is a conflict, not an empty order.
+    await assert.rejects(
+      () =>
+        sales.createOrder(asOwner, {
+          customerId: customer.id,
+          orderDate: "2026-09-20",
+          clientOpId: "partial-empty",
+          partial: true,
+          lines: [{ slabId: a.id, quantitySqft: 40, rate: 100 }],
+        }),
+      (error: { response?: { code?: string } }) => error.response?.code === "SLABS_UNAVAILABLE",
+    );
+    assert.equal(await prisma.salesOrder.count({ where: { factoryId: factory.id } }), 2);
+  });
+
+  it("books late-synced shop-floor work on the day it happened", async () => {
+    const { factory, asOwner } = await staffFactory("late");
+    const yesterday = new Date(Date.now() - 26 * 3600 * 1000);
+    const received = (await inventory.receiveBlock(asOwner, {
+      serialNumber: "LATE-1",
+      varietyName: "Tan Brown",
+      clientOpId: "late-block",
+      weightTons: 2,
+      occurredAt: yesterday.toISOString(),
+    })) as { block: { id: string; purchaseDate: string } };
+    const machine = await prisma.machine.findFirst({ where: { factoryId: factory.id, name: "B-21" } });
+    const session = await production.startCutting(asOwner, {
+      rawBlockId: received.block.id,
+      machineId: machine!.id,
+      occurredAt: yesterday.toISOString(),
+    });
+    assert.equal(session.startedAt.toISOString(), yesterday.toISOString());
+    const done = await production.completeCutting(asOwner, session.id, {
+      totalSlabsCut: 3,
+      finalGoodSlabCount: 3,
+      occurredAt: yesterday.toISOString(),
+    });
+    assert.equal(done.slabs[0]!.createdAt.toISOString(), yesterday.toISOString());
+    const today = await production.derivedDpr(factory.id, new Date(), new Date());
+    assert.equal(today.slabsCut, 0, "late sync must not inflate today's DPR");
+    const thatDay = await production.derivedDpr(factory.id, yesterday, yesterday);
+    assert.equal(thatDay.slabsCut, 3);
+
+    const future = new Date(Date.now() + 3600 * 1000).toISOString();
+    await assert.rejects(
+      () => production.startCutting(asOwner, { rawBlockId: received.block.id, machineId: machine!.id, occurredAt: future }),
+      /future/,
+    );
+    const stale = new Date(Date.now() - 20 * 24 * 3600 * 1000).toISOString();
+    await assert.rejects(
+      () => production.logCuttingDay(asOwner, session.id, { runtimeHours: 4, occurredAt: stale }),
+      /14 days/,
+    );
   });
 });

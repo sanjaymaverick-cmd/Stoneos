@@ -19,6 +19,12 @@
  *                         URL never changes contents.
  *   everything else (GET) network-first falling back to cache, and every
  *                         success is written to the cache on the way past.
+ *                         Navigations give up on the network after a few
+ *                         seconds: a weak yard signal can hang for a minute.
+ *
+ * After sign-in the app posts {type: "warm", urls} so every screen, and the
+ * build files it needs, is stored before the signal drops — not only the
+ * screens someone happened to open.
  *
  * Caching page HTML is safe here because it carries no user data: the shell
  * fetches /api/v1/auth/me with a bearer token after it loads. If a page ever
@@ -28,6 +34,7 @@
 
 const CACHE = "stoneos-shell-v2";
 const OFFLINE_URL = "/offline.html";
+const NAVIGATION_TIMEOUT_MS = 4000;
 
 /* Enough of the app to open cold with no network. */
 const PRECACHE = [OFFLINE_URL, "/login", "/dashboard", "/manifest.webmanifest"];
@@ -85,10 +92,29 @@ async function cacheFirst(request) {
   return response;
 }
 
+/** Reject if the network has not answered in time, where a timer exists. */
+function withTimeout(promise, ms) {
+  if (typeof setTimeout !== "function") return promise;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("network timeout")), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function networkFirst(request) {
   const cache = await caches.open(CACHE);
   try {
-    const response = await fetch(request);
+    const pending = fetch(request);
+    const response = await (request.mode === "navigate" ? withTimeout(pending, NAVIGATION_TIMEOUT_MS) : pending);
     if (isCacheable(response)) cache.put(request, response.clone());
     return response;
   } catch (networkError) {
@@ -118,3 +144,33 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(isImmutableAsset(url) ? cacheFirst(request) : networkFirst(request));
 });
+
+/* Store every screen the app may open, plus the build files each one loads. */
+self.addEventListener("message", (event) => {
+  const data = event.data || {};
+  if (data.type === "warm" && Array.isArray(data.urls)) {
+    event.waitUntil(warm(data.urls));
+  }
+});
+
+async function warm(urls) {
+  const cache = await caches.open(CACHE);
+  const seen = new Set();
+  for (const url of urls) {
+    try {
+      const response = await fetch(new Request(url, { cache: "reload" }));
+      if (!isCacheable(response)) continue;
+      await cache.put(url, response.clone());
+      const html = await response.text();
+      for (const match of html.matchAll(/(?:src|href)="(\/_next\/static\/[^"]+)"/g)) {
+        const asset = match[1];
+        if (seen.has(asset) || (await cache.match(asset))) continue;
+        seen.add(asset);
+        const file = await fetch(asset).catch(() => null);
+        if (isCacheable(file)) await cache.put(asset, file);
+      }
+    } catch {
+      // One screen failing to warm must not stop the rest.
+    }
+  }
+}

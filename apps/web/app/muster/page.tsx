@@ -4,7 +4,8 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { EmptyState } from "../../components/EmptyState";
-import { apiFetch } from "../../lib/api";
+import { apiFetch, isQueued } from "../../lib/api";
+import { bodyOf, queuedAt, useOutbox } from "../../lib/useOutbox";
 
 type Worker = { id: string; name: string; kind: string; dailyWageMinor?: number | null };
 type Row = { id: string; status: string; worker: Worker };
@@ -16,6 +17,15 @@ export default function MusterPage() {
   const [wage, setWage] = useState("800");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const { items, refresh: refreshQueue } = useOutbox();
+  // Marks made offline for the date on screen, newest per worker.
+  const queuedMarks = new Map(
+    queuedAt(items, "/api/v1/muster/attendance")
+      .map((q) => bodyOf<{ workerId: string; date: string; status: string }>(q))
+      .filter((b) => b.date === date)
+      .map((b) => [b.workerId, b.status]),
+  );
 
   async function refresh(d = date) {
     setWorkers(await apiFetch("/api/v1/muster/workers"));
@@ -42,7 +52,8 @@ export default function MusterPage() {
     <AppShell>
       <h1>Muster</h1>
       <p>Mark attendance for the operational day. Payroll sheets are on <Link href="/muster/payroll">wage sheet</Link>.</p>
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="error" role="alert">{error}</p> : null}
+      {notice ? <p className="muted" role="status">{notice}</p> : null}
       <div className="card">
         <form onSubmit={addWorker}>
           <label>Worker<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
@@ -55,12 +66,26 @@ export default function MusterPage() {
         {workers.length === 0 ? <EmptyState>No workers yet.</EmptyState> : workers.map((w) => (
           <p key={w.id}>
             {w.name}
+            {queuedMarks.has(w.id) ? <span className="pending-tag">{queuedMarks.get(w.id)} · not synced</span> : null}
             {["present", "absent", "half", "ot"].map((status) => (
               <button
                 key={status}
                 type="button"
                 className="secondary"
-                onClick={() => apiFetch("/api/v1/muster/attendance", { method: "POST", body: JSON.stringify({ workerId: w.id, date, status }) }).then(() => refresh())}
+                onClick={async () => {
+                  setError("");
+                  try {
+                    const result = await apiFetch("/api/v1/muster/attendance", {
+                      method: "POST",
+                      label: `Attendance ${w.name} ${date}: ${status}`,
+                      body: JSON.stringify({ workerId: w.id, date, status }),
+                    });
+                    setNotice(isQueued(result) ? `${w.name} marked ${status} — saved on this phone, syncs when online.` : `${w.name} marked ${status}.`);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Could not mark attendance");
+                  }
+                  await Promise.all([refresh().catch(() => undefined), refreshQueue()]);
+                }}
               >
                 {status}
               </button>

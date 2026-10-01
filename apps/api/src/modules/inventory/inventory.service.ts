@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import { InventoryKind, InventoryMovementType, Prisma } from "@prisma/client";
 import { PrismaService } from "../../common/prisma.service";
+import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
 import { BooksService } from "../books/books.service";
 import {
@@ -125,8 +126,11 @@ export class InventoryService {
       qualityNote?: string;
       locationCode?: string;
       clientOpId: string;
+      /** When the truck was unloaded, if it is synced later. */
+      occurredAt?: string;
     },
   ) {
+    const receivedAt = parseOccurredAt(input.occurredAt);
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.syncOperation.findUnique({
         where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId } },
@@ -186,6 +190,8 @@ export class InventoryService {
           actualAmountPaid: input.actualAmountPaid,
           qualityNote: input.qualityNote,
           locationId: location.id,
+          purchaseDate: receivedAt,
+          createdAt: receivedAt,
         },
       });
       if (taxable > 0) {

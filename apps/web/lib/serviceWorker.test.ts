@@ -250,4 +250,24 @@ describe("service worker", () => {
     await e2.captured.promise!;
     assert.deepEqual(r.cache.puts, [], "a redirect replayed from cache breaks navigation");
   });
+  it("saves every screen and the build files it loads when the app asks after sign-in", async () => {
+    const page = (path: string) =>
+      Object.assign(response(200, `page ${path}`), {
+        text: async () => `<script src="/_next/static/chunks/app-${path.slice(1)}.js"></script><link href="/_next/static/css/shared.css">`,
+      });
+    const fetched: string[] = [];
+    const w = loadWorker(async (req: any) => {
+      const key = keyOf(req);
+      fetched.push(key);
+      return key.startsWith("/_next/") ? response(200, `asset ${key}`) : page(key);
+    });
+    await w.fire("message", {
+      data: { type: "warm", urls: ["/production", "/sales"] },
+      waitUntil: (p: Promise<unknown>) => w.waits.push(p),
+    });
+    for (const key of ["/production", "/sales", "/_next/static/chunks/app-production.js", "/_next/static/chunks/app-sales.js", "/_next/static/css/shared.css"]) {
+      assert.ok(w.cache.puts.includes(key), `${key} was not saved: ${w.cache.puts.join(", ")}`);
+    }
+    assert.equal(fetched.filter((k) => k === "/_next/static/css/shared.css").length, 1, "a shared file is fetched once");
+  });
 });

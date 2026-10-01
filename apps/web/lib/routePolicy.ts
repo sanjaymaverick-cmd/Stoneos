@@ -29,6 +29,8 @@ export const routes: Array<{ href: string; label: string; roles: Role[]; nav?: b
   { href: "/files", label: "Files", roles: INVENTORY_DATA_ROLES },
   { href: "/admin/users", label: "Team", roles: USER_MANAGEMENT_ROLES },
   { href: "/admin/audit", label: "Audit", roles: ["owner", "manager", "admin", "auditor"] },
+  // Reached from the sync bar on every screen, not the nav.
+  { href: "/sync", label: "Sync", roles: ["owner", "manager", "admin", "supervisor", "operator", "inventory", "sales", "accountant", "auditor"], nav: false },
 ];
 
 export function visibleRoutes(role: Role) {

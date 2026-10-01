@@ -1,6 +1,11 @@
+import { collectRefs, resolveRefs, UnresolvedRefError } from "./refs";
+
 export type SyncStatus = "synced" | "pending" | "conflict" | "offline";
 
 export const MAX_OUTBOX_ATTEMPTS = 8;
+
+/** How long a synced result is kept for later writes and the sync screen. */
+export const RESULT_RETENTION_MS = 30 * 24 * 3600 * 1000;
 
 export interface OutboxItem {
   clientOpId: string;
@@ -20,6 +25,21 @@ export interface OutboxItem {
    * Cleared as soon as one flush gets past authentication.
    */
   heldForAuth?: boolean;
+  /** What a person would call this write, e.g. "Invoice PEND-7F3A9C · Jaipur Traders". */
+  label?: string;
+  /** Earlier queued writes whose results this one's path or body refers to. */
+  dependsOn?: string[];
+}
+
+/** What the server answered for a write that has left the queue. */
+export interface SyncResult {
+  clientOpId: string;
+  method: OutboxItem["method"];
+  path: string;
+  status: number;
+  body: unknown;
+  label?: string;
+  syncedAt: string;
 }
 
 export interface OutboxActor {
@@ -31,10 +51,16 @@ export interface OutboxStore {
   list(): Promise<OutboxItem[]>;
   put(item: OutboxItem): Promise<void>;
   remove(clientOpId: string): Promise<void>;
+  getResult(clientOpId: string): Promise<SyncResult | undefined>;
+  putResult(result: SyncResult): Promise<void>;
+  listResults(): Promise<SyncResult[]>;
+  /** Forget results synced before `before`. */
+  pruneResults(before: Date): Promise<void>;
 }
 
 export class MemoryOutboxStore implements OutboxStore {
   private items = new Map<string, OutboxItem>();
+  private results = new Map<string, SyncResult>();
 
   async list(): Promise<OutboxItem[]> {
     return [...this.items.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -47,10 +73,34 @@ export class MemoryOutboxStore implements OutboxStore {
   async remove(clientOpId: string): Promise<void> {
     this.items.delete(clientOpId);
   }
+
+  async getResult(clientOpId: string): Promise<SyncResult | undefined> {
+    return this.results.get(clientOpId);
+  }
+
+  async putResult(result: SyncResult): Promise<void> {
+    this.results.set(result.clientOpId, result);
+  }
+
+  async listResults(): Promise<SyncResult[]> {
+    return [...this.results.values()].sort((a, b) => b.syncedAt.localeCompare(a.syncedAt));
+  }
+
+  async pruneResults(before: Date): Promise<void> {
+    const cutoff = before.toISOString();
+    for (const [key, row] of this.results) if (row.syncedAt < cutoff) this.results.delete(key);
+  }
 }
 
-const STORAGE_KEY = "stoneos.outbox";
+export const LOCAL_STORAGE_OUTBOX_KEY = "stoneos.outbox";
+const STORAGE_KEY = LOCAL_STORAGE_OUTBOX_KEY;
+const RESULTS_KEY = "stoneos.outbox.results";
 
+/**
+ * The original store. Kept as the fallback where IndexedDB is unavailable and as
+ * the source the IndexedDB store migrates from. It holds a few megabytes at most,
+ * so it cannot carry photos or a long offline spell.
+ */
 export class LocalStorageOutboxStore implements OutboxStore {
   private read(): OutboxItem[] {
     if (typeof localStorage === "undefined") return [];
@@ -66,6 +116,20 @@ export class LocalStorageOutboxStore implements OutboxStore {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
   }
 
+  private readResults(): SyncResult[] {
+    if (typeof localStorage === "undefined") return [];
+    try {
+      return JSON.parse(localStorage.getItem(RESULTS_KEY) ?? "[]") as SyncResult[];
+    } catch {
+      return [];
+    }
+  }
+
+  private writeResults(rows: SyncResult[]) {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(RESULTS_KEY, JSON.stringify(rows));
+  }
+
   async list(): Promise<OutboxItem[]> {
     return this.read().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
@@ -79,6 +143,23 @@ export class LocalStorageOutboxStore implements OutboxStore {
   async remove(clientOpId: string): Promise<void> {
     this.write(this.read().filter((row) => row.clientOpId !== clientOpId));
   }
+
+  async getResult(clientOpId: string): Promise<SyncResult | undefined> {
+    return this.readResults().find((row) => row.clientOpId === clientOpId);
+  }
+
+  async putResult(result: SyncResult): Promise<void> {
+    this.writeResults([...this.readResults().filter((r) => r.clientOpId !== result.clientOpId), result]);
+  }
+
+  async listResults(): Promise<SyncResult[]> {
+    return this.readResults().sort((a, b) => b.syncedAt.localeCompare(a.syncedAt));
+  }
+
+  async pruneResults(before: Date): Promise<void> {
+    const cutoff = before.toISOString();
+    this.writeResults(this.readResults().filter((r) => r.syncedAt >= cutoff));
+  }
 }
 
 export interface FlushResult {
@@ -88,6 +169,8 @@ export interface FlushResult {
   skipped: number;
   /** Held back because the session is not usable — not counted as a failure. */
   blocked: number;
+  /** Waiting for an earlier queued write they refer to. */
+  waiting: number;
 }
 
 /**
@@ -123,12 +206,18 @@ function newClientOpId(): string {
   return `op-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+/** A key to name a write before it is queued, so later writes can refer to it. */
+export function newOpId(): string {
+  return newClientOpId();
+}
+
 /** Queue a write with a stable clientOpId injected into the body. */
 export function bindOutboxItem(input: {
   method: OutboxItem["method"];
   path: string;
   body: unknown;
   actor?: OutboxActor | null;
+  label?: string;
 }): OutboxItem {
   const body =
     input.body && typeof input.body === "object" && !Array.isArray(input.body)
@@ -137,6 +226,7 @@ export function bindOutboxItem(input: {
   const existing = body.clientOpId;
   const clientOpId = typeof existing === "string" && existing.length > 0 ? existing : newClientOpId();
   body.clientOpId = clientOpId;
+  const dependsOn = collectRefs(input.path, body);
   return {
     clientOpId,
     method: input.method,
@@ -146,6 +236,8 @@ export function bindOutboxItem(input: {
     attempts: 0,
     userId: input.actor?.userId,
     factoryId: input.actor?.factoryId,
+    ...(input.label ? { label: input.label } : {}),
+    ...(dependsOn.length ? { dependsOn } : {}),
   };
 }
 
@@ -165,13 +257,29 @@ export function actorMatches(item: OutboxItem, actor?: OutboxActor | null): bool
   return true;
 }
 
+/**
+ * Send queued writes in the order they were made.
+ *
+ * A write that refers to an earlier one (`ref()`) waits until that one has synced,
+ * then goes out with the real id filled in. If the earlier one can never sync, the
+ * later one is parked as a conflict rather than sent with a hole in it.
+ */
 export async function flushOutbox(
   store: OutboxStore,
   send: (item: OutboxItem) => Promise<{ ok: boolean; status: number; body: unknown }>,
   actor?: OutboxActor | null,
 ): Promise<FlushResult> {
-  const result: FlushResult = { flushed: 0, conflicts: 0, failed: 0, skipped: 0, blocked: 0 };
-  for (const item of await store.list()) {
+  const result: FlushResult = { flushed: 0, conflicts: 0, failed: 0, skipped: 0, blocked: 0, waiting: 0 };
+  const queued = await store.list();
+  // Kept current as the loop marks items, so a child sees its parent fail in the same pass.
+  const state = new Map(queued.map((row) => [row.clientOpId, row]));
+  const put = async (row: OutboxItem) => {
+    state.set(row.clientOpId, row);
+    await store.put(row);
+  };
+
+  for (const original of queued) {
+    const item = state.get(original.clientOpId) ?? original;
     if (item.dead || item.conflict) {
       result.skipped += 1;
       continue;
@@ -181,15 +289,73 @@ export async function flushOutbox(
       continue;
     }
     if (item.attempts >= MAX_OUTBOX_ATTEMPTS) {
-      await store.put({ ...item, dead: true, heldForAuth: false, lastError: "retry cap" });
+      await put({ ...item, dead: true, heldForAuth: false, lastError: "retry cap" });
       result.failed += 1;
       continue;
     }
+
+    const parents = item.dependsOn ?? collectRefs(item.path, item.body);
+    const parentResults = new Map<string, unknown>();
+    let parentState: "ready" | "waiting" | "failed" = "ready";
+    let failedParentId: string | undefined;
+    for (const parentId of parents) {
+      const synced = await store.getResult(parentId);
+      if (synced) {
+        parentResults.set(parentId, synced.body);
+        continue;
+      }
+      const parent = state.get(parentId);
+      if (parent && !parent.dead && !parent.conflict) {
+        parentState = "waiting";
+        continue;
+      }
+      parentState = "failed";
+      failedParentId = parentId;
+      break;
+    }
+    if (parentState === "failed") {
+      // The step this builds on will never land, so neither can this. A person decides.
+      const parent = failedParentId ? state.get(failedParentId) : undefined;
+      await put({
+        ...item,
+        conflict: {
+          code: "PARENT_FAILED",
+          parent: failedParentId,
+          parentLabel: parent?.label,
+          reason: parent?.lastError ?? "the earlier step was discarded",
+        },
+        lastError: "earlier step failed",
+      });
+      result.conflicts += 1;
+      continue;
+    }
+    if (parentState === "waiting") {
+      result.waiting += 1;
+      continue;
+    }
+
+    let outgoing: OutboxItem = item;
+    if (parents.length) {
+      try {
+        const lookup = (id: string) => parentResults.get(id);
+        outgoing = { ...item, path: resolveRefs(item.path, lookup), body: resolveRefs(item.body, lookup) };
+      } catch (error) {
+        if (!(error instanceof UnresolvedRefError)) throw error;
+        await put({
+          ...item,
+          conflict: { code: "PARENT_RESULT_MISSING", parent: error.clientOpId, field: error.field },
+          lastError: error.message,
+        });
+        result.conflicts += 1;
+        continue;
+      }
+    }
+
     let response: { ok: boolean; status: number; body: unknown };
     try {
-      response = await send(item);
+      response = await send(outgoing);
     } catch (error) {
-      await store.put({
+      await put({
         ...item,
         attempts: item.attempts + 1,
         lastError: error instanceof Error ? error.message : "network error",
@@ -198,13 +364,23 @@ export async function flushOutbox(
       continue;
     }
     if (response.ok) {
+      await store.putResult({
+        clientOpId: item.clientOpId,
+        method: item.method,
+        path: outgoing.path,
+        status: response.status,
+        body: response.body,
+        label: item.label,
+        syncedAt: new Date().toISOString(),
+      });
       await store.remove(item.clientOpId);
+      state.delete(item.clientOpId);
       result.flushed += 1;
       continue;
     }
     if (isAuthFailure(response.status)) {
       // Not an attempt. The write is fine; there is nobody to send it as.
-      await store.put({ ...item, heldForAuth: true, lastError: `HTTP ${response.status}` });
+      await put({ ...item, heldForAuth: true, lastError: `HTTP ${response.status}` });
       result.blocked += 1;
       continue;
     }
@@ -219,13 +395,23 @@ export async function flushOutbox(
       result.conflicts += 1;
     } else if (isPermanentFailure(response.status)) {
       next.dead = true;
+      next.conflict = response.body;
       result.failed += 1;
     } else {
       result.failed += 1;
     }
-    await store.put(next);
+    await put(next);
   }
+  await store.pruneResults(new Date(Date.now() - RESULT_RETENTION_MS));
   return result;
+}
+
+/** Put a conflicted or dead write back in line, e.g. after its parent was fixed. */
+export async function retryOutboxItem(store: OutboxStore, clientOpId: string): Promise<void> {
+  const item = (await store.list()).find((row) => row.clientOpId === clientOpId);
+  if (!item) return;
+  const { conflict: _conflict, dead: _dead, lastError: _lastError, ...rest } = item;
+  await store.put({ ...rest, attempts: 0 });
 }
 
 /**
