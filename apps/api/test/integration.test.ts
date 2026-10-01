@@ -32,8 +32,12 @@ const root = path.dirname(fileURLToPath(import.meta.url));
  * no date, so a test that files "this month" must ask the clock, not hard-code it.
  */
 function invoiceMonth(now = new Date()): string {
-  const ist = new Date(now.getTime() + 5.5 * 3600 * 1000);
-  return `${ist.getUTCFullYear()}-${String(ist.getUTCMonth() + 1).padStart(2, "0")}`;
+  return todayIst(now).slice(0, 7);
+}
+
+/** Today's IST date, for records that must land in the same month as an invoice issued now. */
+function todayIst(now = new Date()): string {
+  return new Date(now.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 }
 const apiRoot = path.resolve(root, "..");
 
@@ -1619,7 +1623,7 @@ describe("postgres-backed workflows", () => {
     const customer = await sales.createCustomer(asOwner, "Local Counter", undefined, { stateCode: "08" });
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
-      orderDate: "2026-09-12",
+      orderDate: todayIst(),
       clientOpId: "cash-order",
       billingMode: "cash_unbilled",
       lines: [{ quantitySqft: 10, rate: 100 }],
@@ -1630,13 +1634,13 @@ describe("postgres-backed workflows", () => {
 
     const sale = await sales.recordCashSale(asOwner, order.id, {
       amount: 1000,
-      saleDate: "2026-09-12",
+      saleDate: todayIst(),
       clientOpId: "cash-1",
       buyerName: "Ramesh",
     });
     const retry = await sales.recordCashSale(asOwner, order.id, {
       amount: 1000,
-      saleDate: "2026-09-12",
+      saleDate: todayIst(),
       clientOpId: "cash-1",
       buyerName: "Ramesh",
     });
@@ -1729,7 +1733,7 @@ describe("postgres-backed workflows", () => {
       amount: 11200,
       taxableAmount: 10000,
       gstRatePct: 12,
-      expenseDate: "2026-09-12",
+      expenseDate: todayIst(),
       clientOpId: "itc-exp",
     });
     const spend = await prisma.expense.findFirstOrThrow({
@@ -1750,7 +1754,7 @@ describe("postgres-backed workflows", () => {
     });
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
-      orderDate: "2026-09-12",
+      orderDate: todayIst(),
       clientOpId: "itc-order",
       lines: [{ quantitySqft: 100, rate: 100 }],
     })) as { id: string };
