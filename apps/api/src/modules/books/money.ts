@@ -28,6 +28,26 @@ export function parseFactoryDateInput(value: string | Date): Date {
   return new Date(value);
 }
 
+/** Today's date on the factory clock (IST), as YYYY-MM-DD. */
+export function factoryToday(now: Date = new Date()): string {
+  return new Date(now.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * A business date — when money moved, a sale was made, a worker turned up — as
+ * the factory records it. Nothing a yard does is dated after today: a payment
+ * "received" next March is a typo, and accepting it put a year of future rows into
+ * this month's figures. Invalid or future dates are refused with the field named.
+ */
+export function parseBusinessDate(value: string | Date, field: string, now: Date = new Date()): Date {
+  const at = parseFactoryDateInput(value);
+  if (Number.isNaN(at.getTime())) throw new BadRequestException(`${field} is not a valid date`);
+  if (factoryToday(at) > factoryToday(now)) {
+    throw new BadRequestException(`${field} cannot be after today (${factoryToday(now)})`);
+  }
+  return at;
+}
+
 /**
  * Rates are quoted EXCLUSIVE of GST throughout. A document's amount is therefore
  * taxable value PLUS tax — what is owed or payable.

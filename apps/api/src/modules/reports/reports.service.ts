@@ -1,6 +1,7 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
   answerCeoQuestion,
+  calendarMonthUtcRange,
   ceoExceptions,
   ceoNarrative,
   factoryMonthStart,
@@ -32,7 +33,15 @@ export class ReportsService {
   async ceoBrief(factoryId: string) {
     const factory = await this.prisma.factory.findUniqueOrThrow({ where: { id: factoryId } });
     const now = new Date();
+    // Month-to-date is a window, not "from the 1st onwards": a payment or expense
+    // dated next month is not this month's. Timestamp columns use IST instants;
+    // date-only columns use calendar dates, because Postgres truncates an instant
+    // bound to a date and 00:00 IST is the previous day in UTC.
     const monthStart = factoryMonthStart(now);
+    const thisMonth = new Date(monthStart.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 7);
+    const days = calendarMonthUtcRange(thisMonth);
+    const instants = { gte: monthStart, lt: factoryMonthStart(days.end) };
+    const dates = { gte: days.start, lt: days.end };
     const soon = new Date();
     soon.setDate(soon.getDate() + 7);
 
@@ -65,19 +74,19 @@ export class ReportsService {
       this.prisma.payment.aggregate({ where: { factoryId }, _sum: { amount: true } }),
       this.prisma.creditNote.aggregate({ where: { factoryId }, _sum: { amount: true } }),
       this.prisma.invoice.aggregate({
-        where: { factoryId, createdAt: { gte: monthStart } },
+        where: { factoryId, createdAt: instants },
         _sum: { amount: true },
       }),
       this.prisma.payment.aggregate({
-        where: { factoryId, paidAt: { gte: monthStart } },
+        where: { factoryId, paidAt: dates },
         _sum: { amount: true },
       }),
       this.prisma.expense.aggregate({
-        where: { factoryId, expenseDate: { gte: monthStart } },
+        where: { factoryId, expenseDate: dates },
         _sum: { amount: true },
       }),
       this.prisma.cashSale.aggregate({
-        where: { factoryId, saleDate: { gte: monthStart } },
+        where: { factoryId, saleDate: dates },
         _sum: { amount: true },
       }),
       this.prisma.cuttingSession.aggregate({

@@ -5,9 +5,22 @@ import { AppShell } from "../../components/AppShell";
 import { EmptyState } from "../../components/EmptyState";
 import { apiFetch, isQueued, pendingRef, ref } from "../../lib/api";
 import { bodyOf, queuedAt, useOutbox } from "../../lib/useOutbox";
+import { slabLabel, slabSqft } from "../../lib/format";
 
 type Customer = { id: string; name: string };
-type Slab = { id: string; slabSerial: string; salesStatus: string };
+type Slab = {
+  id: string;
+  slabSerial: string;
+  salesStatus: string;
+  varietyName?: string | null;
+  lengthFt?: string | null;
+  widthFt?: string | null;
+  thicknessMm?: number | null;
+  location?: { code: string } | null;
+};
+
+/** Only polished stock nobody has reserved can go on an order. */
+const sellable = (slab: Slab) => slab.salesStatus === "in_stock" && slab.location?.code !== "UNPOLISHED_STOCK";
 type Order = {
   id: string;
   status: string;
@@ -50,6 +63,13 @@ export default function SalesPage() {
     delete opIds.current[key];
   }
 
+  /** Choosing a slab fills in its face area, so sqft is never typed from memory. */
+  function pickSlab(slab: Slab) {
+    setSlabId(slab.id);
+    const sqft = slabSqft(slab);
+    if (sqft) setQty(String(sqft));
+  }
+
   async function refresh() {
     const [c, s, o] = await Promise.all([
       apiFetch<Customer[]>("/api/v1/customers"),
@@ -60,8 +80,8 @@ export default function SalesPage() {
     setSlabs(s);
     setOrders(o);
     if (!customerId && c[0]) setCustomerId(c[0].id);
-    const available = s.find((row) => row.salesStatus === "in_stock");
-    if (!slabId && available) setSlabId(available.id);
+    const available = s.find(sellable);
+    if (!slabId && available) pickSlab(available);
   }
   useEffect(() => { refresh().catch(() => undefined); }, []);
 
@@ -188,8 +208,13 @@ export default function SalesPage() {
             </select>
           </label>
           <label>Slab
-            <select value={slabId} onChange={(e) => setSlabId(e.target.value)}>
-              {slabs.map((s) => <option key={s.id} value={s.id}>{s.slabSerial} ({s.salesStatus})</option>)}
+            <select value={slabId} onChange={(e) => {
+              const picked = slabs.find((s) => s.id === e.target.value);
+              if (picked) pickSlab(picked);
+              else setSlabId("");
+            }}>
+              <option value="">No specific slab (lot sale)</option>
+              {slabs.filter(sellable).map((s) => <option key={s.id} value={s.id}>{slabLabel(s)}</option>)}
             </select>
           </label>
           <label>Sqft<input inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} /></label>
