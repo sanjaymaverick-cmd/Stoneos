@@ -27,6 +27,43 @@ import type { AuthenticatedUser } from "../src/common/current-user";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(root, "..");
 
+/**
+ * The IST calendar month we are in right now, as YYYY-MM.
+ *
+ * Tests that create an invoice without passing a date get "now", so asking for a
+ * hardcoded month only works during that month: the suite went red on 1 October
+ * for invoices it had just written. Deriving it keeps the test about GST and not
+ * about the calendar.
+ *
+ * It is also a reminder of an open gap. `Invoice` has no `invoiceDate` column, so
+ * gstr1() filters on `createdAt` — the moment the row was written. A September
+ * invoice entered on 1 October therefore files in October's return, which is
+ * wrong and is exactly what happens at every month end. Tracked as C10 in
+ * docs/architecture-critic-review.md.
+ */
+function currentFactoryDate(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)!.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function currentFactoryMonth(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const year = parts.find((p) => p.type === "year")!.value;
+  const month = parts.find((p) => p.type === "month")!.value;
+  return `${year}-${month}`;
+}
+
+
 describe("postgres-backed workflows", () => {
   let pg: EmbeddedPostgres | undefined;
   let prisma: PrismaClient;
@@ -1081,6 +1118,123 @@ describe("postgres-backed workflows", () => {
     assert.equal(receipts, 0);
   });
 
+  it("refuses to let an operator settle invoices or book spend by confirming a rokad", async () => {
+    const { factory, asOwner } = await staffFactory("intake-escalation");
+    const opRow = await users.provision(asOwner, { username: "esc-operator", role: "operator" });
+    const asOperator: AuthenticatedUser = {
+      ...asOwner,
+      id: opRow.user.id,
+      username: "esc-operator",
+      role: "operator",
+    };
+
+    // An operator may legitimately propose the day's rokad — that posts nothing.
+    const outOnly = Buffer.from(
+      "date,particulars,in,out,mode,partyName\n2026-09-12,Diesel,0,500,cash,\n",
+    ).toString("base64");
+    const draft = await intake.propose(asOwner, {
+      kind: "rokad",
+      date: "2026-09-12",
+      fileName: "rokad.csv",
+      contentType: "text/csv",
+      base64: outOnly,
+    });
+
+    // Confirming it books an expense, which an operator cannot do directly. Being
+    // allowed to handle the draft never granted that.
+    await assert.rejects(
+      () => intake.confirm(asOperator, draft.id),
+      /a operator cannot do/i,
+    );
+    assert.equal(
+      await prisma.expense.count({ where: { factoryId: factory.id } }),
+      0,
+      "a refused confirm must not have posted anything",
+    );
+    assert.equal(
+      (await prisma.intakeDraft.findUniqueOrThrow({ where: { id: draft.id } })).status,
+      "proposed",
+      "and must leave the draft confirmable by someone who may",
+    );
+
+    // Same for the cash-in side, which settles a customer invoice.
+    const inRow = Buffer.from(
+      "date,particulars,in,out,mode,partyName\n2026-09-12,On account,900,0,cash,Acme\n",
+    ).toString("base64");
+    const payDraft = await intake.propose(asOwner, {
+      kind: "rokad",
+      date: "2026-09-12",
+      fileName: "rokad2.csv",
+      contentType: "text/csv",
+      base64: inRow,
+    });
+    await assert.rejects(
+      () => intake.confirm(asOperator, payDraft.id),
+      /a operator cannot do/i,
+    );
+
+    // Someone who may post it still can — a different person, per the four-eyes rule.
+    const acctRow = await users.provision(asOwner, { username: "esc-accounts", role: "accountant" });
+    const asAccountant: AuthenticatedUser = {
+      ...asOwner,
+      id: acctRow.user.id,
+      username: "esc-accounts",
+      role: "accountant",
+    };
+    const ok = await intake.confirm(asAccountant, draft.id);
+    assert.equal(ok.status, "confirmed");
+    assert.equal(await prisma.expense.count({ where: { factoryId: factory.id } }), 1);
+  });
+
+  it("keeps a last-day-of-month invoice inside that month's GST position", async () => {
+    // voucher.operationalDate is a DATE column. The month window used to be built from
+    // instants (00:00 IST = 18:30 UTC the previous day), which Postgres truncated to a
+    // date — so the exclusive end landed ON the last day and excluded it. Every invoice
+    // raised on the 30th or 31st dropped out of that month's output tax, silently.
+    const { factory, asOwner } = await staffFactory("month-edge");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
+    await expenses.create(asOwner, {
+      category: "consumables",
+      amount: 11800,
+      taxableAmount: 10000,
+      gstRatePct: 18,
+      expenseDate: "2026-08-31",
+      clientOpId: "edge-last-day",
+    });
+    const august = await gst.position(factory.id, "2026-08");
+    assert.equal(august.input.cgst, 900, "the 31st belongs to August");
+    assert.equal(august.input.sgst, 900);
+
+    const september = await gst.position(factory.id, "2026-09");
+    assert.equal(september.input.cgst, 0, "and not to September");
+  });
+
+  it("backstops the money-moving services against any caller, not just the route", async () => {
+    // The route guards were the only gate, which is how intake reached past them.
+    // Asserting inside means a future caller cannot widen this by accident.
+    const { asOwner } = await staffFactory("backstop");
+    const opRow = await users.provision(asOwner, { username: "bs-operator", role: "operator" });
+    const asOperator: AuthenticatedUser = {
+      ...asOwner,
+      id: opRow.user.id,
+      username: "bs-operator",
+      role: "operator",
+    };
+    await assert.rejects(
+      () =>
+        expenses.create(asOperator, {
+          category: "diesel",
+          amount: 100,
+          expenseDate: "2026-09-12",
+        }),
+      /forbidden|not allowed|permission/i,
+    );
+  });
+
   it("rejects a supervisor confirming their own rokad draft and locks the cash drawer", async () => {
     const { factory, asOwner } = await staffFactory("intake");
     const supRow = await prisma.appUser.create({
@@ -1273,7 +1427,7 @@ describe("postgres-backed workflows", () => {
     assert.equal(irn.id, again.id);
     assert.match(irn.irn, /^MOCK-IRN-/);
     assert.equal(irn.source, "mock");
-    const gstr = await gst.gstr1(factory.id, "2026-09");
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.ok(gstr.b2b.some((r) => r.doc.startsWith("INV-")));
     assert.match(gstr.csv, /INV-/);
   });
@@ -1354,7 +1508,7 @@ describe("postgres-backed workflows", () => {
     });
 
     // GSTR-1 reports the heads separately, read off the documents as issued.
-    const gstr = await gst.gstr1(factory.id, "2026-09");
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     const localRow = gstr.b2b.find((r) => r.doc === local.invoiceNumber);
     const outsideRow = gstr.b2b.find((r) => r.doc === outside.invoiceNumber);
     assert.deepEqual(
@@ -1409,7 +1563,7 @@ describe("postgres-backed workflows", () => {
     assert.equal(Number(localInv.sgstAmount), 90);
     assert.equal(Number(outsideInv.igstAmount), 180, "out of state is IGST even for retail");
 
-    const gstr = await gst.gstr1(factory.id, "2026-09");
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.equal(gstr.b2b.length, 0, "a buyer with no GSTIN is never B2B");
     const b2cDocs = [...gstr.b2cSmall, ...gstr.b2cLarge].map((r) => r.doc);
     assert.ok(b2cDocs.includes(localInv.invoiceNumber));
@@ -1419,7 +1573,7 @@ describe("postgres-backed workflows", () => {
 
     // A large inter-state retail sale is reported invoice-wise, not consolidated.
     const bigInv = await billTo(outside.id, "b2cbig", 40_000);
-    const after = await gst.gstr1(factory.id, "2026-09");
+    const after = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.ok(
       after.b2cLarge.some((r) => r.doc === bigInv.invoiceNumber),
       "an inter-state retail invoice over the threshold belongs in B2CL",
@@ -1503,13 +1657,13 @@ describe("postgres-backed workflows", () => {
 
     const sale = await sales.recordCashSale(asOwner, order.id, {
       amount: 1000,
-      saleDate: "2026-09-12",
+      saleDate: currentFactoryDate(),
       clientOpId: "cash-1",
       buyerName: "Ramesh",
     });
     const retry = await sales.recordCashSale(asOwner, order.id, {
       amount: 1000,
-      saleDate: "2026-09-12",
+      saleDate: currentFactoryDate(),
       clientOpId: "cash-1",
       buyerName: "Ramesh",
     });
@@ -1531,7 +1685,7 @@ describe("postgres-backed workflows", () => {
     assert.equal(await prisma.invoice.count({ where: { salesOrderId: order.id } }), 0);
 
     // Nothing reaches the return, but the return says how much was left out.
-    const gstr = await gst.gstr1(factory.id, "2026-09");
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.equal(gstr.b2b.length + gstr.b2cSmall.length + gstr.b2cLarge.length, 0);
     assert.equal(gstr.totals.cgst + gstr.totals.sgst + gstr.totals.igst, 0);
     assert.equal(gstr.excludedCashSales.count, 1);
@@ -1602,7 +1756,7 @@ describe("postgres-backed workflows", () => {
       amount: 11200,
       taxableAmount: 10000,
       gstRatePct: 12,
-      expenseDate: "2026-09-12",
+      expenseDate: currentFactoryDate(),
       clientOpId: "itc-exp",
     });
     const spend = await prisma.expense.findFirstOrThrow({
@@ -1630,7 +1784,7 @@ describe("postgres-backed workflows", () => {
     const invoice = await sales.invoice(asOwner, order.id, "itc-inv");
     assert.equal(Number(invoice.gstRatePct), 18, "finished slabs stay on 18");
 
-    const position = await gst.position(factory.id, "2026-09");
+    const position = await gst.position(factory.id, currentFactoryMonth());
     // Output 18% of 10,000 = 1,800 split 900/900. Input 2,500+2,500 on the block plus
     // 600+600 on the consumable = 3,100 per head.
     assert.equal(position.output.cgst, 900);

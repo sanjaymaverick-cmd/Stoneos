@@ -40,6 +40,29 @@ export function factoryMonthStart(occurredAt: Date, timeZone = FACTORY_TIME_ZONE
 }
 
 /**
+ * Half-open month window for a **date-only** column (`@db.Date`), as YYYY-MM.
+ *
+ * {@link factoryMonthStart} returns a UTC *instant* — 00:00 IST, which is 18:30 UTC on
+ * the previous day. That is right for a timestamp column and wrong for a date one:
+ * Postgres truncates the bound to a date, so an exclusive end of "30 Sep 18:30 UTC"
+ * becomes "30 Sep" and drops everything recorded on the 30th. Monthly GST output
+ * silently lost every invoice raised on the last day of the month.
+ *
+ * Date columns are stored and read back at UTC midnight, so the boundaries must be
+ * plain calendar dates too.
+ */
+export function calendarMonthUtcRange(month: string): { start: Date; end: Date } {
+  const m = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!m) throw new RangeError(`month must be YYYY-MM, got ${month}`);
+  const year = Number(m[1]);
+  const monthIndex = Number(m[2]) - 1;
+  return {
+    start: new Date(Date.UTC(year, monthIndex, 1)),
+    end: new Date(Date.UTC(year, monthIndex + 1, 1)),
+  };
+}
+
+/**
  * Indian financial year on the factory clock: 1 April–31 March.
  * Returns the calendar year in which that FY starts (FY 2026 = 2026-04-01 .. 2027-03-31 IST).
  */
