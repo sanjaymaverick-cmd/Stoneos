@@ -214,14 +214,23 @@ export async function apiFetch<T = any>(path: string, init: WriteOptions = {}): 
   }
 }
 
+/**
+ * Figures that must be live or absent: the dashboard, balances, books and GST.
+ * Showing yesterday's outstanding as today's would be worse than showing nothing.
+ * Only the lists a person needs to enter work (blocks, slabs, customers, machines,
+ * workers) are kept for offline use.
+ */
+const LIVE_ONLY = /^\/api\/v1\/(reports|books|gst|recovery-ratio|dpr|audit)(\/|\?|$)/;
+
 async function read<T>(path: string, init: RequestInit): Promise<T> {
+  const cacheable = !LIVE_ONLY.test(path);
   try {
     const result = await direct<T>(path, init);
-    idb?.putRead(readKey(path), result).catch(() => undefined);
+    if (cacheable) idb?.putRead(readKey(path), result).catch(() => undefined);
     return result;
   } catch (error) {
     const failed = error as Error & { status?: number };
-    if (failed.status == null && idb) {
+    if (failed.status == null && idb && cacheable) {
       const cached = await idb.getRead<T>(readKey(path)).catch(() => undefined);
       if (cached) return cached.body;
     }

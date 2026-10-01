@@ -1,94 +1,102 @@
-// StoneOS offline shell.
-//
-// Pages are network-first so a deploy shows up at once, but every page that loads is
-// kept so the yard can still open it with no signal. Next.js build files are named by
-// content hash, so they are served from the cache first and never go stale. API calls
-// are left alone: the app caches its own reads and queues its writes.
+/*
+ * StoneOS service worker.
+ *
+ * The job: a supervisor opens StoneOS in the office, walks onto the cutting
+ * floor where there is no signal, and the app still opens. Writes queue in the
+ * outbox (packages/sync-client) and flush when the network returns.
+ *
+ * The previous version cached only offline.html and never called cache.put, so
+ * offline was a dead end: every request missed and the app showed a notice
+ * instead of the app. Queued writes were safe but unreachable, because you
+ * could not get to the screen that makes them.
+ *
+ * Three strategies, by what the request is:
+ *
+ *   /api/*                never touched. Reads must be fresh or fail, so the
+ *                         app can tell the difference; writes are the outbox's
+ *                         business, not the cache's.
+ *   /_next/static/*       cache-first. Next.js content-hashes these, so a given
+ *                         URL never changes contents.
+ *   everything else (GET) network-first falling back to cache, and every
+ *                         success is written to the cache on the way past.
+ *                         Navigations give up on the network after a few
+ *                         seconds: a weak yard signal can hang for a minute.
+ *
+ * After sign-in the app posts {type: "warm", urls} so every screen, and the
+ * build files it needs, is stored before the signal drops — not only the
+ * screens someone happened to open.
+ *
+ * Caching page HTML is safe here because it carries no user data: the shell
+ * fetches /api/v1/auth/me with a bearer token after it loads. If a page ever
+ * starts being rendered per-user on the server this must change, because a
+ * cached page would then be served to the next person on a shared device.
+ */
 
-const VERSION = "v2";
-const PAGES = `stoneos-pages-${VERSION}`;
-const ASSETS = `stoneos-assets-${VERSION}`;
+const CACHE = "stoneos-shell-v2";
 const OFFLINE_URL = "/offline.html";
-const NETWORK_TIMEOUT_MS = 4000;
+const NAVIGATION_TIMEOUT_MS = 4000;
+
+/* Enough of the app to open cold with no network. */
+const PRECACHE = [OFFLINE_URL, "/login", "/dashboard", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(PAGES).then((cache) => cache.addAll([OFFLINE_URL])));
-  self.skipWaiting();
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE);
+      // Added one at a time, so a single missing route cannot abort the install
+      // and leave the device with no offline support at all.
+      await Promise.all(
+        PRECACHE.map((url) =>
+          cache.add(new Request(url, { cache: "reload" })).catch(() => undefined),
+        ),
+      );
+      await self.skipWaiting();
+    })(),
+  );
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== PAGES && k !== ASSETS).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim()),
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+      await self.clients.claim();
+    })(),
   );
 });
 
-// After sign-in the app sends every screen the person may open, so they are on the
-// phone before the signal drops rather than only after each has been visited.
-self.addEventListener("message", (event) => {
-  const data = event.data || {};
-  if (data.type === "warm" && Array.isArray(data.urls)) {
-    event.waitUntil(warm(data.urls));
-  }
-});
-
-async function warm(urls) {
-  const pages = await caches.open(PAGES);
-  const assets = await caches.open(ASSETS);
-  const seen = new Set();
-  for (const url of urls) {
-    try {
-      const response = await fetch(url, { credentials: "same-origin" });
-      if (!response.ok) continue;
-      await pages.put(pageKey(url), response.clone());
-      const html = await response.text();
-      for (const match of html.matchAll(/(?:src|href)="(\/_next\/static\/[^"]+)"/g)) {
-        const asset = match[1];
-        if (seen.has(asset)) continue;
-        seen.add(asset);
-        if (await assets.match(asset)) continue;
-        const file = await fetch(asset).catch(() => null);
-        if (file && file.ok) await assets.put(asset, file);
-      }
-    } catch {
-      // One screen failing to warm must not stop the rest.
-    }
-  }
+/** Immutable build output: same URL, same bytes, forever. */
+function isImmutableAsset(url) {
+  return url.pathname.startsWith("/_next/static/");
 }
 
-self.addEventListener("fetch", (event) => {
-  const { request } = event;
-  if (request.method !== "GET") return;
-  const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/")) return;
-
-  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/")) {
-    event.respondWith(cacheFirst(request));
-    return;
-  }
-  if (request.mode === "navigate") {
-    event.respondWith(page(request));
-    return;
-  }
-  if (request.headers.get("RSC") === "1" || url.searchParams.has("_rsc")) {
-    event.respondWith(rsc(request));
-    return;
-  }
-  event.respondWith(staleWhileRevalidate(request));
-});
-
-/** Pages are stored by path alone, so `/sales?x=1` and `/sales` share one copy. */
-function pageKey(input) {
-  const url = new URL(input, self.location.origin);
-  return url.pathname.replace(/\/$/, "") || "/";
+/** Anything the cache must not hold an opinion about. */
+function isLiveData(url) {
+  return url.pathname.startsWith("/api/");
 }
 
+/**
+ * Only store what is safe to replay. An opaque cross-origin response hides its
+ * status, and a redirect replayed from cache confuses navigation.
+ */
+function isCacheable(response) {
+  return Boolean(response) && response.ok && response.type !== "opaque" && !response.redirected;
+}
+
+async function cacheFirst(request) {
+  const cache = await caches.open(CACHE);
+  const hit = await cache.match(request);
+  if (hit) return hit;
+  const response = await fetch(request);
+  if (isCacheable(response)) cache.put(request, response.clone());
+  return response;
+}
+
+/** Reject if the network has not answered in time, where a timer exists. */
 function withTimeout(promise, ms) {
+  if (typeof setTimeout !== "function") return promise;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    const timer = setTimeout(() => reject(new Error("network timeout")), ms);
     promise.then(
       (value) => {
         clearTimeout(timer);
@@ -102,50 +110,67 @@ function withTimeout(promise, ms) {
   });
 }
 
-async function page(request) {
-  const cache = await caches.open(PAGES);
-  const key = pageKey(request.url);
+async function networkFirst(request) {
+  const cache = await caches.open(CACHE);
   try {
-    // A weak yard signal can hang for a minute; fall back after a few seconds.
-    const response = await withTimeout(fetch(request), NETWORK_TIMEOUT_MS);
-    if (response.ok) await cache.put(key, response.clone());
+    const pending = fetch(request);
+    const response = await (request.mode === "navigate" ? withTimeout(pending, NAVIGATION_TIMEOUT_MS) : pending);
+    if (isCacheable(response)) cache.put(request, response.clone());
     return response;
-  } catch {
-    return (await cache.match(key)) || (await cache.match("/dashboard")) || (await cache.match(OFFLINE_URL));
+  } catch (networkError) {
+    const hit = await cache.match(request);
+    if (hit) return hit;
+
+    // A navigation to a page never opened online: give them a shell that is
+    // cached rather than a browser error, so the app starts and the queue is
+    // reachable.
+    if (request.mode === "navigate") {
+      const shell = (await cache.match("/dashboard")) || (await cache.match("/login"));
+      if (shell) return shell;
+      const offline = await cache.match(OFFLINE_URL);
+      if (offline) return offline;
+    }
+    throw networkError;
   }
 }
 
-async function rsc(request) {
-  const cache = await caches.open(PAGES);
-  const key = `${pageKey(request.url)}?rsc`;
-  try {
-    const response = await withTimeout(fetch(request), NETWORK_TIMEOUT_MS);
-    if (response.ok) await cache.put(key, response.clone());
-    return response;
-  } catch {
-    // No saved payload: fail so Next.js falls back to loading the page itself,
-    // which the navigation handler above can serve from the cache.
-    return (await cache.match(key)) || Response.error();
+self.addEventListener("fetch", (event) => {
+  const { request } = event;
+  if (request.method !== "GET") return;
+
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  if (isLiveData(url)) return;
+
+  event.respondWith(isImmutableAsset(url) ? cacheFirst(request) : networkFirst(request));
+});
+
+/* Store every screen the app may open, plus the build files each one loads. */
+self.addEventListener("message", (event) => {
+  const data = event.data || {};
+  if (data.type === "warm" && Array.isArray(data.urls)) {
+    event.waitUntil(warm(data.urls));
   }
-}
+});
 
-async function cacheFirst(request) {
-  const cache = await caches.open(ASSETS);
-  const hit = await cache.match(request);
-  if (hit) return hit;
-  const response = await fetch(request);
-  if (response.ok) await cache.put(request, response.clone());
-  return response;
-}
-
-async function staleWhileRevalidate(request) {
-  const cache = await caches.open(ASSETS);
-  const hit = await cache.match(request);
-  const fresh = fetch(request)
-    .then((response) => {
-      if (response.ok) cache.put(request, response.clone());
-      return response;
-    })
-    .catch(() => null);
-  return hit || (await fresh) || Response.error();
+async function warm(urls) {
+  const cache = await caches.open(CACHE);
+  const seen = new Set();
+  for (const url of urls) {
+    try {
+      const response = await fetch(new Request(url, { cache: "reload" }));
+      if (!isCacheable(response)) continue;
+      await cache.put(url, response.clone());
+      const html = await response.text();
+      for (const match of html.matchAll(/(?:src|href)="(\/_next\/static\/[^"]+)"/g)) {
+        const asset = match[1];
+        if (seen.has(asset) || (await cache.match(asset))) continue;
+        seen.add(asset);
+        const file = await fetch(asset).catch(() => null);
+        if (isCacheable(file)) await cache.put(asset, file);
+      }
+    } catch {
+      // One screen failing to warm must not stop the rest.
+    }
+  }
 }

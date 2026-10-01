@@ -26,20 +26,44 @@ import { ReportsService } from "../src/modules/reports/reports.service";
 import type { AuthenticatedUser } from "../src/common/current-user";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const apiRoot = path.resolve(root, "..");
 
 /**
- * The IST calendar month an invoice issued right now is filed under. Invoices take
- * no date, so a test that files "this month" must ask the clock, not hard-code it.
+ * The IST calendar month we are in right now, as YYYY-MM.
+ *
+ * Tests that create an invoice without passing a date get "now", so asking for a
+ * hardcoded month only works during that month: the suite went red on 1 October
+ * for invoices it had just written. Deriving it keeps the test about GST and not
+ * about the calendar.
+ *
+ * It is also a reminder of an open gap. `Invoice` has no `invoiceDate` column, so
+ * gstr1() filters on `createdAt` — the moment the row was written. A September
+ * invoice entered on 1 October therefore files in October's return, which is
+ * wrong and is exactly what happens at every month end. Tracked as C10 in
+ * docs/architecture-critic-review.md.
  */
-function invoiceMonth(now = new Date()): string {
-  return todayIst(now).slice(0, 7);
+function currentFactoryDate(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)!.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-/** Today's IST date, for records that must land in the same month as an invoice issued now. */
-function todayIst(now = new Date()): string {
-  return new Date(now.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+function currentFactoryMonth(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const year = parts.find((p) => p.type === "year")!.value;
+  const month = parts.find((p) => p.type === "month")!.value;
+  return `${year}-${month}`;
 }
-const apiRoot = path.resolve(root, "..");
+
 
 describe("postgres-backed workflows", () => {
   let pg: EmbeddedPostgres | undefined;
@@ -1404,7 +1428,7 @@ describe("postgres-backed workflows", () => {
     assert.equal(irn.id, again.id);
     assert.match(irn.irn, /^MOCK-IRN-/);
     assert.equal(irn.source, "mock");
-    const gstr = await gst.gstr1(factory.id, invoiceMonth());
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.ok(gstr.b2b.some((r) => r.doc.startsWith("INV-")));
     assert.match(gstr.csv, /INV-/);
   });
@@ -1485,7 +1509,7 @@ describe("postgres-backed workflows", () => {
     });
 
     // GSTR-1 reports the heads separately, read off the documents as issued.
-    const gstr = await gst.gstr1(factory.id, invoiceMonth());
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     const localRow = gstr.b2b.find((r) => r.doc === local.invoiceNumber);
     const outsideRow = gstr.b2b.find((r) => r.doc === outside.invoiceNumber);
     assert.deepEqual(
@@ -1540,7 +1564,7 @@ describe("postgres-backed workflows", () => {
     assert.equal(Number(localInv.sgstAmount), 90);
     assert.equal(Number(outsideInv.igstAmount), 180, "out of state is IGST even for retail");
 
-    const gstr = await gst.gstr1(factory.id, invoiceMonth());
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.equal(gstr.b2b.length, 0, "a buyer with no GSTIN is never B2B");
     const b2cDocs = [...gstr.b2cSmall, ...gstr.b2cLarge].map((r) => r.doc);
     assert.ok(b2cDocs.includes(localInv.invoiceNumber));
@@ -1550,7 +1574,7 @@ describe("postgres-backed workflows", () => {
 
     // A large inter-state retail sale is reported invoice-wise, not consolidated.
     const bigInv = await billTo(outside.id, "b2cbig", 40_000);
-    const after = await gst.gstr1(factory.id, invoiceMonth());
+    const after = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.ok(
       after.b2cLarge.some((r) => r.doc === bigInv.invoiceNumber),
       "an inter-state retail invoice over the threshold belongs in B2CL",
@@ -1623,7 +1647,7 @@ describe("postgres-backed workflows", () => {
     const customer = await sales.createCustomer(asOwner, "Local Counter", undefined, { stateCode: "08" });
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
-      orderDate: todayIst(),
+      orderDate: currentFactoryDate(),
       clientOpId: "cash-order",
       billingMode: "cash_unbilled",
       lines: [{ quantitySqft: 10, rate: 100 }],
@@ -1634,13 +1658,13 @@ describe("postgres-backed workflows", () => {
 
     const sale = await sales.recordCashSale(asOwner, order.id, {
       amount: 1000,
-      saleDate: todayIst(),
+      saleDate: currentFactoryDate(),
       clientOpId: "cash-1",
       buyerName: "Ramesh",
     });
     const retry = await sales.recordCashSale(asOwner, order.id, {
       amount: 1000,
-      saleDate: todayIst(),
+      saleDate: currentFactoryDate(),
       clientOpId: "cash-1",
       buyerName: "Ramesh",
     });
@@ -1662,7 +1686,7 @@ describe("postgres-backed workflows", () => {
     assert.equal(await prisma.invoice.count({ where: { salesOrderId: order.id } }), 0);
 
     // Nothing reaches the return, but the return says how much was left out.
-    const gstr = await gst.gstr1(factory.id, invoiceMonth());
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.equal(gstr.b2b.length + gstr.b2cSmall.length + gstr.b2cLarge.length, 0);
     assert.equal(gstr.totals.cgst + gstr.totals.sgst + gstr.totals.igst, 0);
     assert.equal(gstr.excludedCashSales.count, 1);
@@ -1733,7 +1757,7 @@ describe("postgres-backed workflows", () => {
       amount: 11200,
       taxableAmount: 10000,
       gstRatePct: 12,
-      expenseDate: todayIst(),
+      expenseDate: currentFactoryDate(),
       clientOpId: "itc-exp",
     });
     const spend = await prisma.expense.findFirstOrThrow({
@@ -1754,14 +1778,14 @@ describe("postgres-backed workflows", () => {
     });
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
-      orderDate: todayIst(),
+      orderDate: currentFactoryDate(),
       clientOpId: "itc-order",
       lines: [{ quantitySqft: 100, rate: 100 }],
     })) as { id: string };
     const invoice = await sales.invoice(asOwner, order.id, "itc-inv");
     assert.equal(Number(invoice.gstRatePct), 18, "finished slabs stay on 18");
 
-    const position = await gst.position(factory.id, invoiceMonth());
+    const position = await gst.position(factory.id, currentFactoryMonth());
     // Output 18% of 10,000 = 1,800 split 900/900. Input 2,500+2,500 on the block plus
     // 600+600 on the consumable = 3,100 per head.
     assert.equal(position.output.cgst, 900);
