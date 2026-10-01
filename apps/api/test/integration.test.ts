@@ -23,6 +23,7 @@ import { MusterService } from "../src/modules/muster/muster.service";
 import { GstService } from "../src/modules/gst/gst.service";
 import { CopilotService } from "../src/modules/books/copilot.service";
 import { ReportsService } from "../src/modules/reports/reports.service";
+import { ConsumablesController } from "../src/modules/production/consumables.controller";
 import type { AuthenticatedUser } from "../src/common/current-user";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -508,6 +509,7 @@ describe("postgres-backed workflows", () => {
     await inventory.addOpeningLine(asManager, snapshot.id, "RAW_BLOCK", {
       serialNumber: "OPEN-1",
       varietyName: "Tan Brown",
+      weightTons: "18",
     });
     await inventory.submitOpening(asManager, snapshot.id);
     await assert.rejects(() => inventory.approveOpening(asManager, snapshot.id));
@@ -554,11 +556,13 @@ describe("postgres-backed workflows", () => {
     const first = (await inventory.receiveBlock(owner, {
       serialNumber: "V202",
       varietyName: "Steel Grey",
+      weightTons: 18,
       clientOpId: "receipt-dup",
     })) as { block: { id: string } };
     const retry = (await inventory.receiveBlock(owner, {
       serialNumber: "V202",
       varietyName: "Steel Grey",
+      weightTons: 18,
       clientOpId: "receipt-dup",
     })) as { block: { id: string } };
     assert.equal(first.block.id, retry.block.id);
@@ -570,6 +574,7 @@ describe("postgres-backed workflows", () => {
     const received = (await inventory.receiveBlock(owner, {
       serialNumber: "V303",
       varietyName: "Tan Brown",
+      weightTons: 18,
       clientOpId: "receipt-rev",
     })) as { block: { id: string } };
     const movement = await prisma.inventoryMovement.findFirst({
@@ -977,6 +982,7 @@ describe("postgres-backed workflows", () => {
     const received = (await inventory.receiveBlock(asOwner, {
       serialNumber: "VER-1",
       varietyName: "Grey",
+      weightTons: 18,
       clientOpId: "ver-block",
     })) as { block: { id: string } };
     const machine = await prisma.machine.findFirst({
@@ -1814,6 +1820,7 @@ describe("postgres-backed workflows", () => {
         inventory.receiveBlock(asOwner, {
           serialNumber: "SLAB-BAD",
           varietyName: "White",
+          weightTons: 18,
           supplierId: supplier.id,
           clientOpId: "slab-bad",
           purchaseTaxable: 1000,
@@ -2018,5 +2025,88 @@ describe("postgres-backed workflows", () => {
       () => production.logCuttingDay(asOwner, session.id, { runtimeHours: 4, occurredAt: stale }),
       /14 days/,
     );
+  });
+  it("refuses a block with no weight, zero, negative or kilogram-sized tons", async () => {
+    const { asOwner } = await staffFactory("tons");
+    const receive = (weightTons: unknown, serial: string) =>
+      inventory.receiveBlock(asOwner, { serialNumber: serial, varietyName: "Grey", clientOpId: `tons-${serial}`, weightTons: weightTons as number });
+    await assert.rejects(() => receive(undefined, "T0"), /weightTons is required/);
+    await assert.rejects(() => receive(0, "T1"), /more than 0/);
+    await assert.rejects(() => receive(-5, "T2"), /more than 0/);
+    await assert.rejects(() => receive(18000, "T3"), /kg vs tons/);
+    await assert.rejects(
+      () => inventory.receiveBlock(asOwner, { serialNumber: "T4", varietyName: "Grey", clientOpId: "tons-T4", weightTons: 18, actualAmountPaid: -1 }),
+      /actualAmountPaid cannot be negative/,
+    );
+    const ok = (await receive(18.5, "T5")) as { block: { weightTons: unknown } };
+    assert.equal(Number(ok.block.weightTons), 18.5);
+
+    const snapshot = await inventory.startOpeningCount(asOwner);
+    await assert.rejects(
+      () => inventory.addOpeningLine(asOwner, snapshot.id, "RAW_BLOCK", { serialNumber: "OT1", varietyName: "Grey", weightTons: "0" }),
+      /more than 0/,
+    );
+  });
+
+  it("answers a duplicate consumable with 409 and refuses units that cannot be summed", async () => {
+    const { asOwner } = await staffFactory("cons");
+    const consumables = new ConsumablesController(prisma as never);
+    await consumables.create(asOwner, { name: "Epoxy resin", unit: "litre" });
+    await assert.rejects(
+      () => consumables.create(asOwner, { name: "Epoxy resin", unit: "litre" }),
+      (error: { status?: number; response?: { code?: string } }) =>
+        error.status === 409 && error.response?.code === "CONSUMABLE_EXISTS",
+    );
+    await assert.rejects(() => consumables.create(asOwner, { name: "Grout", unit: "bucket" }), /piece, litre/);
+    await assert.rejects(() => consumables.create(asOwner, { name: "Blades", unit: "piece", onHand: -3 }), /negative/);
+    const blades = await consumables.create(asOwner, { name: "  Blades  ", unit: "piece", onHand: 12 });
+    assert.equal(blades.name, "Blades");
+  });
+
+  it("refuses money, sales and attendance dated after today", async () => {
+    const { factory, asOwner } = await staffFactory("future");
+    const tomorrow = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+    await assert.rejects(
+      () => expenses.create(asOwner, { category: "other", amount: 100, expenseDate: tomorrow, clientOpId: "fut-exp" }),
+      /expenseDate cannot be after today/,
+    );
+    const customer = await sales.createCustomer(asOwner, "Future Buyer");
+    await assert.rejects(
+      () => sales.createOrder(asOwner, { customerId: customer.id, orderDate: tomorrow, clientOpId: "fut-order", lines: [{ quantitySqft: 10, rate: 100 }] }),
+      /orderDate cannot be after today/,
+    );
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: currentFactoryDate(),
+      clientOpId: "fut-order-ok",
+      lines: [{ quantitySqft: 10, rate: 100 }],
+    })) as { id: string };
+    const invoice = await sales.invoice(asOwner, order.id, "fut-inv");
+    await assert.rejects(
+      () => sales.pay(asOwner, invoice.id, { amount: 10, method: "cash", paidAt: tomorrow, clientOpId: "fut-pay" }),
+      /paidAt cannot be after today/,
+    );
+    const worker = await muster.createWorker(asOwner, { name: "Future Hand", dailyWage: 500 });
+    await assert.rejects(
+      () => muster.mark(asOwner, { workerId: worker.id, date: tomorrow, status: "present" }),
+      /date cannot be after today/,
+    );
+    assert.equal(await prisma.payment.count({ where: { factoryId: factory.id } }), 0);
+  });
+
+  it("counts month-to-date inside this IST month only", async () => {
+    const { factory, asOwner } = await staffFactory("mtd");
+    const today = currentFactoryDate();
+    const [y, m] = today.split("-").map(Number);
+    const lastOfPrevious = new Date(Date.UTC(y!, m! - 1, 0)).toISOString().slice(0, 10);
+    const firstOfNext = new Date(Date.UTC(y!, m!, 1)).toISOString().slice(0, 10);
+    await expenses.create(asOwner, { category: "other", amount: 100, expenseDate: today, clientOpId: "mtd-now" });
+    await expenses.create(asOwner, { category: "other", amount: 7, expenseDate: lastOfPrevious, clientOpId: "mtd-prev" });
+    // A row from before this rule existed, dated into next month: never "this month".
+    await prisma.expense.create({
+      data: { factoryId: factory.id, category: "other", amount: 50_000, expenseDate: new Date(`${firstOfNext}T00:00:00Z`) },
+    });
+    const brief = await reports.ceoBrief(factory.id);
+    assert.equal(brief.expensesMtd, 100, "neither last month's final day nor next month's rows count");
   });
 });

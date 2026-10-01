@@ -8,7 +8,7 @@ import {
   GST_DEFAULTS,
   gstOnTaxable,
   minorToRupees,
-  parseFactoryDateInput,
+  parseBusinessDate,
   rupeesToMinor,
   stateCodeFromGstin,
 } from "../books/money";
@@ -88,7 +88,7 @@ export class ExpensesService {
         });
         if (existing) return existing;
       }
-      const expenseDate = parseFactoryDateInput(input.expenseDate);
+      const expenseDate = parseBusinessDate(input.expenseDate, "expenseDate");
       // Only a spend that actually carried GST yields a credit. Diesel from a
       // registered pump does; a labour chit from an unregistered hand does not.
       const claimsCredit = input.gstRatePct != null && input.gstRatePct > 0;

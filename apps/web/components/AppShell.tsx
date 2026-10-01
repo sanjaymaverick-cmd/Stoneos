@@ -82,6 +82,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {link.label}
           </Link>
         ))}
+        <span className="muted" title="Signed in as">{user.username}</span>
         <button
           className="secondary"
           onClick={async () => {
@@ -92,7 +93,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             router.replace("/login");
           }}
         >
-          Sign out {user.username}
+          Sign out
         </button>
       </nav>
       <main className="page">{children}</main>
