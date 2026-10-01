@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
-import { APP_GUARD } from "@nestjs/core";
+import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
+import { IdempotencyInterceptor } from "./common/idempotency";
 import { CommonModule } from "./common/common.module";
 import { SessionGuard } from "./common/session.guard";
 import { HealthController } from "./health.controller";
@@ -37,6 +38,10 @@ import { GstModule } from "./modules/gst/gst.module";
     GstModule,
   ],
   controllers: [HealthController, ReportsController],
-  providers: [ReportsService, { provide: APP_GUARD, useClass: SessionGuard }],
+  providers: [
+    ReportsService,
+    { provide: APP_GUARD, useClass: SessionGuard },
+    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
+  ],
 })
 export class AppModule {}

@@ -33,7 +33,11 @@ export class MaintenanceController {
 
   @Post(":id/complete")
   @Roles(...PRODUCTION_INPUT_ROLES)
-  complete(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
-    return this.service.complete(user, id);
+  complete(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: { occurredAt?: string; clientOpId?: string } = {},
+  ) {
+    return this.service.complete(user, id, body?.occurredAt);
   }
 }

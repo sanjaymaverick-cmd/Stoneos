@@ -32,7 +32,7 @@ export class ProductionController {
   @Roles(...PRODUCTION_INPUT_ROLES)
   start(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: { rawBlockId: string; machineId: string; expectedSlabCount?: number },
+    @Body() body: { rawBlockId: string; machineId: string; expectedSlabCount?: number; occurredAt?: string },
   ) {
     return this.service.startCutting(user, body);
   }
@@ -50,6 +50,7 @@ export class ProductionController {
       slabsProducedCount?: number;
       notes?: string;
       baseVersion?: number;
+      occurredAt?: string;
     },
   ) {
     return this.service.logCuttingDay(user, id, body);
@@ -67,6 +68,7 @@ export class ProductionController {
       lengthFt?: number;
       widthFt?: number;
       thicknessMm?: number;
+      occurredAt?: string;
     },
   ) {
     return this.service.completeCutting(user, id, body);
@@ -82,6 +84,7 @@ export class ProductionController {
       processType: "GRINDING" | "RESIN" | "POLISHING";
       slabIds: string[];
       finishType?: string;
+      occurredAt?: string;
     },
   ) {
     return this.service.startPolishing(user, body);

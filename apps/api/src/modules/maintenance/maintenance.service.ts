@@ -1,5 +1,6 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
+import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 
@@ -45,14 +46,15 @@ export class MaintenanceService {
     return job;
   }
 
-  async complete(user: AuthenticatedUser, id: string) {
+  async complete(user: AuthenticatedUser, id: string, occurredAt?: string) {
+    const completedAt = parseOccurredAt(occurredAt);
     const job = await this.prisma.maintenanceJob.findFirst({
       where: { id, factoryId: user.factoryId },
     });
     if (!job) throw new NotFoundException("Job not found");
     return this.prisma.maintenanceJob.update({
       where: { id },
-      data: { completedAt: new Date() },
+      data: { completedAt },
     });
   }
 

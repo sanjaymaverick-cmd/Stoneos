@@ -80,6 +80,7 @@ export class InventoryController {
       qualityNote?: string;
       locationCode?: string;
       clientOpId: string;
+      occurredAt?: string;
     },
   ) {
     return this.service.receiveBlock(user, body);
