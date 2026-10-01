@@ -3,13 +3,17 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { EmptyState } from "../../components/EmptyState";
-import { apiFetch } from "../../lib/api";
+import { apiFetch, isQueued, pendingRef } from "../../lib/api";
+import { bodyOf, queuedAt, useOutbox } from "../../lib/useOutbox";
 
 export default function InventoryPage() {
   const [blocks, setBlocks] = useState<Array<{ id: string; serialNumber: string; varietyName: string; currentStatus: string }>>([]);
   const [serialNumber, setSerial] = useState("");
   const [varietyName, setVariety] = useState("Kashmir White");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const { items, refresh: refreshQueue } = useOutbox();
+  const queuedBlocks = queuedAt(items, "/api/v1/inventory/raw-blocks");
   const [slabs, setSlabs] = useState<Array<{ id: string; slabSerial: string; salesStatus: string }>>([]);
   const [supplierName, setSupplierName] = useState("");
   const [movements, setMovements] = useState<Array<{ id: string; movementType: string; rawBlockId: string | null; notes: string | null }>>([]);
@@ -25,17 +29,24 @@ export default function InventoryPage() {
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setError("");
+    setNotice("");
     try {
-      await apiFetch("/api/v1/inventory/raw-blocks", {
+      const result = await apiFetch("/api/v1/inventory/raw-blocks", {
         method: "POST",
+        label: `Receive block ${serialNumber}`,
         body: JSON.stringify({ serialNumber, varietyName, clientOpId: receiveOp.current }),
       });
       receiveOp.current = crypto.randomUUID();
+      setNotice(
+        isQueued(result)
+          ? `Block ${serialNumber} saved on this phone (${result.pendingRef}). It can go to the saw now and syncs when online.`
+          : `Block ${serialNumber} received.`,
+      );
       setSerial("");
-      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Receive failed");
     }
+    await Promise.all([refresh().catch(() => undefined), refreshQueue()]);
   }
 
   return (
@@ -46,7 +57,8 @@ export default function InventoryPage() {
         <form onSubmit={onSubmit}>
           <label>Serial<input value={serialNumber} onChange={(e) => setSerial(e.target.value)} required /></label>
           <label>Variety<input value={varietyName} onChange={(e) => setVariety(e.target.value)} required /></label>
-          {error ? <p className="error">{error}</p> : null}
+          {error ? <p className="error" role="alert">{error}</p> : null}
+          {notice ? <p className="muted" role="status">{notice}</p> : null}
           <button type="submit">Receive</button>
         </form>
         <form onSubmit={async (e) => { e.preventDefault(); await apiFetch("/api/v1/inventory/suppliers", { method: "POST", body: JSON.stringify({ name: supplierName }) }); setSupplierName(""); }}>
@@ -63,12 +75,22 @@ export default function InventoryPage() {
         )}
       </div>
       <div className="card">
-        {blocks.length === 0 ? (
+        {blocks.length === 0 && queuedBlocks.length === 0 ? (
           <EmptyState>No raw blocks on hand. Receive a block above to start the yard.</EmptyState>
         ) : (
           <table>
             <thead><tr><th>Serial</th><th>Variety</th><th>Status</th></tr></thead>
             <tbody>
+              {queuedBlocks.map((q) => {
+                const body = bodyOf<{ serialNumber: string; varietyName: string }>(q);
+                return (
+                  <tr key={q.clientOpId}>
+                    <td>{body.serialNumber}</td>
+                    <td>{body.varietyName}</td>
+                    <td><span className="pending-tag">not synced · {pendingRef(q.clientOpId)}</span></td>
+                  </tr>
+                );
+              })}
               {blocks.map((b) => (
                 <tr key={b.id}><td>{b.serialNumber}</td><td>{b.varietyName}</td><td>{b.currentStatus}</td></tr>
               ))}

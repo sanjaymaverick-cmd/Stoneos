@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { apiFetch, clearCachedReads, flushQueuedWrites, getToken, outbox, setActor, setToken } from "../lib/api";
 import { summariseOutbox } from "@stoneos/sync-client";
 import { visibleRoutes } from "../lib/routePolicy";
+import { warmOfflineScreens } from "./ServiceWorker";
 import type { PublicUser } from "@stoneos/contracts";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -24,6 +25,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .then((u) => {
         setUser(u);
         setActor({ userId: u.id, factoryId: u.factoryId });
+        warmOfflineScreens().catch(() => undefined);
       })
       .catch(() => router.replace("/login"));
   }, [router]);
