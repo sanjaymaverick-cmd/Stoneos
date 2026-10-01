@@ -424,7 +424,7 @@ async function setup() {
     const w = await call("accountant", "POST", "/muster/workers", { body: { name: `Dry ${kind} ${i + 1}`, kind, dailyWage } });
     if (w.body?.id) workers.push(w.body);
   }
-  for (const [name, unit, onHand] of [["Diamond segments", "set", 40], ["Polishing abrasives", "box", 120], ["Resin", "litre", 200], ["Hydraulic oil", "litre", 80]]) {
+  for (const [name, unit, onHand] of [["Diamond segments", "piece", 40], ["Polishing abrasives", "piece", 120], ["Resin", "litre", 200], ["Hydraulic oil", "litre", 80]]) {
     await call("supervisor", "POST", "/consumables", { body: { name: `${name} (${PREFIX})`, unit, onHand } });
   }
   if (!customers.length || !suppliers.length) throw new Error("Could not create suppliers/customers");
