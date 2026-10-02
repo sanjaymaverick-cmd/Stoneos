@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { recoveryRatio } from "@stoneos/domain";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../common/prisma.service";
@@ -283,13 +284,32 @@ export class SalesService {
     },
   ) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
-    const clientOpId = extra?.clientOpId ?? `dispatch:${salesOrderId}`;
+    // Which slabs are going identifies the load. Keying on the order alone made the
+    // second lorry a replay of the first: it returned the first delivery and shipped
+    // nothing, leaving half the order in PACKING while the books showed it gone.
+    const loadHash = hashSlabLoad(requested);
+    const clientOpId = extra?.clientOpId ?? `dispatch:${salesOrderId}:${loadHash}`;
     const dispatchedAt = parseOccurredAt(extra?.occurredAt);
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.syncOperation.findUnique({
         where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId } },
       });
-      if (existing) return existing.response;
+      if (existing) {
+        // A caller-supplied key reused for a different load is a client bug. Handing
+        // back the earlier load's response is how the fault above stayed invisible,
+        // so refuse it instead of answering the wrong question.
+        // Rows written before this field carried a load hash stored the key itself.
+        // Replay those as they always were, so a device syncing a dispatch from
+        // across the upgrade is not met with a conflict on work it already did.
+        const legacyRow = existing.requestHash === clientOpId;
+        if (!legacyRow && existing.requestHash !== loadHash) {
+          throw new ConflictException({
+            code: "CLIENT_OP_ID_REUSED",
+            message: "This clientOpId was already used for a different request",
+          });
+        }
+        return existing.response;
+      }
       const packing = await tx.inventoryLocation.findFirst({
         where: { factoryId: user.factoryId, code: "PACKING" },
       });
@@ -352,6 +372,7 @@ export class SalesService {
           },
         });
       }
+      await this.advanceDeliveryStatus(tx, order.id);
       const result = extra?.partial ? { ...delivery, skippedSlabs } : delivery;
       const response = result as unknown as Prisma.InputJsonValue;
       await tx.syncOperation.create({
@@ -361,7 +382,7 @@ export class SalesService {
           actorId: user.id,
           method: "POST",
           path: `/api/v1/sales-orders/${salesOrderId}/dispatch`,
-          requestHash: clientOpId,
+          requestHash: loadHash,
           statusCode: 201,
           response,
         },
@@ -783,4 +804,45 @@ export class SalesService {
     if (!order) throw new NotFoundException("Order not found");
     return order;
   }
+
+  /**
+   * Move the order along as its slabs leave the yard: PARTIALLY_DELIVERED while any
+   * remain, DELIVERED once the last one has gone.
+   *
+   * Nothing did this before, so an order that had shipped in full still read
+   * CONFIRMED. Every count of open orders, and the CEO brief's order book, was
+   * overstated by the whole of the delivered pipeline.
+   *
+   * Only lines naming a slab can be judged this way. An order carrying none — a
+   * quantity-only sale — is left alone rather than declared delivered on no
+   * evidence. A cancelled or still-draft order is likewise never moved: the status
+   * filter on the update means dispatching against one changes nothing here.
+   */
+  private async advanceDeliveryStatus(tx: Prisma.TransactionClient, salesOrderId: string) {
+    const lines = await tx.salesLineItem.findMany({
+      where: { salesOrderId, slabId: { not: null } },
+      select: { slab: { select: { salesStatus: true } } },
+    });
+    if (lines.length === 0) return;
+
+    const shipped = lines.filter((line) => line.slab?.salesStatus === "dispatched").length;
+    if (shipped === 0) return;
+    const status = shipped === lines.length ? "DELIVERED" : "PARTIALLY_DELIVERED";
+
+    await tx.salesOrder.updateMany({
+      where: { id: salesOrderId, status: { in: ["CONFIRMED", "PARTIALLY_DELIVERED"] } },
+      data: { status, version: { increment: 1 } },
+    });
+  }
+}
+
+/**
+ * A stable fingerprint of the slabs in one load.
+ *
+ * Order-independent, so the same lorry described in a different sequence is still
+ * recognised as the same request, and duplicates in the list do not change it.
+ */
+function hashSlabLoad(slabIds: readonly string[]): string {
+  const canonical = [...new Set(slabIds)].sort().join(",");
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
 }
