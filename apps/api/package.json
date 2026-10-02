@@ -25,6 +25,7 @@
     "@stoneos/contracts": "0.1.0",
     "@stoneos/domain": "0.1.0",
     "@stoneos/storage": "0.1.0",
+    "@stoneos/xlsx": "0.1.0",
     "class-transformer": "0.5.1",
     "class-validator": "0.14.2",
     "reflect-metadata": "0.2.2",

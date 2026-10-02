@@ -1,5 +1,5 @@
 {
-  "name": "@stoneos/domain",
+  "name": "@stoneos/xlsx",
   "version": "0.1.0",
   "private": true,
   "main": "./src/index.ts",
@@ -11,8 +11,5 @@
   "devDependencies": {
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
-  },
-  "dependencies": {
-    "@stoneos/xlsx": "0.1.0"
   }
 }

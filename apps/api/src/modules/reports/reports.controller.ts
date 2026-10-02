@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Inject, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Post, Query, Res, StreamableFile } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
+import type { Response } from "express";
 import {
   ANY_AUTHENTICATED_ROLE,
   COMMERCIAL_READ_ROLES,
@@ -7,7 +8,30 @@ import {
 } from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
 import { PrismaService } from "../../common/prisma.service";
+import { DailyReportService, type GeneratedWorkbook } from "./daily-report.service";
 import { ReportsService } from "./reports.service";
+
+const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+/**
+ * Send a workbook as a download.
+ *
+ * The file name is asserted rather than assumed safe. It is built from a parsed
+ * date, so it should always pass — but a quote or newline reaching a
+ * Content-Disposition header is how response headers get forged, and the check
+ * costs nothing.
+ */
+function sendWorkbook(res: Response, workbook: GeneratedWorkbook): StreamableFile {
+  if (!/^[A-Za-z0-9._-]+$/.test(workbook.fileName)) {
+    throw new Error(`refusing to send a workbook named ${JSON.stringify(workbook.fileName)}`);
+  }
+  res.set({
+    "Content-Type": XLSX_CONTENT_TYPE,
+    "Content-Disposition": `attachment; filename="${workbook.fileName}"`,
+    "Content-Length": String(workbook.bytes.length),
+  });
+  return new StreamableFile(workbook.bytes);
+}
 
 @ApiTags("reports")
 @ApiBearerAuth()
@@ -15,6 +39,7 @@ import { ReportsService } from "./reports.service";
 export class ReportsController {
   constructor(
     @Inject(ReportsService) private reports: ReportsService,
+    @Inject(DailyReportService) private dailyReports: DailyReportService,
     @Inject(PrismaService) private prisma: PrismaService,
   ) {}
 
@@ -32,6 +57,41 @@ export class ReportsController {
       recoveryRatio: b.recoveryRatio,
       recoveryBenchmark: b.recoveryBenchmark,
     };
+  }
+
+  /**
+   * One day on one tab — the file that goes out to the partners each evening.
+   * Defaults to today on the factory clock.
+   */
+  @Get("daily.xlsx")
+  @Roles(...COMMERCIAL_READ_ROLES)
+  async dailyWorkbook(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res({ passthrough: true }) res: Response,
+    @Query("date") date?: string,
+  ) {
+    return sendWorkbook(res, await this.dailyReports.dailyWorkbook(user.factoryId, date));
+  }
+
+  /**
+   * The office copy: a summary sheet and a tab for every day of the month so far.
+   * Defaults to the current month.
+   */
+  @Get("monthly.xlsx")
+  @Roles(...COMMERCIAL_READ_ROLES)
+  async monthlyWorkbook(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res({ passthrough: true }) res: Response,
+    @Query("month") month?: string,
+  ) {
+    return sendWorkbook(res, await this.dailyReports.monthlyWorkbook(user.factoryId, month));
+  }
+
+  /** The same day's figures as JSON, so a screen can show them without a download. */
+  @Get("daily")
+  @Roles(...COMMERCIAL_READ_ROLES)
+  daily(@CurrentUser() user: AuthenticatedUser, @Query("date") date?: string) {
+    return this.dailyReports.dailyFigures(user.factoryId, date);
   }
 
   @Get("dashboard")
