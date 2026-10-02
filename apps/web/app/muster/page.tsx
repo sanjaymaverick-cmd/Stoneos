@@ -4,12 +4,21 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { EmptyState } from "../../components/EmptyState";
-import { canAccess, MUSTER_PAY_ROLES, type PublicUser } from "@stoneos/contracts";
+import {
+  canAccess,
+  MUSTER_PAY_ROLES,
+  type PublicUser,
+} from "@stoneos/contracts";
 import { apiFetch, isQueued } from "../../lib/api";
 import { todayIst } from "../../lib/format";
 import { bodyOf, queuedAt, useOutbox } from "../../lib/useOutbox";
 
-type Worker = { id: string; name: string; kind: string; dailyWageMinor?: number | null };
+type Worker = {
+  id: string;
+  name: string;
+  kind: string;
+  dailyWageMinor?: number | null;
+};
 type Row = { id: string; status: string; worker: Worker };
 
 export default function MusterPage() {
@@ -17,7 +26,9 @@ export default function MusterPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [name, setName] = useState("");
   const [wage, setWage] = useState("800");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() =>
+    todayIst(new Date(Date.now() - 7 * 3600 * 1000)),
+  );
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [canHire, setCanHire] = useState(false);
@@ -40,7 +51,9 @@ export default function MusterPage() {
     setWorkers(await apiFetch("/api/v1/muster/workers"));
     setRows(await apiFetch(`/api/v1/muster/attendance?date=${d}`));
   }
-  useEffect(() => { refresh().catch(() => undefined); }, []);
+  useEffect(() => {
+    refresh().catch(() => undefined);
+  }, []);
 
   async function addWorker(event: FormEvent) {
     event.preventDefault();
@@ -59,55 +72,140 @@ export default function MusterPage() {
 
   return (
     <AppShell>
-      <h1>Muster</h1>
-      <p>Mark attendance for the operational day. Payroll sheets are on <Link href="/muster/payroll">wage sheet</Link>.</p>
-      {error ? <p className="error" role="alert">{error}</p> : null}
-      {notice ? <p className="muted" role="status">{notice}</p> : null}
+      <h1>People / लोग</h1>
+      <p>
+        Mark attendance for the operational day.{" "}
+        {canHire && (
+          <>
+            Payroll sheets are on <Link href="/muster/payroll">wage sheet</Link>
+            .
+          </>
+        )}
+      </p>
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="muted" role="status">
+          {notice}
+        </p>
+      ) : null}
       <div className="card">
         {canHire ? (
-        <form onSubmit={addWorker}>
-          <label>Worker<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
-          <label>Daily wage<input value={wage} onChange={(e) => setWage(e.target.value)} /></label>
-          <button type="submit">Add worker</button>
-        </form>
+          <form onSubmit={addWorker}>
+            <label>
+              Worker
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Daily wage
+              <input value={wage} onChange={(e) => setWage(e.target.value)} />
+            </label>
+            <button type="submit">Add worker</button>
+          </form>
         ) : (
-          <p className="muted">Workers are added by the owner, a manager or the accountant, because they set the daily wage. You can mark attendance below.</p>
+          <p className="muted">
+            The owner sets workers and daily wages. Mark attendance below.
+          </p>
         )}
       </div>
       <div className="card">
-        <label>Date<input type="date" value={date} max={todayIst()} onChange={(e) => { setDate(e.target.value); refresh(e.target.value).catch(() => undefined); }} /></label>
-        {workers.length === 0 ? <EmptyState>No workers yet.</EmptyState> : workers.map((w) => (
-          <p key={w.id}>
-            {w.name}
-            {queuedMarks.has(w.id) ? <span className="pending-tag">{queuedMarks.get(w.id)} · not synced</span> : null}
-            {["present", "absent", "half", "ot"].map((status) => (
-              <button
-                key={status}
-                type="button"
-                className="secondary"
-                onClick={async () => {
-                  setError("");
-                  try {
-                    const result = await apiFetch("/api/v1/muster/attendance", {
-                      method: "POST",
-                      label: `Attendance ${w.name} ${date}: ${status}`,
-                      body: JSON.stringify({ workerId: w.id, date, status }),
-                    });
-                    setNotice(isQueued(result) ? `${w.name} marked ${status} — saved on this phone, syncs when online.` : `${w.name} marked ${status}.`);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : "Could not mark attendance");
+        <label>
+          Date
+          <input
+            type="date"
+            value={date}
+            max={todayIst()}
+            onChange={(e) => {
+              setDate(e.target.value);
+              refresh(e.target.value).catch(() => undefined);
+            }}
+          />
+        </label>
+        {workers.length === 0 ? (
+          <EmptyState>No workers yet.</EmptyState>
+        ) : (
+          workers.map((w) => (
+            <div key={w.id} className="attendance">
+              <span className="worker">
+                {w.name} · ₹
+                {((w.dailyWageMinor ?? 0) / 100).toLocaleString("en-IN")} / day
+              </span>
+              {queuedMarks.has(w.id) ? (
+                <span className="pending-tag">
+                  {queuedMarks.get(w.id)} · not synced
+                </span>
+              ) : null}
+              {["present", "absent", "half", "ot"].map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  className="secondary"
+                  aria-pressed={
+                    (queuedMarks.get(w.id) ??
+                      rows.find((r) => r.worker.id === w.id)?.status) === status
                   }
-                  await Promise.all([refresh().catch(() => undefined), refreshQueue()]);
-                }}
-              >
-                {status}
-              </button>
-            ))}
-          </p>
-        ))}
+                  onClick={async () => {
+                    setError("");
+                    try {
+                      const result = await apiFetch(
+                        "/api/v1/muster/attendance",
+                        {
+                          method: "POST",
+                          label: `Attendance ${w.name} ${date}: ${status}`,
+                          body: JSON.stringify({
+                            workerId: w.id,
+                            date,
+                            status,
+                          }),
+                        },
+                      );
+                      setNotice(
+                        isQueued(result)
+                          ? `${w.name} marked ${status} — saved on this phone, syncs when online.`
+                          : `${w.name} marked ${status}.`,
+                      );
+                    } catch (err) {
+                      setError(
+                        err instanceof Error
+                          ? err.message
+                          : "Could not mark attendance",
+                      );
+                    }
+                    await Promise.all([
+                      refresh().catch(() => undefined),
+                      refreshQueue(),
+                    ]);
+                  }}
+                >
+                  {
+                    {
+                      present: "Present / उपस्थित",
+                      absent: "Absent / अनुपस्थित",
+                      half: "Half / आधा दिन",
+                      ot: "OT / अतिरिक्त",
+                    }[status]
+                  }
+                </button>
+              ))}
+            </div>
+          ))
+        )}
       </div>
       {rows.length === 0 ? null : (
-        <ul>{rows.map((r) => <li key={r.id}>{r.worker.name} — {r.status}</li>)}</ul>
+        <ul>
+          {rows.map((r) => (
+            <li key={r.id}>
+              {r.worker.name} — {r.status}
+            </li>
+          ))}
+        </ul>
       )}
     </AppShell>
   );

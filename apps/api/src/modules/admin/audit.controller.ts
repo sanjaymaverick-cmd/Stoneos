@@ -7,7 +7,7 @@ import { PrismaService } from "../../common/prisma.service";
 @ApiTags("audit")
 @ApiBearerAuth()
 @Controller("audit")
-@Roles(...AUDIT_READ_ROLES)
+@Roles(...AUDIT_READ_ROLES, "accountant")
 export class AuditController {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 

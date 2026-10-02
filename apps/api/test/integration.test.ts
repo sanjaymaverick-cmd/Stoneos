@@ -22,6 +22,7 @@ import { IntakeService } from "../src/modules/books/intake.service";
 import { MusterService } from "../src/modules/muster/muster.service";
 import { GstService } from "../src/modules/gst/gst.service";
 import { CopilotService } from "../src/modules/books/copilot.service";
+import { MaintenanceService } from "../src/modules/maintenance/maintenance.service";
 import { ReportsService } from "../src/modules/reports/reports.service";
 import { DailyReportService } from "../src/modules/reports/daily-report.service";
 import { ConsumablesController } from "../src/modules/production/consumables.controller";
@@ -96,7 +97,8 @@ describe("postgres-backed workflows", () => {
         password: "stoneos_ci",
         port: 55432,
         persistent: false,
-        initdbFlags: ["--encoding=UTF8", "--locale=C"],
+        // Postgres 18 Windows async I/O workers can survive shutdown and stall the next initdb.
+        initdbFlags: ["--encoding=UTF8", "--locale=C", "--set=io_method=sync"],
       });
       await pg.initialise();
       await pg.start();
@@ -268,7 +270,7 @@ describe("postgres-backed workflows", () => {
 
   it("lifts a timed lock when the owner resets the password", async () => {
     const { asOwner } = await staffFactory("lockreset");
-    const issued = await users.provision(asOwner, { username: "lr-sales", role: "sales" });
+    const issued = await users.provision(asOwner, { username: "lr-sales", role: "supervisor" });
     for (let i = 0; i < 10; i += 1) {
       await assert.rejects(() => auth.login("lr-sales", "Wrong!12345678"));
     }
@@ -379,11 +381,11 @@ describe("postgres-backed workflows", () => {
   it("keeps the chain of command: only the owner hands out roles, and nobody edits a peer", async () => {
     const { asOwner } = await staffFactory("hierarchy");
 
-    const manager = await users.provision(asOwner, { username: "h-mgr", role: "manager", name: "Mgr" });
-    const peerManager = await users.provision(asOwner, { username: "h-mgr2", role: "manager" });
-    const admin = await users.provision(asOwner, { username: "h-admin", role: "admin" });
+    const manager = await legacyAccount(asOwner, { username: "h-mgr", role: "manager", name: "Mgr" });
+    const peerManager = await legacyAccount(asOwner, { username: "h-mgr2", role: "manager" });
+    const admin = await legacyAccount(asOwner, { username: "h-admin", role: "admin" });
     const operator = await users.provision(asOwner, { username: "h-operator", role: "operator" });
-    const accountant = await users.provision(asOwner, { username: "h-accounts", role: "accountant" });
+    const accountant = await legacyAccount(asOwner, { username: "h-accounts", role: "accountant" });
     const asManager: AuthenticatedUser = {
       ...asOwner,
       id: manager.user.id,
@@ -501,7 +503,7 @@ describe("postgres-backed workflows", () => {
   });
 
   it("opening approval requires a different user and then goes live", async () => {
-    const manager = await users.provision(owner, { username: "mgr1", role: "manager", name: "Mgr" });
+    const manager = await legacyAccount(owner, { username: "mgr1", role: "manager", name: "Mgr" });
     const asManager: AuthenticatedUser = {
       ...owner,
       id: manager.user.id,
@@ -625,6 +627,13 @@ describe("postgres-backed workflows", () => {
     });
     assert.equal(Number(ok.amount), 500);
   });
+
+  // Existing legacy accounts remain usable; they can no longer be issued from the UI/API.
+  async function legacyAccount(actor: AuthenticatedUser, input: {username:string;role:string;name?:string}) {
+    const issued=await users.provision(actor,{...input,role:"operator"});
+    const row=await prisma.appUser.update({where:{id:issued.user.id},data:{role:input.role}});
+    return {...issued,user:{...issued.user,role:row.role}};
+  }
 
   async function staffFactory(label: string) {
     const factory = await prisma.factory.create({ data: { name: label } });
@@ -820,7 +829,7 @@ describe("postgres-backed workflows", () => {
         slabIds,
       });
       await production.completePolishing(asOwner, polish.id);
-      await sales.createOrder(asOwner, {
+      const order = await sales.createOrder(asOwner, {
         customerId: customer.id,
         orderDate: "2026-09-12",
         clientOpId: `${serial}-order`,
@@ -828,6 +837,10 @@ describe("postgres-backed workflows", () => {
           .slice(0, sellCount)
           .map((slabId) => ({ slabId, quantitySqft: sqftEach, rate: 100 })),
       });
+      // Reservation is still stock in the yard. Recovery waits for dispatch of every piece.
+      assert.equal((await reports.ceoBrief(factory.id)).blockRecoveries.some(r=>r.soldSqft>0 && !r.settled),false);
+      await sales.pack(asOwner,(order as {id:string}).id,slabIds.slice(0,sellCount));
+      await sales.dispatch(asOwner,(order as {id:string}).id,slabIds.slice(0,sellCount),{clientOpId:`${serial}-dispatch`});
       return slabIds;
     };
 
@@ -1184,7 +1197,7 @@ describe("postgres-backed workflows", () => {
     );
 
     // Someone who may post it still can — a different person, per the four-eyes rule.
-    const acctRow = await users.provision(asOwner, { username: "esc-accounts", role: "accountant" });
+    const acctRow = await legacyAccount(asOwner, { username: "esc-accounts", role: "accountant" });
     const asAccountant: AuthenticatedUser = {
       ...asOwner,
       id: acctRow.user.id,
@@ -2181,6 +2194,39 @@ describe("postgres-backed workflows", () => {
     const brief = await reports.ceoBrief(factory.id);
     assert.equal(brief.expensesMtd, 100, "neither last month's final day nor next month's rows count");
   });
+  it("Today and Money include unpaid invoices even if historical vouchers are missing",async()=>{
+    const {factory,asOwner}=await staffFactory("unposted-ar");
+    const customer=await sales.createCustomer(asOwner,"Unposted customer");
+    const order=await sales.createOrder(asOwner,{customerId:customer.id,orderDate:currentFactoryDate(),clientOpId:"unposted-order",lines:[{quantitySqft:10,rate:100}]}) as {id:string};
+    const invoice=await prisma.invoice.create({data:{factoryId:factory.id,salesOrderId:order.id,customerId:customer.id,invoiceNumber:"LEGACY-1",amount:1000,idempotencyKey:"legacy-invoice"}});
+    await prisma.payment.create({data:{factoryId:factory.id,invoiceId:invoice.id,amount:250,paidAt:new Date(currentFactoryDate()),method:"cash",idempotencyKey:"legacy-pay"}});
+    assert.equal((await reports.ceoBrief(factory.id)).outstandingAr,750);
+    assert.equal((await books.outstanding(factory.id)).youllGet,750);
+    assert.equal(await prisma.voucher.count({where:{factoryId:factory.id}}),0,"report reads do not repair live data by writing vouchers");
+  });
+  it("Money includes unpaid receipts and supplier opening credits",async()=>{
+    const {factory,asOwner}=await staffFactory("supplier-balances");
+    const supplier=await inventory.createSupplier(asOwner,"Supplier one");
+    await inventory.receiveBlock(asOwner,{serialNumber:"VG-12",varietyName:"Tan Brown",weightTons:10,supplierId:supplier.id,invoicedAmount:1000,actualAmountPaid:200,clientOpId:"legacy-receipt"});
+    assert.equal((await books.outstanding(factory.id)).youllGive,800);
+  });
+  it("preserves 2027 financial history and refuses early maintenance completion",async()=>{
+    const {factory,asOwner}=await staffFactory("history-2027");
+    const expense=await prisma.expense.create({data:{factoryId:factory.id,expenseDate:new Date("2027-01-10"),category:"maintenance",amount:400}});
+    const machine=await prisma.machine.findFirstOrThrow({where:{factoryId:factory.id}});
+    const jobs=new MaintenanceService(prisma as never,new AuditService(prisma as never));
+    const future=await jobs.create(asOwner,{machineId:machine.id,title:"2027 service",dueOn:"2027-01-10"});
+    await assert.rejects(()=>jobs.complete(asOwner,future.id),/not due yet/);
+    assert.ok((await jobs.list(factory.id)).some(j=>j.id===future.id));
+    assert.ok((await expenses.list(factory.id)).some(e=>e.id===expense.id));
+    assert.equal((await prisma.maintenanceJob.findUniqueOrThrow({where:{id:future.id}})).completedAt,null);
+  });
+  it("issues only the three daily roles while preserving existing legacy rows",async()=>{
+    const {asOwner}=await staffFactory("three-roles");
+    for(const role of ["manager","admin","inventory","sales","accountant","auditor"]) await assert.rejects(()=>users.provision(asOwner,{username:`new-${role}`,role}),/cannot be provisioned/);
+    for(const role of ["owner","supervisor","operator"]) assert.equal((await users.provision(asOwner,{username:`new-${role}`,role})).user.role,role);
+  });
+
 
   /**
    * Seed one operational day's work. Timestamps are set explicitly rather than
@@ -2523,4 +2569,3 @@ describe("postgres-backed workflows", () => {
     assert.ok(workbook.bytes.length > 0);
   });
 });
-

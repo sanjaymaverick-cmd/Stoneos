@@ -37,7 +37,7 @@ export default function BooksPage() {
   }, []);
 
   const canImport = me ? canAccess(me.role, HISTORICAL_IMPORT_ROLES) : false;
-  const canCopilot = me ? canAccess(me.role, COPILOT_PROPOSE_ROLES) : false;
+  const canCopilot = me?.role === "owner";
   const parties = data?.parties ?? [];
 
   return (
