@@ -18,6 +18,22 @@ export class ReportsController {
     @Inject(PrismaService) private prisma: PrismaService,
   ) {}
 
+  @Get("today")
+  @Roles(...ANY_AUTHENTICATED_ROLE)
+  async today(@CurrentUser() user: AuthenticatedUser) {
+    const b = await this.reports.ceoBrief(user.factoryId);
+    return {
+      collectedMtd: b.collectedMtd,
+      outstandingAr: b.outstandingAr,
+      blocksOnHand: b.blocksOnHand,
+      slabsOnHand: b.slabsOnHand,
+      maintenanceDue: b.maintenanceDue,
+      expensesMtd: b.expensesMtd,
+      recoveryRatio: b.recoveryRatio,
+      recoveryBenchmark: b.recoveryBenchmark,
+    };
+  }
+
   @Get("dashboard")
   @Roles(...ANY_AUTHENTICATED_ROLE)
   dashboard(@CurrentUser() user: AuthenticatedUser) {

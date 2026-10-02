@@ -1,4 +1,9 @@
-import { Inject, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  NotFoundException,
+  Inject,
+  Injectable,
+} from "@nestjs/common";
 import { createObjectStorage } from "@stoneos/storage";
 import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
@@ -15,9 +20,37 @@ export class FilesService {
 
   async upload(
     user: AuthenticatedUser,
-    input: { fileName: string; contentType: string; base64: string },
+    input: {
+      fileName: string;
+      contentType: string;
+      base64: string;
+      entityType?: string;
+      entityId?: string;
+    },
   ) {
-    const key = `${user.factoryId}/${Date.now()}-${input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    let prefix = user.factoryId;
+    if (input.entityType || input.entityId) {
+      const exists =
+        input.entityType === "block"
+          ? await this.prisma.rawBlock.findFirst({
+              where: { id: input.entityId, factoryId: user.factoryId },
+            })
+          : input.entityType === "order"
+            ? await this.prisma.salesOrder.findFirst({
+                where: { id: input.entityId, factoryId: user.factoryId },
+              })
+            : null;
+      if (!exists)
+        throw new BadRequestException("Attachment target not in this factory");
+      prefix += `/${input.entityType}/${input.entityId}`;
+    }
+    if (
+      input.entityType &&
+      (!/^image\/(jpeg|png|webp)$|^application\/pdf$/.test(input.contentType) ||
+        Buffer.byteLength(input.base64, "base64") > 4 * 1024 * 1024)
+    )
+      throw new BadRequestException("Use an image or PDF under 4 MB");
+    const key = `${prefix}/${Date.now()}-${input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
     await this.storage.put({
       key,
       contentType: input.contentType,
@@ -42,9 +75,25 @@ export class FilesService {
     return row;
   }
 
-  list(factoryId: string) {
+  async read(factoryId: string, id: string) {
+    const file = await this.prisma.storedFile.findFirst({
+      where: { id, factoryId },
+    });
+    if (!file) throw new NotFoundException("Attachment not found");
+    const object = await this.storage.get(file.key);
+    return {
+      contentType: file.contentType,
+      base64: object.bytes.toString("base64"),
+    };
+  }
+  list(factoryId: string, entityType?: string, entityId?: string) {
     return this.prisma.storedFile.findMany({
-      where: { factoryId },
+      where: {
+        factoryId,
+        ...(entityType && entityId
+          ? { key: { startsWith: `${factoryId}/${entityType}/${entityId}/` } }
+          : {}),
+      },
       orderBy: { createdAt: "desc" },
     });
   }

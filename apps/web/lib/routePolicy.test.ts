@@ -1,31 +1,34 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { canAccessPath, visibleRoutes } from "./routePolicy.ts";
-
-describe("route policy", () => {
-  it("hides team access from operators", () => {
-    const hrefs = visibleRoutes("operator").map((r) => r.href);
-    assert.equal(hrefs.includes("/admin/users"), false);
-    assert.equal(canAccessPath("operator", "/admin/users"), false);
-    assert.equal(canAccessPath("owner", "/admin/users"), true);
+import { visibleRoutes, canAccessPath } from "./routePolicy.ts";
+describe("yard navigation", () => {
+  it("has exactly five primary destinations in order", () =>
+    assert.deepEqual(
+      visibleRoutes("owner").map((r) => r.label),
+      ["Today", "Yard", "Cut", "Sell", "Money"],
+    ));
+  it("keeps supervisor out of Settings and money", () => {
+    for (const p of ["/admin/users", "/admin/audit", "/expenses", "/books"])
+      assert.equal(canAccessPath("supervisor", p), false);
   });
-
-  it("hides sales from operators", () => {
+  it("limits operator to Cut and People actions", () => {
+    assert.equal(canAccessPath("operator", "/production"), true);
+    assert.equal(canAccessPath("operator", "/muster"), true);
     assert.equal(canAccessPath("operator", "/sales"), false);
-    assert.equal(canAccessPath("sales", "/sales"), true);
   });
-
-  it("hides tally import from supervisors", () => {
-    assert.equal(canAccessPath("supervisor", "/tally"), false);
-    assert.equal(canAccessPath("owner", "/tally"), true);
-  });
-
-  it("shows Books to supervisors and Intake to operators, not Khata import", () => {
-    assert.equal(canAccessPath("supervisor", "/books"), true);
-    assert.equal(canAccessPath("operator", "/books"), false);
-    assert.equal(canAccessPath("operator", "/intake"), true);
-    assert.equal(visibleRoutes("supervisor").some((r) => r.href === "/books"), true);
-    assert.equal(visibleRoutes("supervisor").some((r) => r.href === "/tally"), false);
-    assert.equal(visibleRoutes("operator").some((r) => r.label === "Tally"), false);
+  it("keeps secondary pages out of primary chrome", () => {
+    assert.equal(
+      visibleRoutes("owner").some((r) =>
+        [
+          "/muster",
+          "/maintenance",
+          "/sync",
+          "/setup/opening-inventory",
+          "/recovery-ratio",
+          "/intake",
+        ].includes(r.href),
+      ),
+      false,
+    );
   });
 });

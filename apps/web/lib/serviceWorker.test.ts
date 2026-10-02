@@ -89,7 +89,7 @@ function loadWorker(networkImpl: (req: any) => Promise<any>) {
 
   const caches = {
     open: async () => cache,
-    keys: async () => ["stoneos-shell-v1", "stoneos-shell-v2"],
+    keys: async () => ["stoneos-shell-v1", "stoneos-shell-v3"],
     delete: async (k: string) => {
       deleted.push(k);
       return true;

@@ -1,7 +1,11 @@
 import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { InventoryKind } from "@prisma/client";
-import { INVENTORY_DATA_ROLES, SALES_READ_ROLES } from "@stoneos/contracts";
+import {
+  INVENTORY_DATA_ROLES,
+  SALES_READ_ROLES,
+  PRODUCTION_INPUT_ROLES,
+} from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
 import { InventoryService } from "./inventory.service";
 
@@ -18,13 +22,13 @@ export class InventoryController {
   }
 
   @Get("raw-blocks")
-  @Roles(...INVENTORY_DATA_ROLES)
+  @Roles(...PRODUCTION_INPUT_ROLES)
   rawBlocks(@CurrentUser() user: AuthenticatedUser) {
     return this.service.rawBlocks(user.factoryId);
   }
 
   @Get("slabs")
-  @Roles(...SALES_READ_ROLES)
+  @Roles(...SALES_READ_ROLES, ...PRODUCTION_INPUT_ROLES)
   slabs(@CurrentUser() user: AuthenticatedUser) {
     return this.service.slabs(user.factoryId);
   }
@@ -51,7 +55,13 @@ export class InventoryController {
   @Roles(...INVENTORY_DATA_ROLES)
   createSupplier(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: { name: string; contactInfo?: string; stateCode?: string; gstin?: string },
+    @Body()
+    body: {
+      name: string;
+      contactInfo?: string;
+      stateCode?: string;
+      gstin?: string;
+    },
   ) {
     return this.service.createSupplier(user, body.name, body.contactInfo, {
       stateCode: body.stateCode,

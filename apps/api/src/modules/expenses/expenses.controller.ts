@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
-import { EXPENSE_DATA_ROLES } from "@stoneos/contracts";
+import { EXPENSE_DATA_ROLES, COMMERCIAL_READ_ROLES } from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
 import { ExpensesService } from "./expenses.service";
 
@@ -11,13 +11,13 @@ export class ExpensesController {
   constructor(@Inject(ExpensesService) private service: ExpensesService) {}
 
   @Get("categories")
-  @Roles(...EXPENSE_DATA_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   categories() {
     return this.service.categories();
   }
 
   @Get("vehicles")
-  @Roles(...EXPENSE_DATA_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   vehicles(@CurrentUser() user: AuthenticatedUser) {
     return this.service.vehicles(user.factoryId);
   }
@@ -32,7 +32,7 @@ export class ExpensesController {
   }
 
   @Get()
-  @Roles(...EXPENSE_DATA_ROLES)
+  @Roles(...COMMERCIAL_READ_ROLES)
   list(@CurrentUser() user: AuthenticatedUser) {
     return this.service.list(user.factoryId);
   }

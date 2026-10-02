@@ -3,9 +3,17 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiFetch, clearCachedReads, flushQueuedWrites, getToken, outbox, setActor, setToken } from "../lib/api";
+import {
+  apiFetch,
+  clearCachedReads,
+  flushQueuedWrites,
+  getToken,
+  outbox,
+  setActor,
+  setToken,
+} from "../lib/api";
 import { summariseOutbox } from "@stoneos/sync-client";
-import { visibleRoutes } from "../lib/routePolicy";
+import { visibleRoutes, canAccessPath, routes } from "../lib/routePolicy";
 import { warmOfflineScreens } from "./ServiceWorker";
 import type { PublicUser } from "@stoneos/contracts";
 
@@ -13,7 +21,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<PublicUser | null>(null);
-  const [queue, setQueue] = useState({ pending: 0, blocked: 0, conflicts: 0, dead: 0, needsAttention: 0 });
+  const [queue, setQueue] = useState({
+    pending: 0,
+    blocked: 0,
+    conflicts: 0,
+    dead: 0,
+    needsAttention: 0,
+  });
   const [online, setOnline] = useState(true);
 
   useEffect(() => {
@@ -53,7 +67,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Work that needs a person is never reported as "Synced", and never hides behind a
   // plain queue count. A stuck entry the operator cannot see is the same as lost.
   const { pending, blocked, conflicts, dead, needsAttention } = queue;
-  const syncTone = needsAttention ? "stuck" : !online ? "offline" : pending || blocked ? "pending" : "";
+  const syncTone = needsAttention
+    ? "stuck"
+    : !online
+      ? "offline"
+      : pending || blocked
+        ? "pending"
+        : "";
   const syncLabel = needsAttention
     ? [
         conflicts ? `${conflicts} conflicted` : null,
@@ -71,22 +91,70 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="shell">
-      <Link href="/sync" className={`sync ${syncTone}`}>
-        {syncLabel}
-        {user.mustChangePassword ? " · Change your temporary password" : ""}
-      </Link>
+      {pending || blocked || needsAttention || !online ? (
+        <Link href="/sync" className={`sync ${syncTone}`}>
+          {syncLabel}
+          {user.mustChangePassword ? " · Change your temporary password" : ""}
+        </Link>
+      ) : null}
       <nav className="nav">
-        <span className="brand">StoneOS</span>
+        <span className="brand">Vedam ≡</span>
         {links.map((link) => (
-          <Link key={link.href} href={link.href} className={pathname.startsWith(link.href) ? "active" : ""}>
+          <Link
+            key={link.href}
+            href={link.href}
+            className={pathname.startsWith(link.href) ? "active" : ""}
+          >
             {link.label}
           </Link>
         ))}
-        <span className="muted" title="Signed in as">{user.username}</span>
+        <details className="more">
+          <summary>
+            More <span className={`sync-dot ${syncTone}`} title={syncLabel} />
+          </summary>
+          <div>
+            {routes
+              .filter(
+                (r) =>
+                  [
+                    "/muster",
+                    "/maintenance",
+                    "/admin/users",
+                    "/admin/audit",
+                  ].includes(r.href) && canAccessPath(user.role, r.href),
+              )
+              .map((r) => (
+                <Link key={r.href} href={r.href}>
+                  {r.label}
+                </Link>
+              ))}
+            <Link href="/account/password">Password</Link>
+            <button
+              className="secondary mobile-signout"
+              onClick={async () => {
+                await apiFetch("/api/v1/auth/logout", { method: "POST" }).catch(
+                  () => undefined,
+                );
+                setToken(null);
+                setActor(null);
+                await clearCachedReads();
+                router.replace("/login");
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+        </details>
+        <span className="identity muted">
+          {user.username} ·{" "}
+          {user.role === "operator" ? "Operator / ऑपरेटर" : user.role}
+        </span>
         <button
           className="secondary"
           onClick={async () => {
-            await apiFetch("/api/v1/auth/logout", { method: "POST" }).catch(() => undefined);
+            await apiFetch("/api/v1/auth/logout", { method: "POST" }).catch(
+              () => undefined,
+            );
             setToken(null);
             setActor(null);
             await clearCachedReads();
@@ -96,7 +164,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           Sign out
         </button>
       </nav>
-      <main className="page">{children}</main>
+      <main className="page">
+        {canAccessPath(user.role, pathname) ? (
+          children
+        ) : (
+          <p role="alert">This screen is restricted.</p>
+        )}
+      </main>
     </div>
   );
 }

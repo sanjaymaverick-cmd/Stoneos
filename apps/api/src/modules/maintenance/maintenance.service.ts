@@ -1,4 +1,9 @@
-import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { PrismaService } from "../../common/prisma.service";
 import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
@@ -52,6 +57,11 @@ export class MaintenanceService {
       where: { id, factoryId: user.factoryId },
     });
     if (!job) throw new NotFoundException("Job not found");
+    const today = new Date(Date.now() + 5.5 * 3600 * 1000)
+      .toISOString()
+      .slice(0, 10);
+    if (job.dueOn.toISOString().slice(0, 10) > today)
+      throw new BadRequestException("Maintenance is not due yet");
     return this.prisma.maintenanceJob.update({
       where: { id },
       data: { completedAt },

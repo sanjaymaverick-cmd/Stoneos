@@ -12,6 +12,7 @@ export function todayIst(now: Date = new Date()): string {
 
 type SlabLike = {
   slabSerial: string;
+  parentBlock?: { serialNumber: string } | null;
   varietyName?: string | null;
   lengthFt?: string | number | null;
   widthFt?: string | number | null;
@@ -29,9 +30,18 @@ export function slabSqft(slab: SlabLike): number | null {
 /** "V101/50/01 · Black Galaxy · 9×5.5 ft · 49.5 sqft" — what a salesman picks by. */
 export function slabLabel(slab: SlabLike): string {
   const sqft = slabSqft(slab);
-  const parts = [slab.slabSerial];
+  const serial = slab.slabSerial.replace(/^(.*)\/\d+\/(\d+)$/, "$1 / $2");
+  const parts = [
+    /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(serial)
+      ? `${slab.parentBlock?.serialNumber ?? "Slab"} / piece`
+      : serial,
+  ];
   if (slab.varietyName) parts.push(slab.varietyName);
-  if (sqft) parts.push(`${Number(slab.lengthFt)}×${Number(slab.widthFt)} ft`, `${sqft} sqft`);
+  if (sqft)
+    parts.push(
+      `${Number(slab.lengthFt)}×${Number(slab.widthFt)} ft`,
+      `${sqft} sqft`,
+    );
   if (slab.thicknessMm) parts.push(`${slab.thicknessMm} mm`);
   return parts.join(" · ");
 }

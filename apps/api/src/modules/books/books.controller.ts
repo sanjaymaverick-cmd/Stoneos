@@ -23,6 +23,19 @@ export class BooksController {
     @Inject(CopilotService) private copilot: CopilotService,
   ) {}
 
+  @Get("collections-today")
+  @Roles(...BOOKS_STATEMENT_ROLES)
+  async collectionsToday(@CurrentUser() user: AuthenticatedUser) {
+    const date = new Date(
+      new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10),
+    );
+    const [payments, cash] = await Promise.all([
+      this.books.collectedPayments(user.factoryId, date),
+      this.books.collectedCash(user.factoryId, date),
+    ]);
+    return { collected: payments + cash };
+  }
+
   @Get("parties")
   @Roles(...BOOKS_STATEMENT_ROLES)
   parties(@CurrentUser() user: AuthenticatedUser) {
@@ -66,7 +79,13 @@ export class BooksController {
   @Roles(...HISTORICAL_IMPORT_ROLES)
   previewKhata(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: { fileName: string; text?: string; base64?: string; contentType?: string },
+    @Body()
+    body: {
+      fileName: string;
+      text?: string;
+      base64?: string;
+      contentType?: string;
+    },
   ) {
     return this.khata.preview(body);
   }
