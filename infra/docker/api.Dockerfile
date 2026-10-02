@@ -7,10 +7,11 @@ COPY apps/desktop/package.json apps/desktop/
 COPY apps/android/package.json apps/android/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/domain/package.json packages/domain/
+COPY packages/xlsx/package.json packages/xlsx/
 COPY packages/auth/package.json packages/auth/
 COPY packages/storage/package.json packages/storage/
 COPY packages/sync-client/package.json packages/sync-client/
-RUN npm ci --ignore-scripts --workspace=@stoneos/api --workspace=@stoneos/contracts --workspace=@stoneos/domain --workspace=@stoneos/auth --workspace=@stoneos/storage --include-workspace-root
+RUN npm ci --ignore-scripts --workspace=@stoneos/api --workspace=@stoneos/contracts --workspace=@stoneos/domain --workspace=@stoneos/xlsx --workspace=@stoneos/auth --workspace=@stoneos/storage --include-workspace-root
 
 FROM node:24-alpine AS runner
 WORKDIR /app

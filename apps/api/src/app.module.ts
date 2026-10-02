@@ -11,6 +11,7 @@ import { InventoryModule } from "./modules/inventory/inventory.module";
 import { ProductionModule } from "./modules/production/production.module";
 import { ReportsController } from "./modules/reports/reports.controller";
 import { ReportsService } from "./modules/reports/reports.service";
+import { DailyReportService } from "./modules/reports/daily-report.service";
 import { SalesModule } from "./modules/sales/sales.module";
 import { TallyModule } from "./modules/tally/tally.module";
 import { FilesModule } from "./modules/files/files.module";
@@ -40,6 +41,7 @@ import { GstModule } from "./modules/gst/gst.module";
   controllers: [HealthController, ReportsController],
   providers: [
     ReportsService,
+    DailyReportService,
     { provide: APP_GUARD, useClass: SessionGuard },
     { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
   ],
