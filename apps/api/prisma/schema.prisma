@@ -172,6 +172,7 @@ enum VoucherSource {
   interfactory_invoice
   interfactory_settle
   copilot_journal
+  stock_write_off
   manual
 }
 
@@ -215,6 +216,7 @@ model Factory {
   slabs              Slab[]
   movements          InventoryMovement[]
   openingSnapshots   OpeningInventorySnapshot[]
+  stockWriteOffs     StockWriteOff[]
   cuttingSessions    CuttingSession[]
   polishingSessions  PolishingSession[]
   quotations         Quotation[]
@@ -359,6 +361,10 @@ model Customer {
   factory     Factory      @relation(fields: [factoryId], references: [id])
   name        String
   contactInfo String?      @map("contact_info")
+  /// Where the bill goes. The yard also needs somewhere to send the lorry, which is
+  /// often a different site, so a consignee can be named per invoice as well.
+  billingAddress  String?  @map("billing_address")
+  shippingAddress String?  @map("shipping_address")
   /// Two-digit GST state code. Decides CGST+SGST vs IGST. Null means a local counter sale.
   stateCode   String?      @map("state_code")
   gstin       String?
@@ -421,6 +427,10 @@ model RawBlock {
   purchaseIgst       Decimal            @default(0) @map("purchase_igst") @db.Decimal(14, 2)
   /// Frozen at receipt. Rough blocks are 5% (HSN 2516), but the slab is chosen per receipt.
   purchaseGstRatePct Decimal            @default(0) @map("purchase_gst_rate_pct") @db.Decimal(5, 2)
+  /// Paid in cash outside the GST bill. An unregistered quarry supplier cannot charge
+  /// tax, so there is nothing to claim: this is cost of stone and carries no input
+  /// credit. It sits beside purchaseTaxable in the cost basis, never inside it.
+  purchaseCashAmount Decimal            @default(0) @map("purchase_cash_amount") @db.Decimal(14, 2)
   supplierInvoiceNo  String?            @map("supplier_invoice_no")
   supplierGstin      String?            @map("supplier_gstin")
   placeOfSupply      String?            @map("place_of_supply")
@@ -431,13 +441,62 @@ model RawBlock {
   createdAt          DateTime           @default(now()) @map("created_at")
   version            Int                @default(0)
 
+  /// The lot, counted rather than labelled. The yard thinks in "VG-001 has 87 slabs
+  /// left", and nobody stencils a number on every piece. Available is
+  /// good - broken - sold; it is derived, never stored, so the three movements that
+  /// change it cannot drift apart from a cached total.
+  goodSlabCount   Int      @default(0) @map("good_slab_count")
+  brokenSlabCount Int      @default(0) @map("broken_slab_count")
+  soldSlabCount   Int      @default(0) @map("sold_slab_count")
+  /// Nominal finished area of one slab off this block, set when the cut is recorded.
+  /// Slabs from one block are sawn to the same size, so a count converts to sqft.
+  sqftPerSlab     Decimal? @map("sqft_per_slab") @db.Decimal(8, 2)
+
   slabs           Slab[]
   cuttingSessions CuttingSession[]
   movements       InventoryMovement[]
   openingLines    OpeningInventoryLine[]
+  writeOffs       StockWriteOff[]
+  salesLines      SalesLineItem[]
 
   @@unique([factoryId, serialNumber])
   @@map("raw_block")
+}
+
+/// Where a slab broke. Kept because the owner wants to know whether breakage is a
+/// saw problem, a forklift problem or a loading problem.
+enum WriteOffStage {
+  factory_transport
+  loading
+  yard
+  other
+}
+
+/// Slabs destroyed after they reached stock, recorded as a count against their lot.
+///
+/// Deliberately a row of its own rather than a silent decrement: stock leaving the
+/// yard without a sale is the shape of both honest breakage and theft, so every
+/// write-off names a person, a reason and a value, and posts to the ledger.
+model StockWriteOff {
+  id         String        @id @default(uuid())
+  factoryId  String        @map("factory_id")
+  factory    Factory       @relation(fields: [factoryId], references: [id])
+  rawBlockId String        @map("raw_block_id")
+  rawBlock   RawBlock      @relation(fields: [rawBlockId], references: [id])
+  slabCount  Int           @map("slab_count")
+  stage      WriteOffStage
+  reason     String
+  /// Valued at this block's cost per slab. Tax paid on the purchase is recoverable
+  /// and is not part of what the breakage cost.
+  costAmount Decimal       @default(0) @map("cost_amount") @db.Decimal(14, 2)
+  occurredOn DateTime      @map("occurred_on") @db.Date
+  actorId    String        @map("actor_id")
+  clientOpId String        @map("client_op_id")
+  createdAt  DateTime      @default(now()) @map("created_at")
+
+  @@unique([factoryId, clientOpId])
+  @@index([factoryId, occurredOn])
+  @@map("stock_write_off")
 }
 
 model Slab {
@@ -708,6 +767,19 @@ model SalesLineItem {
   salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
   slabId       String?    @map("slab_id")
   slab         Slab?      @relation(fields: [slabId], references: [id])
+  /// A lot sale names the block and how many slabs go, with no piece identities.
+  /// quantitySqft is then slabCount x the block's sqftPerSlab, so invoicing and the
+  /// reports keep working off area exactly as they do for a per-piece line.
+  rawBlockId   String?    @map("raw_block_id")
+  rawBlock     RawBlock?  @relation(fields: [rawBlockId], references: [id])
+  slabCount    Int?       @map("slab_count")
+  /// What the buyer sees on the bill, and the HSN it is classified under. Slabs are
+  /// 6802, rough blocks 2516, and they attract different rates — so the code lives
+  /// on the line, not the invoice, and one bill may carry both.
+  description  String?
+  hsnCode      String?    @map("hsn_code")
+  /// Rate for this line. Null means take the invoice's rate.
+  gstRatePct   Decimal?   @map("gst_rate_pct") @db.Decimal(5, 2)
   quantitySqft Decimal    @map("quantity_sqft") @db.Decimal(12, 3)
   rate         Decimal    @db.Decimal(14, 2)
 
@@ -786,17 +858,46 @@ model Invoice {
   gstRatePct     Decimal    @default(0) @map("gst_rate_pct") @db.Decimal(5, 2)
   placeOfSupply  String?    @map("place_of_supply")
   supplierState  String?    @map("supplier_state")
+  /// Consignee, copied onto the document at issue. A tax invoice must show where the
+  /// goods actually went, and the customer's address can be edited later — a bill
+  /// already given to a buyer must not change under them.
+  shipToName      String?   @map("ship_to_name")
+  shipToAddress   String?   @map("ship_to_address")
+  shipToGstin     String?   @map("ship_to_gstin")
+  shipToStateCode String?   @map("ship_to_state_code")
+  /// Seller identity frozen at issue, for the same reason.
+  sellerLegalName String?   @map("seller_legal_name")
+  sellerGstin     String?   @map("seller_gstin")
   idempotencyKey String     @map("idempotency_key")
   createdAt      DateTime   @default(now()) @map("created_at")
   version        Int        @default(0)
   payments       Payment[]
   creditNotes    CreditNote[]
   charges        InvoiceCharge[]
+  taxLines       InvoiceTaxLine[]
   eInvoice       EInvoice?
 
   @@unique([factoryId, invoiceNumber])
   @@unique([factoryId, idempotencyKey])
   @@map("invoice")
+}
+
+/// One row per (HSN, rate) on an invoice: the HSN summary a tax invoice must carry,
+/// and the only honest way to total a bill that mixes 18% slabs with 5% blocks.
+/// The invoice's own cgst/sgst/igst columns are the sum of these.
+model InvoiceTaxLine {
+  id            String  @id @default(uuid())
+  invoiceId     String  @map("invoice_id")
+  invoice       Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  hsnCode       String  @map("hsn_code")
+  gstRatePct    Decimal @map("gst_rate_pct") @db.Decimal(5, 2)
+  taxableAmount Decimal @map("taxable_amount") @db.Decimal(14, 2)
+  cgstAmount    Decimal @default(0) @map("cgst_amount") @db.Decimal(14, 2)
+  sgstAmount    Decimal @default(0) @map("sgst_amount") @db.Decimal(14, 2)
+  igstAmount    Decimal @default(0) @map("igst_amount") @db.Decimal(14, 2)
+
+  @@unique([invoiceId, hsnCode, gstRatePct])
+  @@map("invoice_tax_line")
 }
 
 model Payment {

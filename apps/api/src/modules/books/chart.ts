@@ -33,6 +33,10 @@ export const SYSTEM_LEDGERS: Array<{
   { code: "EXP_FREIGHT", name: "Freight", group: "expense", kind: "expense" },
   { code: "EXP_LABOUR", name: "Labour", group: "expense", kind: "expense" },
   { code: "EXP_LOADING", name: "Loading", group: "expense", kind: "expense" },
+  // Stock destroyed after it reached the yard. Its own head because the owner needs
+  // to see what breakage costs, and because stock leaving without a sale is the
+  // shape of theft as well as of accidents.
+  { code: "EXP_BREAKAGE", name: "Breakage and stock loss", group: "expense", kind: "expense" },
   { code: "EXP_MISC", name: "Misc expense", group: "expense", kind: "expense" },
   { code: "OPENING_EQUITY", name: "Opening equity", group: "liability", kind: "opening_equity" },
 ];
