@@ -1193,6 +1193,75 @@ describe("postgres-backed workflows", () => {
     assert.equal(await prisma.expense.count({ where: { factoryId: factory.id } }), 1);
   });
 
+  it("books a real supplier bill whose GST does not divide evenly", async () => {
+    // A dry run at factory volume rejected all 104 expenses with "Voucher is not
+    // balanced". Cause: the expense ledger was debited the taxable value the
+    // accountant typed, the GST heads were computed from the rate, and the credit was
+    // the bill total — three figures that only agree when the arithmetic happens to be
+    // exact. A Rs 18,000 diesel bill at 18% has a taxable value of Rs 15,254.237...,
+    // so it never is.
+    const { factory, asOwner } = await staffFactory("rounding");
+    // Without a GST profile no tax is computed at all and these would post trivially,
+    // proving nothing. The input credit is the whole point.
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
+
+    const bills: Array<[string, number, number, number]> = [
+      // label, amount, taxableAmount, ratePct
+      ["diesel 18000 @18%", 18000, 15254, 18],
+      ["diesel 18000 @18% (rounded up)", 18000, 15255, 18],
+      ["freight 9000 @5%", 9000, 8571, 5],
+      ["exact 11800 @18%", 11800, 10000, 18],
+    ];
+    let i = 0;
+    for (const [label, amount, taxableAmount, gstRatePct] of bills) {
+      await expenses.create(asOwner, {
+        category: "diesel",
+        amount,
+        taxableAmount,
+        gstRatePct,
+        expenseDate: currentFactoryDate(),
+        clientOpId: `round-${i++}`,
+      });
+    }
+    assert.equal(
+      await prisma.expense.count({ where: { factoryId: factory.id } }),
+      bills.length,
+      "every one of these is an ordinary bill and must post",
+    );
+
+    // Balance is the point: the credit is the bill, the tax heads follow the rate, and
+    // the expense ledger takes the remainder.
+    const vouchers = await prisma.voucher.findMany({
+      where: { factoryId: factory.id, source: "expense_create" },
+      include: { lines: true },
+    });
+    assert.equal(vouchers.length, bills.length);
+    for (const voucher of vouchers) {
+      const debit = voucher.lines.reduce((sum, l) => sum + l.debit, 0);
+      const credit = voucher.lines.reduce((sum, l) => sum + l.credit, 0);
+      assert.equal(debit, credit, `voucher ${voucher.id} must balance to the paise`);
+    }
+
+    // A figure that is wrong rather than rounded is still refused, and now says why.
+    await assert.rejects(
+      () =>
+        expenses.create(asOwner, {
+          category: "diesel",
+          amount: 18000,
+          taxableAmount: 1000,
+          gstRatePct: 18,
+          expenseDate: currentFactoryDate(),
+          clientOpId: "round-wrong",
+        }),
+      /does not come to the bill total/i,
+      "a taxable value nowhere near the bill is a typo, not rounding",
+    );
+  });
+
   it("keeps a last-day-of-month invoice inside that month's GST position", async () => {
     // voucher.operationalDate is a DATE column. The month window used to be built from
     // instants (00:00 IST = 18:30 UTC the previous day), which Postgres truncated to a

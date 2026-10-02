@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
@@ -238,12 +238,33 @@ export class BooksService {
     // a cost, so charging the whole bill to expense would overstate the cost of running
     // the plant by the credit.
     const gst = input.gst;
-    const expenseMinor = gst ? gst.taxableMinor : minor;
+    const taxLines = gst ? gstInputLines(gst) : [];
+    const taxMinor = taxLines.reduce((sum, [, amount]) => sum + amount, 0);
+
+    // The supplier's bill total is the fact; the tax heads follow from the rate. The
+    // expense ledger takes the remainder, so the voucher balances by construction.
+    //
+    // Deriving it matters: a real bill of Rs 18,000 at 18% has a taxable value of
+    // Rs 15,254.237..., and whatever the accountant types for that will not multiply
+    // back to exactly 18,000. Debiting their figure and crediting the bill left the
+    // voucher a few paise apart, and every such expense was refused with "Voucher is
+    // not balanced" — which named neither the cause nor the numbers. In a dry run at
+    // factory volume this rejected all 104 expenses while reporting nothing wrong.
+    const expenseMinor = minor - taxMinor;
+
+    if (gst && Math.abs(gst.taxableMinor - expenseMinor) > EXPENSE_ROUNDING_TOLERANCE_MINOR) {
+      // Beyond rounding, the two figures disagree about what was actually bought.
+      // Absorbing that silently would bury a typo in the cost of running the plant.
+      throw new BadRequestException(
+        `Taxable value ${minorToRupees(gst.taxableMinor)} plus ${gst.ratePct}% GST ` +
+          `(${minorToRupees(taxMinor)}) does not come to the bill total ` +
+          `${minorToRupees(minor)}. Check the figures.`,
+      );
+    }
+
     const lines: PostLine[] = [{ ledgerCode: exp, debit: expenseMinor, credit: 0 }];
-    if (gst) {
-      for (const [ledgerCode, amount] of gstInputLines(gst)) {
-        lines.push({ ledgerCode, debit: amount, credit: 0 });
-      }
+    for (const [ledgerCode, amount] of taxLines) {
+      lines.push({ ledgerCode, debit: amount, credit: 0 });
     }
     lines.push({ ledgerCode: bank, debit: 0, credit: minor });
     return postVoucher(tx, {
@@ -419,6 +440,13 @@ function gstOutputLines(gst: GstBreakdown): Array<[string, number]> {
 }
 
 /** Input credit heads actually paid, as ledger/amount pairs. Zero heads are never posted. */
+/**
+ * How far the stated taxable value may sit from the bill total less tax before it is
+ * treated as a mistake rather than rounding. One rupee: enough for an accountant who
+ * types the taxable value in whole rupees, far too small to hide a wrong figure.
+ */
+const EXPENSE_ROUNDING_TOLERANCE_MINOR = 100;
+
 function gstInputLines(gst: GstBreakdown): Array<[string, number]> {
   const out: Array<[string, number]> = [];
   if (gst.cgstMinor > 0) out.push(["GST_INPUT_CGST", gst.cgstMinor]);
