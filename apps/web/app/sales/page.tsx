@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Attachments } from "../../components/Attachments";
 import { VarietyChips } from "../../components/VarietyChips";
@@ -272,6 +273,9 @@ export default function SalesPage() {
   return (
     <AppShell>
       <h1>Sell</h1>
+      <p>
+        <Link href="/lots/sell">Sell by lot — pick blocks and slab counts, bill them together →</Link>
+      </p>
       {notice ? (
         <p className="muted" role="status">
           {notice}
