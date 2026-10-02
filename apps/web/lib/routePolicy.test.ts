@@ -40,10 +40,12 @@ describe("lot screens", () => {
     for (const role of ["owner", "manager", "supervisor", "inventory", "sales"] as Role[]) {
       assert.equal(canAccessPath(role, "/lots"), true, `${role} should reach /lots`);
       assert.equal(canAccessPath(role, "/lots/sell"), true, `${role} should reach /lots/sell`);
+      assert.equal(canAccessPath(role, "/lots/dispatch"), true, `${role} should reach /lots/dispatch`);
     }
     for (const role of ["accountant", "auditor", "operator"] as Role[]) {
       assert.equal(canAccessPath(role, "/lots"), false, `${role} should not reach /lots`);
       assert.equal(canAccessPath(role, "/lots/sell"), false, `${role} should not reach /lots/sell`);
+      assert.equal(canAccessPath(role, "/lots/dispatch"), false, `${role} should not reach /lots/dispatch`);
     }
   });
 
@@ -53,5 +55,6 @@ describe("lot screens", () => {
     const tabs = visibleRoutes("owner").map((r) => r.href);
     assert.equal(tabs.includes("/lots"), false);
     assert.equal(tabs.includes("/lots/sell"), false);
+    assert.equal(tabs.includes("/lots/dispatch"), false);
   });
 });

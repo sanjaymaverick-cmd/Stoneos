@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import {
   HSN_FINISHED_SLAB,
@@ -20,6 +21,7 @@ import {
   type TaxGroupInput,
 } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
+import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { BooksService } from "../books/books.service";
@@ -402,6 +404,232 @@ export class LotsService {
     });
   }
 
+  /**
+   * Orders with slabs still to leave the gate.
+   *
+   * The dispatch screen's whole content: who is waiting, which lots, and how many
+   * of each are still owed. Lines already sent in full drop out, and an order with
+   * nothing left drops out with them.
+   */
+  async pendingDispatch(factoryId: string) {
+    const orders = await this.prisma.salesOrder.findMany({
+      where: {
+        factoryId,
+        status: { in: ["CONFIRMED", "PARTIALLY_DELIVERED"] },
+        lines: { some: { slabCount: { not: null } } },
+      },
+      orderBy: { orderDate: "asc" },
+      include: { customer: true, lines: { include: { rawBlock: true } } },
+    });
+
+    return orders
+      .map((order) => ({
+        orderId: order.id,
+        customer: order.customer.name,
+        orderDate: order.orderDate,
+        status: order.status,
+        // Sorted by block serial, not left to the database's arbitrary row order.
+        // The clerk types counts into these rows; if they shuffle between
+        // refreshes, a number can land against the wrong lot.
+        lots: order.lines
+          .filter((line) => line.slabCount !== null)
+          .sort((a, b) =>
+            (a.rawBlock?.serialNumber ?? "").localeCompare(b.rawBlock?.serialNumber ?? ""),
+          )
+          .map((line) => ({
+            blockSerial: line.rawBlock?.serialNumber ?? null,
+            variety: line.rawBlock?.varietyName ?? null,
+            ordered: line.slabCount ?? 0,
+            dispatched: line.dispatchedCount,
+            stillToGo: (line.slabCount ?? 0) - line.dispatchedCount,
+          }))
+          .filter((lot) => lot.stillToGo > 0),
+      }))
+      .filter((order) => order.lots.length > 0);
+  }
+
+  /**
+   * Send slabs out of the gate against a lot order.
+   *
+   * Fulfilment, not stock movement. The sale already took these slabs out of
+   * availability — dispatching must not deduct them a second time, or the yard
+   * count would fall twice for one lorry. What this tracks is how much of each
+   * order line has physically gone.
+   *
+   * The idempotency key names the load, not just the order. Keying on the order
+   * alone is exactly the bug that lost half the yard before: the second lorry
+   * matched the first call's record, answered success and shipped nothing.
+   */
+  async dispatchLots(
+    user: AuthenticatedUser,
+    input: {
+      orderId: string;
+      lines: Array<{ blockSerial: string; slabCount: number }>;
+      clientOpId?: string;
+      occurredAt?: string;
+    },
+  ) {
+    if (!input.lines?.length) throw new BadRequestException("A dispatch needs at least one lot");
+    const loadHash = hashLoad(input.lines);
+    const clientOpId = input.clientOpId ?? `lot-dispatch:${input.orderId}:${loadHash}`;
+    const dispatchedAt = parseOccurredAt(input.occurredAt);
+
+    return this.prisma.$transaction(async (tx) => {
+      const replay = await tx.syncOperation.findUnique({
+        where: {
+          factoryId_clientOpId: { factoryId: user.factoryId, clientOpId },
+        },
+      });
+      if (replay) {
+        // A caller-supplied key reused for a different load is a client bug, and
+        // answering it with the earlier load's record is how that fault hides.
+        if (replay.requestHash !== loadHash) {
+          throw new ConflictException({
+            code: "CLIENT_OP_ID_REUSED",
+            message: "This clientOpId was already used for a different request",
+          });
+        }
+        const earlier = replay.response as { deliveryId?: string } | null;
+        if (earlier?.deliveryId) return this.dispatchResult(tx, earlier.deliveryId);
+      }
+
+      const order = await tx.salesOrder.findFirst({
+        where: { id: input.orderId, factoryId: user.factoryId },
+        include: { lines: { include: { rawBlock: true } } },
+      });
+      if (!order) throw new NotFoundException("Order not found");
+      if (order.status !== "CONFIRMED" && order.status !== "PARTIALLY_DELIVERED") {
+        throw new BadRequestException(`A ${order.status} order cannot be dispatched`);
+      }
+
+      const delivery = await tx.delivery.create({
+        data: { factoryId: user.factoryId, salesOrderId: order.id, dispatchedAt },
+      });
+
+      for (const want of input.lines) {
+        const serial = want.blockSerial?.trim();
+        const line = order.lines.find((l) => l.rawBlock?.serialNumber === serial);
+        if (!line || line.slabCount === null) {
+          throw new BadRequestException(`This order has no lot line for ${serial}`);
+        }
+        const outstanding = line.slabCount - line.dispatchedCount;
+        if (!Number.isInteger(want.slabCount) || want.slabCount <= 0) {
+          throw new BadRequestException(
+            `Slab count must be a whole number above zero, got ${want.slabCount}`,
+          );
+        }
+        if (want.slabCount > outstanding) {
+          throw new BadRequestException(
+            `${serial} has ${outstanding} slab${outstanding === 1 ? "" : "s"} still to go on this order, ` +
+              `so ${want.slabCount} cannot be dispatched`,
+          );
+        }
+        await tx.deliveryLine.create({
+          data: {
+            deliveryId: delivery.id,
+            rawBlockId: line.rawBlockId,
+            slabCount: want.slabCount,
+          },
+        });
+        await tx.salesLineItem.update({
+          where: { id: line.id },
+          data: { dispatchedCount: { increment: want.slabCount } },
+        });
+        await tx.inventoryMovement.create({
+          data: {
+            factoryId: user.factoryId,
+            movementType: "DISPATCH",
+            rawBlockId: line.rawBlockId,
+            quantity: want.slabCount,
+            idempotencyKey: `${clientOpId}:${line.id}`,
+            actorId: user.id,
+          },
+        });
+      }
+
+      await this.advanceDeliveryStatus(tx, order.id);
+      await tx.syncOperation.create({
+        data: {
+          factoryId: user.factoryId,
+          clientOpId,
+          actorId: user.id,
+          method: "POST",
+          path: "/api/v1/lots/dispatch",
+          requestHash: loadHash,
+          statusCode: 201,
+          response: { deliveryId: delivery.id } as Prisma.InputJsonValue,
+        },
+      });
+      await this.audit.record({
+        factoryId: user.factoryId,
+        actorId: user.id,
+        action: "lot.dispatch",
+        entityType: "delivery",
+        entityId: delivery.id,
+        payload: { orderId: order.id, lines: input.lines },
+      });
+      return this.dispatchResult(tx, delivery.id);
+    });
+  }
+
+  /**
+   * Move the order along as its lots leave: PARTIALLY_DELIVERED while any slab is
+   * still owed, DELIVERED once every line has gone in full.
+   *
+   * Only lot lines count. An order mixing lot lines with the older per-piece lines
+   * is judged on its lots alone here; the per-piece path advances its own status.
+   */
+  private async advanceDeliveryStatus(tx: Prisma.TransactionClient, salesOrderId: string) {
+    const lines = await tx.salesLineItem.findMany({
+      where: { salesOrderId, slabCount: { not: null } },
+      select: { slabCount: true, dispatchedCount: true },
+    });
+    if (lines.length === 0) return;
+    const outstanding = lines.reduce(
+      (total, line) => total + ((line.slabCount ?? 0) - line.dispatchedCount),
+      0,
+    );
+    const dispatched = lines.reduce((total, line) => total + line.dispatchedCount, 0);
+    if (dispatched === 0) return;
+
+    await tx.salesOrder.updateMany({
+      where: { id: salesOrderId, status: { in: ["CONFIRMED", "PARTIALLY_DELIVERED"] } },
+      data: {
+        status: outstanding === 0 ? "DELIVERED" : "PARTIALLY_DELIVERED",
+        version: { increment: 1 },
+      },
+    });
+  }
+
+  private async dispatchResult(tx: Prisma.TransactionClient, deliveryId: string) {
+    const delivery = await tx.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+      include: {
+        lines: { include: { rawBlock: true } },
+        salesOrder: { include: { lines: { include: { rawBlock: true } } } },
+      },
+    });
+    return {
+      deliveryId: delivery.id,
+      orderId: delivery.salesOrderId,
+      orderStatus: delivery.salesOrder.status,
+      dispatchedAt: delivery.dispatchedAt,
+      sent: delivery.lines.map((line) => ({
+        blockSerial: line.rawBlock?.serialNumber ?? null,
+        slabCount: line.slabCount,
+      })),
+      outstanding: delivery.salesOrder.lines
+        .filter((line) => line.slabCount !== null)
+        .map((line) => ({
+          blockSerial: line.rawBlock?.serialNumber ?? null,
+          ordered: line.slabCount,
+          dispatched: line.dispatchedCount,
+          stillToGo: (line.slabCount ?? 0) - line.dispatchedCount,
+        }))
+        .filter((line) => line.stillToGo > 0),
+    };
+  }
+
   private async orderResult(tx: Prisma.TransactionClient, orderId: string) {
     const order = await tx.salesOrder.findUniqueOrThrow({
       where: { id: orderId },
@@ -635,4 +863,16 @@ export class LotsService {
     if (!block) throw new NotFoundException(`No block ${serial} in this factory`);
     return block;
   }
+}
+
+/**
+ * A stable fingerprint of one lorry-load. Order-independent, so the same load
+ * described in a different sequence is recognised as the same request.
+ */
+function hashLoad(lines: readonly { blockSerial: string; slabCount: number }[]): string {
+  const canonical = [...lines]
+    .map((l) => `${l.blockSerial.trim()}x${l.slabCount}`)
+    .sort()
+    .join(",");
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
 }

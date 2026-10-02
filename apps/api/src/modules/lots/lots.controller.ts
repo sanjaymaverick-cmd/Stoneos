@@ -71,6 +71,32 @@ export class LotsController {
     return this.lots.sellLots(user, body);
   }
 
+  /** Orders with slabs still to leave the gate. */
+  @Get("pending-dispatch")
+  @Roles(...SALES_READ_ROLES)
+  pending(@CurrentUser() user: AuthenticatedUser) {
+    return this.lots.pendingDispatch(user.factoryId);
+  }
+
+  /**
+   * Send a load out against a lot order. Fulfilment only — the sale already took
+   * these slabs out of stock, so nothing is deducted here a second time.
+   */
+  @Post("dispatch")
+  @Roles(...SALES_DATA_ROLES)
+  dispatch(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body()
+    body: {
+      orderId: string;
+      lines: Array<{ blockSerial: string; slabCount: number }>;
+      clientOpId?: string;
+      occurredAt?: string;
+    },
+  ) {
+    return this.lots.dispatchLots(user, body);
+  }
+
   /** One tax invoice for the whole order, with the HSN summary and both addresses. */
   @Post("invoice")
   @Roles(...SALES_DATA_ROLES)

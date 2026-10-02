@@ -214,8 +214,11 @@ export class DailyReportService {
         distinct: ["rawBlockId"],
       }),
       this.prisma.slab.count({ where: { factoryId, createdAt: { lt: end } } }),
+      // Lot dispatches carry a block and a count rather than a piece, so their
+      // slabId is null. Without this filter they would all collapse into one
+      // "null" entry and wrongly take a slab off the per-piece stock count.
       this.prisma.deliveryLine.findMany({
-        where: { delivery: { factoryId, dispatchedAt: { lt: end } } },
+        where: { delivery: { factoryId, dispatchedAt: { lt: end } }, slabId: { not: null } },
         select: { slabId: true },
         distinct: ["slabId"],
       }),

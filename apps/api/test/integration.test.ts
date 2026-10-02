@@ -2704,6 +2704,207 @@ describe("postgres-backed workflows", () => {
     assert.equal(block.soldSlabCount, 40, "not 80");
   });
 
+  /** An order of 80 from VG-101 and 70 from VG-102, ready to leave the gate. */
+  async function orderReadyToDispatch(label: string) {
+    const { factory, asOwner } = await staffFactory(label);
+    for (const serial of ["VG-101", "VG-102"]) {
+      await receiveBlock(factory.id, serial);
+      await lots.recordCut(asOwner, {
+        blockSerial: serial, totalSlabsCut: 96, damagedAtSaw: 6, sqftPerSlab: 10,
+        clientOpId: `${label}-cut-${serial}`,
+      });
+    }
+    const customer = await sales.createCustomer(asOwner, `${label} Buyer`);
+    const order = await lots.sellLots(asOwner, {
+      customerId: customer.id,
+      lines: [
+        { blockSerial: "VG-101", slabCount: 80, rate: 100 },
+        { blockSerial: "VG-102", slabCount: 70, rate: 100 },
+      ],
+      clientOpId: `${label}-sell`,
+    });
+    return { factory, asOwner, order };
+  }
+
+  const orderStatus = async (id: string) =>
+    (await prisma.salesOrder.findUniqueOrThrow({ where: { id } })).status;
+
+  it("lists what is still to go, in a stable order", async () => {
+    const { asOwner, order } = await orderReadyToDispatch("lotpending");
+    const first = await lots.pendingDispatch(
+      (await prisma.salesOrder.findUniqueOrThrow({ where: { id: order.orderId } })).factoryId,
+    );
+    assert.equal(first.length, 1);
+    assert.equal(first[0]!.lots.length, 2);
+    // The clerk types counts into these rows, so their order must not depend on
+    // however the database happened to return them.
+    assert.deepEqual(first[0]!.lots.map((l) => l.blockSerial), ["VG-101", "VG-102"]);
+    assert.equal(first[0]!.lots[0]!.stillToGo, 80);
+
+    await lots.dispatchLots(asOwner, {
+      orderId: order.orderId,
+      lines: [{ blockSerial: "VG-101", slabCount: 80 }],
+    });
+    const after = await lots.pendingDispatch(first[0] ? (await prisma.salesOrder.findUniqueOrThrow({ where: { id: order.orderId } })).factoryId : "");
+    // A line sent in full drops out; the order stays while anything is owed.
+    assert.deepEqual(after[0]!.lots.map((l) => l.blockSerial), ["VG-102"]);
+
+    await lots.dispatchLots(asOwner, {
+      orderId: order.orderId,
+      lines: [{ blockSerial: "VG-102", slabCount: 70 }],
+    });
+    const done = await lots.pendingDispatch((await prisma.salesOrder.findUniqueOrThrow({ where: { id: order.orderId } })).factoryId);
+    assert.equal(done.length, 0, "a fully delivered order leaves the list");
+  });
+
+  it("sends a lot order out over several lorries, and each load actually goes", async () => {
+    // The fault this guards against is the one that lost half the yard on the
+    // per-slab path: a key derived from the order alone made the second lorry a
+    // replay of the first, so it answered success and shipped nothing.
+    const { factory, asOwner, order } = await orderReadyToDispatch("lotdisp");
+
+    const first = await lots.dispatchLots(asOwner, {
+      orderId: order.orderId,
+      lines: [{ blockSerial: "VG-101", slabCount: 50 }],
+    });
+    assert.equal(await orderStatus(order.orderId), "PARTIALLY_DELIVERED");
+    assert.deepEqual(first.sent, [{ blockSerial: "VG-101", slabCount: 50 }]);
+
+    const second = await lots.dispatchLots(asOwner, {
+      orderId: order.orderId,
+      lines: [{ blockSerial: "VG-101", slabCount: 30 }, { blockSerial: "VG-102", slabCount: 70 }],
+    });
+    assert.notEqual(first.deliveryId, second.deliveryId, "a different load is a different delivery");
+    assert.equal(await prisma.delivery.count({ where: { factoryId: factory.id } }), 2);
+    assert.equal(await orderStatus(order.orderId), "DELIVERED", "the last load closes the order");
+    assert.equal(second.outstanding.length, 0);
+
+    // Every slab on the order left, not half of them.
+    const sent = await prisma.deliveryLine.aggregate({
+      where: { delivery: { factoryId: factory.id } },
+      _sum: { slabCount: true },
+    });
+    assert.equal(sent._sum.slabCount, 150);
+  });
+
+  it("does not take the stock a second time when the lorry leaves", async () => {
+    // The sale already deducted these slabs. If dispatch deducted them again the
+    // yard count would fall twice for one load, and the shortfall would look like
+    // theft rather than arithmetic.
+    const { factory, asOwner, order } = await orderReadyToDispatch("lotdispstock");
+    const before = await prisma.rawBlock.findFirstOrThrow({
+      where: { factoryId: factory.id, serialNumber: "VG-101" },
+    });
+    assert.equal(before.soldSlabCount, 80);
+
+    await lots.dispatchLots(asOwner, {
+      orderId: order.orderId,
+      lines: [{ blockSerial: "VG-101", slabCount: 80 }],
+    });
+
+    const after = await prisma.rawBlock.findFirstOrThrow({
+      where: { factoryId: factory.id, serialNumber: "VG-101" },
+    });
+    assert.equal(after.soldSlabCount, 80, "dispatch is fulfilment, not a stock movement");
+    assert.equal(
+      after.goodSlabCount - after.brokenSlabCount - after.soldSlabCount,
+      10,
+      "90 cut, 80 sold, 10 still available",
+    );
+  });
+
+  it("refuses to send more than the order still owes", async () => {
+    const { asOwner, order } = await orderReadyToDispatch("lotdispover");
+    await lots.dispatchLots(asOwner, {
+      orderId: order.orderId,
+      lines: [{ blockSerial: "VG-101", slabCount: 60 }],
+    });
+    await assert.rejects(
+      () =>
+        lots.dispatchLots(asOwner, {
+          orderId: order.orderId,
+          lines: [{ blockSerial: "VG-101", slabCount: 30 }],
+        }),
+      /VG-101 has 20 slabs still to go on this order/,
+    );
+    // And the refused attempt moved nothing.
+    const line = await prisma.salesLineItem.findFirstOrThrow({
+      where: { salesOrderId: order.orderId, rawBlock: { serialNumber: "VG-101" } },
+    });
+    assert.equal(line.dispatchedCount, 60);
+  });
+
+  it("replays a resent identical load instead of sending it twice", async () => {
+    const { factory, asOwner, order } = await orderReadyToDispatch("lotdispreplay");
+    const load = [{ blockSerial: "VG-101", slabCount: 40 }];
+    const first = await lots.dispatchLots(asOwner, { orderId: order.orderId, lines: load });
+    const again = await lots.dispatchLots(asOwner, { orderId: order.orderId, lines: load });
+    assert.equal(first.deliveryId, again.deliveryId);
+    assert.equal(await prisma.delivery.count({ where: { factoryId: factory.id } }), 1);
+    const line = await prisma.salesLineItem.findFirstOrThrow({
+      where: { salesOrderId: order.orderId, rawBlock: { serialNumber: "VG-101" } },
+    });
+    assert.equal(line.dispatchedCount, 40, "not 80");
+  });
+
+  it("recognises the same load described in a different order", async () => {
+    const { factory, asOwner, order } = await orderReadyToDispatch("lotdisporder");
+    const a = await lots.dispatchLots(asOwner, {
+      orderId: order.orderId,
+      lines: [{ blockSerial: "VG-101", slabCount: 10 }, { blockSerial: "VG-102", slabCount: 20 }],
+    });
+    const b = await lots.dispatchLots(asOwner, {
+      orderId: order.orderId,
+      lines: [{ blockSerial: "VG-102", slabCount: 20 }, { blockSerial: "VG-101", slabCount: 10 }],
+    });
+    assert.equal(a.deliveryId, b.deliveryId, "one lorry, listed two ways");
+    assert.equal(await prisma.delivery.count({ where: { factoryId: factory.id } }), 1);
+  });
+
+  it("refuses a clientOpId reused for a different load", async () => {
+    const { asOwner, order } = await orderReadyToDispatch("lotdispreuse");
+    await lots.dispatchLots(asOwner, {
+      orderId: order.orderId,
+      lines: [{ blockSerial: "VG-101", slabCount: 10 }],
+      clientOpId: "lot-disp-key-1",
+    });
+    await assert.rejects(
+      () =>
+        lots.dispatchLots(asOwner, {
+          orderId: order.orderId,
+          lines: [{ blockSerial: "VG-101", slabCount: 20 }],
+          clientOpId: "lot-disp-key-1",
+        }),
+      /different request|CLIENT_OP_ID_REUSED/i,
+    );
+  });
+
+  it("refuses a lot the order never carried, and a finished order", async () => {
+    const { factory, asOwner, order } = await orderReadyToDispatch("lotdispwrong");
+    await receiveBlock(factory.id, "VG-999");
+    await assert.rejects(
+      () =>
+        lots.dispatchLots(asOwner, {
+          orderId: order.orderId,
+          lines: [{ blockSerial: "VG-999", slabCount: 1 }],
+        }),
+      /no lot line for VG-999/,
+    );
+    await lots.dispatchLots(asOwner, {
+      orderId: order.orderId,
+      lines: [{ blockSerial: "VG-101", slabCount: 80 }, { blockSerial: "VG-102", slabCount: 70 }],
+    });
+    assert.equal(await orderStatus(order.orderId), "DELIVERED");
+    await assert.rejects(
+      () =>
+        lots.dispatchLots(asOwner, {
+          orderId: order.orderId,
+          lines: [{ blockSerial: "VG-101", slabCount: 1 }],
+        }),
+      /A DELIVERED order cannot be dispatched/,
+    );
+  });
+
   it("refuses a second cut on a block already sawn", async () => {
     const { factory, asOwner } = await staffFactory("lotrecut");
     await receiveBlock(factory.id, "VG-001");
