@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, test } from "node:test";
 import { damagedCostAtRawBlock, recoveryRatio, RECOVERY_BENCHMARK_SQFT_PER_TON } from "./recovery.ts";
 import { damagedSlabCount, slabSerial } from "./serials.ts";
 import {
@@ -9,6 +9,9 @@ import {
   formatInvoiceNumber,
   indianFinancialYear,
   operationalDateFor,
+  operationalDayWindow,
+  operationalDaysInMonth,
+  parseOperationalDate,
 } from "./operational-day.ts";
 
 describe("slab serials", () => {
@@ -90,6 +93,10 @@ describe("calendarMonthUtcRange", () => {
     assert.equal(january.start.toISOString(), "2027-01-01T00:00:00.000Z");
     assert.throws(() => calendarMonthUtcRange("2026-9"), RangeError);
     assert.throws(() => calendarMonthUtcRange("september"), RangeError);
+    // A month outside 01-12 must not roll silently into the neighbouring year.
+    assert.throws(() => calendarMonthUtcRange("2026-13"), RangeError);
+    assert.throws(() => calendarMonthUtcRange("2026-00"), RangeError);
+    assert.throws(() => operationalDaysInMonth("2026-13"), RangeError);
   });
 
   it("covers every last day of 2026, including February", () => {
@@ -100,4 +107,46 @@ describe("calendarMonthUtcRange", () => {
       assert.ok(lastDay >= start && lastDay < end, `${key} must contain ${lastDay.toISOString()}`);
     }
   });
+});
+
+test("an operational day window is the inverse of the date it belongs to", () => {
+  const date = new Date(Date.UTC(2026, 9, 2));
+  const { start, end } = operationalDayWindow(date);
+
+  // 07:00 IST on the 2nd is 01:30 UTC on the 2nd.
+  assert.equal(start.toISOString(), "2026-10-02T01:30:00.000Z");
+  assert.equal(end.toISOString(), "2026-10-03T01:30:00.000Z");
+
+  // Every instant in the window must map back to the day it came from, and the
+  // instants either side must not.
+  assert.equal(operationalDateFor(start).getTime(), date.getTime());
+  assert.equal(operationalDateFor(new Date(end.getTime() - 1)).getTime(), date.getTime());
+  assert.notEqual(operationalDateFor(new Date(start.getTime() - 1)).getTime(), date.getTime());
+  assert.equal(operationalDateFor(end).getTime(), new Date(Date.UTC(2026, 9, 3)).getTime());
+});
+
+test("the window covers the night shift that runs past midnight", () => {
+  const date = new Date(Date.UTC(2026, 9, 2));
+  const { start, end } = operationalDayWindow(date);
+  // 02:00 IST on the 3rd is still the 2nd's shift.
+  const nightShift = new Date("2026-10-02T20:30:00.000Z");
+  assert.ok(nightShift >= start && nightShift < end);
+  assert.equal(operationalDateFor(nightShift).getTime(), date.getTime());
+});
+
+test("parseOperationalDate accepts a real date and refuses anything else", () => {
+  assert.equal(parseOperationalDate("2026-10-02").toISOString(), "2026-10-02T00:00:00.000Z");
+  assert.equal(parseOperationalDate("2024-02-29").toISOString(), "2024-02-29T00:00:00.000Z");
+  for (const bad of ["2026-02-31", "2026-13-01", "2026-1-1", "02-10-2026", "", "today", "2026-00-10"]) {
+    assert.throws(() => parseOperationalDate(bad), RangeError, `should reject ${bad}`);
+  }
+});
+
+test("operationalDaysInMonth lists each day once, including a leap day", () => {
+  const october = operationalDaysInMonth("2026-10");
+  assert.equal(october.length, 31);
+  assert.equal(october[0]!.toISOString(), "2026-10-01T00:00:00.000Z");
+  assert.equal(october[30]!.toISOString(), "2026-10-31T00:00:00.000Z");
+  assert.equal(operationalDaysInMonth("2024-02").length, 29);
+  assert.equal(operationalDaysInMonth("2026-02").length, 28);
 });

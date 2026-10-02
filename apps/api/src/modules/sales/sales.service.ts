@@ -8,6 +8,7 @@ import {
 import { recoveryRatio } from "@stoneos/domain";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../common/prisma.service";
+import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { assertAllowedRoles } from "../../common/session.guard";
@@ -19,7 +20,7 @@ import {
   gstOnTaxable,
   minorToRupees,
   normaliseStateCode,
-  parseFactoryDateInput,
+  parseBusinessDate,
   rupeesToMinor,
   stateCodeFromGstin,
 } from "../books/money";
@@ -111,6 +112,13 @@ export class SalesService {
       lines: Array<{ slabId?: string; quantitySqft: number; rate: number; baseVersion?: number }>;
       clientOpId: string;
       billingMode?: "gst_invoice" | "cash_unbilled";
+      /**
+       * Keep the order for whatever slabs are still free instead of refusing it whole.
+       * Set by devices replaying an order taken offline: by the time it syncs, a
+       * colleague who was online may have sold one of its slabs, and the first to the
+       * server wins. Every slab left out is listed in `droppedSlabs`.
+       */
+      partial?: boolean;
     },
   ) {
     await this.assertCustomer(user.factoryId, input.customerId);
@@ -120,26 +128,41 @@ export class SalesService {
       });
       if (existing) return existing.response;
 
+      const kept: typeof input.lines = [];
+      const droppedSlabs: Array<{ slabId: string; slabSerial: string; reason: string }> = [];
       for (const line of input.lines) {
-        if (!line.slabId) continue;
+        if (!line.slabId) {
+          kept.push(line);
+          continue;
+        }
         const slab = await tx.slab.findFirst({
           where: { id: line.slabId, factoryId: user.factoryId },
           include: { location: true },
         });
         if (!slab) throw new BadRequestException("Slab does not belong to this factory");
-        if (slab.salesStatus === "sold" || slab.salesStatus === "reserved" || slab.salesStatus === "dispatched") {
-          throw new BadRequestException(`Slab ${slab.slabSerial} is not available`);
+        const refusal =
+          slab.salesStatus === "sold" || slab.salesStatus === "reserved" || slab.salesStatus === "dispatched"
+            ? `Slab ${slab.slabSerial} is not available`
+            : slab.location?.code === "UNPOLISHED_STOCK"
+              ? `Slab ${slab.slabSerial} has not been polished yet`
+              : line.baseVersion != null && slab.version !== line.baseVersion
+                ? `Slab ${slab.slabSerial} changed since it was picked`
+                : null;
+        if (refusal) {
+          if (input.partial) {
+            droppedSlabs.push({ slabId: slab.id, slabSerial: slab.slabSerial, reason: refusal });
+            continue;
+          }
+          if (line.baseVersion != null && slab.version !== line.baseVersion) {
+            throw new ConflictException({
+              code: "VERSION_CONFLICT",
+              serverVersion: slab.version,
+              server: slab,
+            });
+          }
+          throw new BadRequestException(refusal);
         }
-        if (slab.location?.code === "UNPOLISHED_STOCK") {
-          throw new BadRequestException(`Slab ${slab.slabSerial} has not been polished yet`);
-        }
-        if (line.baseVersion != null && slab.version !== line.baseVersion) {
-          throw new ConflictException({
-            code: "VERSION_CONFLICT",
-            serverVersion: slab.version,
-            server: slab,
-          });
-        }
+        kept.push(line);
         await tx.slab.update({
           where: { id: slab.id },
           data: { salesStatus: "reserved", version: { increment: 1 } },
@@ -156,17 +179,27 @@ export class SalesService {
         });
       }
 
-      const order = await tx.salesOrder.create({
+      if (kept.length === 0) {
+        throw new ConflictException({
+          code: "SLABS_UNAVAILABLE",
+          message: "Every slab on this order was sold or changed by someone else first",
+          droppedSlabs,
+        });
+      }
+      const created = await tx.salesOrder.create({
         data: {
           factoryId: user.factoryId,
           customerId: input.customerId,
           status: "CONFIRMED",
           billingMode: input.billingMode ?? "gst_invoice",
-          orderDate: new Date(input.orderDate),
-          lines: { create: input.lines },
+          orderDate: parseBusinessDate(input.orderDate, "orderDate"),
+          lines: {
+            create: kept.map(({ slabId, quantitySqft, rate }) => ({ slabId, quantitySqft, rate })),
+          },
         },
         include: { lines: true, customer: true },
       });
+      const order = { ...created, droppedSlabs };
       await tx.syncOperation.create({
         data: {
           factoryId: user.factoryId,
@@ -183,9 +216,26 @@ export class SalesService {
     });
   }
 
-  async pack(user: AuthenticatedUser, salesOrderId: string, slabIds: string[]) {
+  async pack(user: AuthenticatedUser, salesOrderId: string, requested: string[], partial = false) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     return this.prisma.$transaction(async (tx) => {
+      let slabIds = requested;
+      let skippedSlabs: string[] = [];
+      if (partial) {
+        // A replayed offline order may have lost slabs to someone faster; pack what it kept.
+        const onOrder = await tx.salesLineItem.findMany({
+          where: { salesOrderId: order.id, slabId: { in: requested } },
+          include: { slab: true },
+        });
+        const packable = new Set(
+          onOrder.filter((line) => line.slab?.salesStatus === "reserved").map((line) => line.slabId as string),
+        );
+        slabIds = requested.filter((id) => packable.has(id));
+        skippedSlabs = requested.filter((id) => !packable.has(id));
+        if (slabIds.length === 0) {
+          throw new ConflictException({ code: "SLABS_UNAVAILABLE", message: "No slab left to pack", skippedSlabs });
+        }
+      }
       await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
       const packing = await tx.inventoryLocation.findFirst({
         where: { factoryId: user.factoryId, code: "PACKING" },
@@ -215,27 +265,53 @@ export class SalesService {
           },
         });
       }
-      return list;
+      return partial ? { ...list, skippedSlabs } : list;
     });
   }
 
   async dispatch(
     user: AuthenticatedUser,
     salesOrderId: string,
-    slabIds: string[],
-    extra?: { clientOpId?: string; vehicleId?: string; ewayDraftId?: string; invoiceId?: string },
+    requested: string[],
+    extra?: {
+      clientOpId?: string;
+      vehicleId?: string;
+      ewayDraftId?: string;
+      invoiceId?: string;
+      partial?: boolean;
+      occurredAt?: string;
+    },
   ) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     const clientOpId = extra?.clientOpId ?? `dispatch:${salesOrderId}`;
+    const dispatchedAt = parseOccurredAt(extra?.occurredAt);
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.syncOperation.findUnique({
         where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId } },
       });
       if (existing) return existing.response;
-      await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
       const packing = await tx.inventoryLocation.findFirst({
         where: { factoryId: user.factoryId, code: "PACKING" },
       });
+      let slabIds = requested;
+      let skippedSlabs: string[] = [];
+      if (extra?.partial) {
+        const onOrder = await tx.salesLineItem.findMany({
+          where: { salesOrderId: order.id, slabId: { in: requested } },
+          include: { slab: true },
+        });
+        const shippable = new Set(
+          onOrder
+            .filter((line) => line.slab?.locationId === packing?.id && line.slab?.salesStatus !== "dispatched")
+            .map((line) => line.slabId as string),
+        );
+        slabIds = requested.filter((id) => shippable.has(id));
+        skippedSlabs = requested.filter((id) => !shippable.has(id));
+        if (slabIds.length === 0) {
+          throw new ConflictException({ code: "SLABS_UNAVAILABLE", message: "No packed slab left to dispatch", skippedSlabs });
+        }
+      }
+      await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
       const deliveredLoc = await tx.inventoryLocation.findFirst({
         where: { factoryId: user.factoryId, code: "DELIVERED" },
       });
@@ -254,7 +330,7 @@ export class SalesService {
         data: {
           factoryId: user.factoryId,
           salesOrderId: order.id,
-          dispatchedAt: new Date(),
+          dispatchedAt,
           lines: { create: slabIds.map((slabId) => ({ slabId })) },
         },
         include: { lines: true },
@@ -276,7 +352,8 @@ export class SalesService {
           },
         });
       }
-      const response = delivery as unknown as Prisma.InputJsonValue;
+      const result = extra?.partial ? { ...delivery, skippedSlabs } : delivery;
+      const response = result as unknown as Prisma.InputJsonValue;
       await tx.syncOperation.create({
         data: {
           factoryId: user.factoryId,
@@ -289,7 +366,7 @@ export class SalesService {
           response,
         },
       });
-      return delivery;
+      return result;
     });
   }
 
@@ -400,6 +477,7 @@ export class SalesService {
     // may settle an invoice by accident.
     assertAllowedRoles(PAYMENT_ROLES, user.role as Role);
     if (input.amount <= 0) throw new BadRequestException("Amount must be positive");
+    const paidAt = parseBusinessDate(input.paidAt, "paidAt");
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND factory_id = ${user.factoryId} FOR UPDATE`;
       const invoice = await tx.invoice.findFirst({
@@ -430,7 +508,7 @@ export class SalesService {
             invoiceId: invoice.id,
             amount: input.amount,
             method: input.method,
-            paidAt: parseFactoryDateInput(input.paidAt),
+            paidAt,
             idempotencyKey: input.clientOpId,
           },
         });
@@ -458,7 +536,7 @@ export class SalesService {
           amount: input.amount,
           method: input.method,
           clientOpId: input.clientOpId,
-          paidAt: parseFactoryDateInput(input.paidAt),
+          paidAt,
         });
         return payment;
       } catch (error) {
@@ -487,6 +565,7 @@ export class SalesService {
       throw new BadRequestException("Amount must be positive");
     }
     if (!input.clientOpId) throw new BadRequestException("clientOpId is required");
+    const saleDate = parseBusinessDate(input.saleDate, "saleDate");
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     if (order.billingMode !== "cash_unbilled") {
       throw new BadRequestException("Order is not marked as a cash sale");
@@ -505,7 +584,7 @@ export class SalesService {
           salesOrderId: order.id,
           buyerName: input.buyerName?.trim() || null,
           amount: input.amount,
-          saleDate: parseFactoryDateInput(input.saleDate),
+          saleDate,
           note: input.note?.trim() || null,
           clientOpId: input.clientOpId,
           recordedBy: user.id,
@@ -516,7 +595,7 @@ export class SalesService {
         amountMinor: rupeesToMinor(input.amount),
         memo: `Cash sale${input.buyerName ? ` to ${input.buyerName.trim()}` : ""} (no invoice)`,
         clientOpId: `cashsale:${input.clientOpId}`,
-        saleDate: parseFactoryDateInput(input.saleDate),
+        saleDate,
       });
       await tx.auditEvent.create({
         data: {

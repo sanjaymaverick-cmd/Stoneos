@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { SalesService } from "../src/modules/sales/sales.service";
 import { ExpensesService } from "../src/modules/expenses/expenses.service";
 import { AuditService } from "../src/common/audit.service";
+import { IdempotencyService } from "../src/common/idempotency";
 import { FilesService } from "../src/modules/files/files.service";
 import { BooksService } from "../src/modules/books/books.service";
 import { KhataService } from "../src/modules/books/khata.service";
@@ -22,10 +23,49 @@ import { MusterService } from "../src/modules/muster/muster.service";
 import { GstService } from "../src/modules/gst/gst.service";
 import { CopilotService } from "../src/modules/books/copilot.service";
 import { ReportsService } from "../src/modules/reports/reports.service";
+import { DailyReportService } from "../src/modules/reports/daily-report.service";
+import { ConsumablesController } from "../src/modules/production/consumables.controller";
 import type { AuthenticatedUser } from "../src/common/current-user";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(root, "..");
+
+/**
+ * The IST calendar month we are in right now, as YYYY-MM.
+ *
+ * Tests that create an invoice without passing a date get "now", so asking for a
+ * hardcoded month only works during that month: the suite went red on 1 October
+ * for invoices it had just written. Deriving it keeps the test about GST and not
+ * about the calendar.
+ *
+ * It is also a reminder of an open gap. `Invoice` has no `invoiceDate` column, so
+ * gstr1() filters on `createdAt` — the moment the row was written. A September
+ * invoice entered on 1 October therefore files in October's return, which is
+ * wrong and is exactly what happens at every month end. Tracked as C10 in
+ * docs/architecture-critic-review.md.
+ */
+function currentFactoryDate(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)!.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function currentFactoryMonth(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const year = parts.find((p) => p.type === "year")!.value;
+  const month = parts.find((p) => p.type === "month")!.value;
+  return `${year}-${month}`;
+}
+
 
 describe("postgres-backed workflows", () => {
   let pg: EmbeddedPostgres | undefined;
@@ -43,6 +83,7 @@ describe("postgres-backed workflows", () => {
   let gst: GstService;
   let copilot: CopilotService;
   let reports: ReportsService;
+  let dailyReports: DailyReportService;
   let factoryId = "";
   let owner: AuthenticatedUser;
 
@@ -85,6 +126,7 @@ describe("postgres-backed workflows", () => {
     gst = new GstService(prisma as never);
     copilot = new CopilotService(prisma as never, audit);
     reports = new ReportsService(prisma as never);
+    dailyReports = new DailyReportService(prisma as never);
 
     await prisma.$executeRawUnsafe(`
       DO $$ DECLARE r RECORD;
@@ -470,6 +512,7 @@ describe("postgres-backed workflows", () => {
     await inventory.addOpeningLine(asManager, snapshot.id, "RAW_BLOCK", {
       serialNumber: "OPEN-1",
       varietyName: "Tan Brown",
+      weightTons: "18",
     });
     await inventory.submitOpening(asManager, snapshot.id);
     await assert.rejects(() => inventory.approveOpening(asManager, snapshot.id));
@@ -516,11 +559,13 @@ describe("postgres-backed workflows", () => {
     const first = (await inventory.receiveBlock(owner, {
       serialNumber: "V202",
       varietyName: "Steel Grey",
+      weightTons: 18,
       clientOpId: "receipt-dup",
     })) as { block: { id: string } };
     const retry = (await inventory.receiveBlock(owner, {
       serialNumber: "V202",
       varietyName: "Steel Grey",
+      weightTons: 18,
       clientOpId: "receipt-dup",
     })) as { block: { id: string } };
     assert.equal(first.block.id, retry.block.id);
@@ -532,6 +577,7 @@ describe("postgres-backed workflows", () => {
     const received = (await inventory.receiveBlock(owner, {
       serialNumber: "V303",
       varietyName: "Tan Brown",
+      weightTons: 18,
       clientOpId: "receipt-rev",
     })) as { block: { id: string } };
     const movement = await prisma.inventoryMovement.findFirst({
@@ -939,6 +985,7 @@ describe("postgres-backed workflows", () => {
     const received = (await inventory.receiveBlock(asOwner, {
       serialNumber: "VER-1",
       varietyName: "Grey",
+      weightTons: 18,
       clientOpId: "ver-block",
     })) as { block: { id: string } };
     const machine = await prisma.machine.findFirst({
@@ -1147,6 +1194,75 @@ describe("postgres-backed workflows", () => {
     const ok = await intake.confirm(asAccountant, draft.id);
     assert.equal(ok.status, "confirmed");
     assert.equal(await prisma.expense.count({ where: { factoryId: factory.id } }), 1);
+  });
+
+  it("books a real supplier bill whose GST does not divide evenly", async () => {
+    // A dry run at factory volume rejected all 104 expenses with "Voucher is not
+    // balanced". Cause: the expense ledger was debited the taxable value the
+    // accountant typed, the GST heads were computed from the rate, and the credit was
+    // the bill total — three figures that only agree when the arithmetic happens to be
+    // exact. A Rs 18,000 diesel bill at 18% has a taxable value of Rs 15,254.237...,
+    // so it never is.
+    const { factory, asOwner } = await staffFactory("rounding");
+    // Without a GST profile no tax is computed at all and these would post trivially,
+    // proving nothing. The input credit is the whole point.
+    await gst.upsertProfile(asOwner, {
+      gstin: "08AAUFV3603N1ZH",
+      legalName: "Vedam Granites",
+      stateCode: "08",
+    });
+
+    const bills: Array<[string, number, number, number]> = [
+      // label, amount, taxableAmount, ratePct
+      ["diesel 18000 @18%", 18000, 15254, 18],
+      ["diesel 18000 @18% (rounded up)", 18000, 15255, 18],
+      ["freight 9000 @5%", 9000, 8571, 5],
+      ["exact 11800 @18%", 11800, 10000, 18],
+    ];
+    let i = 0;
+    for (const [label, amount, taxableAmount, gstRatePct] of bills) {
+      await expenses.create(asOwner, {
+        category: "diesel",
+        amount,
+        taxableAmount,
+        gstRatePct,
+        expenseDate: currentFactoryDate(),
+        clientOpId: `round-${i++}`,
+      });
+    }
+    assert.equal(
+      await prisma.expense.count({ where: { factoryId: factory.id } }),
+      bills.length,
+      "every one of these is an ordinary bill and must post",
+    );
+
+    // Balance is the point: the credit is the bill, the tax heads follow the rate, and
+    // the expense ledger takes the remainder.
+    const vouchers = await prisma.voucher.findMany({
+      where: { factoryId: factory.id, source: "expense_create" },
+      include: { lines: true },
+    });
+    assert.equal(vouchers.length, bills.length);
+    for (const voucher of vouchers) {
+      const debit = voucher.lines.reduce((sum, l) => sum + l.debit, 0);
+      const credit = voucher.lines.reduce((sum, l) => sum + l.credit, 0);
+      assert.equal(debit, credit, `voucher ${voucher.id} must balance to the paise`);
+    }
+
+    // A figure that is wrong rather than rounded is still refused, and now says why.
+    await assert.rejects(
+      () =>
+        expenses.create(asOwner, {
+          category: "diesel",
+          amount: 18000,
+          taxableAmount: 1000,
+          gstRatePct: 18,
+          expenseDate: currentFactoryDate(),
+          clientOpId: "round-wrong",
+        }),
+      /does not come to the bill total/i,
+      "a taxable value nowhere near the bill is a typo, not rounding",
+    );
   });
 
   it("keeps a last-day-of-month invoice inside that month's GST position", async () => {
@@ -1390,7 +1506,7 @@ describe("postgres-backed workflows", () => {
     assert.equal(irn.id, again.id);
     assert.match(irn.irn, /^MOCK-IRN-/);
     assert.equal(irn.source, "mock");
-    const gstr = await gst.gstr1(factory.id, "2026-09");
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.ok(gstr.b2b.some((r) => r.doc.startsWith("INV-")));
     assert.match(gstr.csv, /INV-/);
   });
@@ -1471,7 +1587,7 @@ describe("postgres-backed workflows", () => {
     });
 
     // GSTR-1 reports the heads separately, read off the documents as issued.
-    const gstr = await gst.gstr1(factory.id, "2026-09");
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     const localRow = gstr.b2b.find((r) => r.doc === local.invoiceNumber);
     const outsideRow = gstr.b2b.find((r) => r.doc === outside.invoiceNumber);
     assert.deepEqual(
@@ -1526,7 +1642,7 @@ describe("postgres-backed workflows", () => {
     assert.equal(Number(localInv.sgstAmount), 90);
     assert.equal(Number(outsideInv.igstAmount), 180, "out of state is IGST even for retail");
 
-    const gstr = await gst.gstr1(factory.id, "2026-09");
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.equal(gstr.b2b.length, 0, "a buyer with no GSTIN is never B2B");
     const b2cDocs = [...gstr.b2cSmall, ...gstr.b2cLarge].map((r) => r.doc);
     assert.ok(b2cDocs.includes(localInv.invoiceNumber));
@@ -1536,7 +1652,7 @@ describe("postgres-backed workflows", () => {
 
     // A large inter-state retail sale is reported invoice-wise, not consolidated.
     const bigInv = await billTo(outside.id, "b2cbig", 40_000);
-    const after = await gst.gstr1(factory.id, "2026-09");
+    const after = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.ok(
       after.b2cLarge.some((r) => r.doc === bigInv.invoiceNumber),
       "an inter-state retail invoice over the threshold belongs in B2CL",
@@ -1609,7 +1725,7 @@ describe("postgres-backed workflows", () => {
     const customer = await sales.createCustomer(asOwner, "Local Counter", undefined, { stateCode: "08" });
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
-      orderDate: "2026-09-12",
+      orderDate: currentFactoryDate(),
       clientOpId: "cash-order",
       billingMode: "cash_unbilled",
       lines: [{ quantitySqft: 10, rate: 100 }],
@@ -1620,13 +1736,13 @@ describe("postgres-backed workflows", () => {
 
     const sale = await sales.recordCashSale(asOwner, order.id, {
       amount: 1000,
-      saleDate: "2026-09-12",
+      saleDate: currentFactoryDate(),
       clientOpId: "cash-1",
       buyerName: "Ramesh",
     });
     const retry = await sales.recordCashSale(asOwner, order.id, {
       amount: 1000,
-      saleDate: "2026-09-12",
+      saleDate: currentFactoryDate(),
       clientOpId: "cash-1",
       buyerName: "Ramesh",
     });
@@ -1648,7 +1764,7 @@ describe("postgres-backed workflows", () => {
     assert.equal(await prisma.invoice.count({ where: { salesOrderId: order.id } }), 0);
 
     // Nothing reaches the return, but the return says how much was left out.
-    const gstr = await gst.gstr1(factory.id, "2026-09");
+    const gstr = await gst.gstr1(factory.id, currentFactoryMonth());
     assert.equal(gstr.b2b.length + gstr.b2cSmall.length + gstr.b2cLarge.length, 0);
     assert.equal(gstr.totals.cgst + gstr.totals.sgst + gstr.totals.igst, 0);
     assert.equal(gstr.excludedCashSales.count, 1);
@@ -1719,7 +1835,7 @@ describe("postgres-backed workflows", () => {
       amount: 11200,
       taxableAmount: 10000,
       gstRatePct: 12,
-      expenseDate: "2026-09-12",
+      expenseDate: currentFactoryDate(),
       clientOpId: "itc-exp",
     });
     const spend = await prisma.expense.findFirstOrThrow({
@@ -1740,14 +1856,14 @@ describe("postgres-backed workflows", () => {
     });
     const order = (await sales.createOrder(asOwner, {
       customerId: customer.id,
-      orderDate: "2026-09-12",
+      orderDate: currentFactoryDate(),
       clientOpId: "itc-order",
       lines: [{ quantitySqft: 100, rate: 100 }],
     })) as { id: string };
     const invoice = await sales.invoice(asOwner, order.id, "itc-inv");
     assert.equal(Number(invoice.gstRatePct), 18, "finished slabs stay on 18");
 
-    const position = await gst.position(factory.id, "2026-09");
+    const position = await gst.position(factory.id, currentFactoryMonth());
     // Output 18% of 10,000 = 1,800 split 900/900. Input 2,500+2,500 on the block plus
     // 600+600 on the consumable = 3,100 per head.
     assert.equal(position.output.cgst, 900);
@@ -1776,6 +1892,7 @@ describe("postgres-backed workflows", () => {
         inventory.receiveBlock(asOwner, {
           serialNumber: "SLAB-BAD",
           varietyName: "White",
+          weightTons: 18,
           supplierId: supplier.id,
           clientOpId: "slab-bad",
           purchaseTaxable: 1000,
@@ -1844,4 +1961,566 @@ describe("postgres-backed workflows", () => {
     const v = await prisma.voucher.findFirst({ where: { factoryId: factory.id, source: "copilot_journal" } });
     assert.ok(v);
   });
+
+  it("answers a replayed clientOpId with the first result and refuses it from anyone else", async () => {
+    const { asOwner, asManager } = await staffFactory("idem");
+    const store = new IdempotencyService(prisma as never);
+    const path = "/api/v1/cutting-sessions/abc/complete";
+    assert.equal(await store.lookup(asOwner, "idem-op-0001", "POST", path), null);
+    await store.remember(asOwner, "idem-op-0001", "POST", path, 201, { session: { id: "s1" }, slabs: [{ id: "x" }] });
+    // A second remember (e.g. a service that stored its own row first) is not an error.
+    await store.remember(asOwner, "idem-op-0001", "POST", path, 201, { other: true });
+    const replay = await store.lookup(asOwner, "idem-op-0001", "POST", `${path}?x=1`);
+    assert.deepEqual(replay?.response, { session: { id: "s1" }, slabs: [{ id: "x" }] });
+    await assert.rejects(() => store.lookup(asManager, "idem-op-0001", "POST", path), /different request/);
+    await assert.rejects(() => store.lookup(asOwner, "idem-op-0001", "POST", "/api/v1/expenses"), /different request/);
+  });
+
+  it("recognises a key the sales service stored itself", async () => {
+    const { factory, asOwner } = await staffFactory("idemsvc");
+    const finished = await prisma.inventoryLocation.findFirst({ where: { factoryId: factory.id, code: "FINISHED_STOCK" } });
+    const slab = await prisma.slab.create({
+      data: { factoryId: factory.id, slabSerial: "IDS-1", varietyName: "White", locationId: finished!.id },
+    });
+    const customer = await sales.createCustomer(asOwner, "Idem Co");
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-20",
+      clientOpId: "idem-order-001",
+      lines: [{ slabId: slab.id, quantitySqft: 10, rate: 100 }],
+    })) as { id: string };
+    const store = new IdempotencyService(prisma as never);
+    const replay = await store.lookup(asOwner, "idem-order-001", "POST", "/api/v1/sales-orders");
+    assert.equal((replay?.response as { id: string }).id, order.id);
+  });
+
+  it("keeps an offline order for the slabs still free and lists the ones sold first", async () => {
+    const { factory, asOwner, asManager } = await staffFactory("partial");
+    const finished = await prisma.inventoryLocation.findFirst({ where: { factoryId: factory.id, code: "FINISHED_STOCK" } });
+    const [a, b] = await Promise.all(
+      ["PART-A", "PART-B"].map((slabSerial) =>
+        prisma.slab.create({ data: { factoryId: factory.id, slabSerial, varietyName: "Black", locationId: finished!.id } }),
+      ),
+    );
+    const customer = await sales.createCustomer(asOwner, "Online Buyer");
+    // The online salesman takes slab A first.
+    await sales.createOrder(asManager, {
+      customerId: customer.id,
+      orderDate: "2026-09-20",
+      clientOpId: "partial-online",
+      lines: [{ slabId: a.id, quantitySqft: 40, rate: 100 }],
+    });
+    // Without partial, the offline order is refused whole, as before.
+    await assert.rejects(
+      () =>
+        sales.createOrder(asOwner, {
+          customerId: customer.id,
+          orderDate: "2026-09-20",
+          clientOpId: "partial-strict",
+          lines: [{ slabId: a.id, quantitySqft: 40, rate: 100 }, { slabId: b.id, quantitySqft: 40, rate: 100 }],
+        }),
+      /not available/,
+    );
+    const offline = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-20",
+      clientOpId: "partial-offline",
+      partial: true,
+      lines: [{ slabId: a.id, quantitySqft: 40, rate: 100 }, { slabId: b.id, quantitySqft: 40, rate: 100 }],
+    })) as { id: string; lines: Array<{ slabId: string }>; droppedSlabs: Array<{ slabId: string; slabSerial: string }> };
+    assert.deepEqual(offline.lines.map((l) => l.slabId), [b.id]);
+    assert.deepEqual(offline.droppedSlabs.map((d) => d.slabSerial), ["PART-A"]);
+
+    // Packing and dispatch replayed for both slabs ship only the one the order kept.
+    const packed = (await sales.pack(asOwner, offline.id, [a.id, b.id], true)) as { lines: unknown[]; skippedSlabs: string[] };
+    assert.equal(packed.lines.length, 1);
+    assert.deepEqual(packed.skippedSlabs, [a.id]);
+    const shipped = (await sales.dispatch(asOwner, offline.id, [a.id, b.id], {
+      clientOpId: "partial-dispatch",
+      partial: true,
+    })) as { lines: unknown[]; skippedSlabs: string[] };
+    assert.equal(shipped.lines.length, 1);
+    assert.deepEqual(shipped.skippedSlabs, [a.id]);
+    const slabA = await prisma.slab.findUnique({ where: { id: a.id } });
+    assert.equal(slabA?.salesStatus, "reserved", "the online buyer's slab is untouched");
+
+    // An offline order whose every slab is gone is a conflict, not an empty order.
+    await assert.rejects(
+      () =>
+        sales.createOrder(asOwner, {
+          customerId: customer.id,
+          orderDate: "2026-09-20",
+          clientOpId: "partial-empty",
+          partial: true,
+          lines: [{ slabId: a.id, quantitySqft: 40, rate: 100 }],
+        }),
+      (error: { response?: { code?: string } }) => error.response?.code === "SLABS_UNAVAILABLE",
+    );
+    assert.equal(await prisma.salesOrder.count({ where: { factoryId: factory.id } }), 2);
+  });
+
+  it("books late-synced shop-floor work on the day it happened", async () => {
+    const { factory, asOwner } = await staffFactory("late");
+    const yesterday = new Date(Date.now() - 26 * 3600 * 1000);
+    const received = (await inventory.receiveBlock(asOwner, {
+      serialNumber: "LATE-1",
+      varietyName: "Tan Brown",
+      clientOpId: "late-block",
+      weightTons: 2,
+      occurredAt: yesterday.toISOString(),
+    })) as { block: { id: string; purchaseDate: string } };
+    const machine = await prisma.machine.findFirst({ where: { factoryId: factory.id, name: "B-21" } });
+    const session = await production.startCutting(asOwner, {
+      rawBlockId: received.block.id,
+      machineId: machine!.id,
+      occurredAt: yesterday.toISOString(),
+    });
+    assert.equal(session.startedAt.toISOString(), yesterday.toISOString());
+    const done = await production.completeCutting(asOwner, session.id, {
+      totalSlabsCut: 3,
+      finalGoodSlabCount: 3,
+      occurredAt: yesterday.toISOString(),
+    });
+    assert.equal(done.slabs[0]!.createdAt.toISOString(), yesterday.toISOString());
+    const today = await production.derivedDpr(factory.id, new Date(), new Date());
+    assert.equal(today.slabsCut, 0, "late sync must not inflate today's DPR");
+    const thatDay = await production.derivedDpr(factory.id, yesterday, yesterday);
+    assert.equal(thatDay.slabsCut, 3);
+
+    const future = new Date(Date.now() + 3600 * 1000).toISOString();
+    await assert.rejects(
+      () => production.startCutting(asOwner, { rawBlockId: received.block.id, machineId: machine!.id, occurredAt: future }),
+      /future/,
+    );
+    const stale = new Date(Date.now() - 20 * 24 * 3600 * 1000).toISOString();
+    await assert.rejects(
+      () => production.logCuttingDay(asOwner, session.id, { runtimeHours: 4, occurredAt: stale }),
+      /14 days/,
+    );
+  });
+  it("refuses a block with no weight, zero, negative or kilogram-sized tons", async () => {
+    const { asOwner } = await staffFactory("tons");
+    const receive = (weightTons: unknown, serial: string) =>
+      inventory.receiveBlock(asOwner, { serialNumber: serial, varietyName: "Grey", clientOpId: `tons-${serial}`, weightTons: weightTons as number });
+    await assert.rejects(() => receive(undefined, "T0"), /weightTons is required/);
+    await assert.rejects(() => receive(0, "T1"), /more than 0/);
+    await assert.rejects(() => receive(-5, "T2"), /more than 0/);
+    await assert.rejects(() => receive(18000, "T3"), /kg vs tons/);
+    await assert.rejects(
+      () => inventory.receiveBlock(asOwner, { serialNumber: "T4", varietyName: "Grey", clientOpId: "tons-T4", weightTons: 18, actualAmountPaid: -1 }),
+      /actualAmountPaid cannot be negative/,
+    );
+    const ok = (await receive(18.5, "T5")) as { block: { weightTons: unknown } };
+    assert.equal(Number(ok.block.weightTons), 18.5);
+
+    const snapshot = await inventory.startOpeningCount(asOwner);
+    await assert.rejects(
+      () => inventory.addOpeningLine(asOwner, snapshot.id, "RAW_BLOCK", { serialNumber: "OT1", varietyName: "Grey", weightTons: "0" }),
+      /more than 0/,
+    );
+  });
+
+  it("answers a duplicate consumable with 409 and refuses units that cannot be summed", async () => {
+    const { asOwner } = await staffFactory("cons");
+    const consumables = new ConsumablesController(prisma as never);
+    await consumables.create(asOwner, { name: "Epoxy resin", unit: "litre" });
+    await assert.rejects(
+      () => consumables.create(asOwner, { name: "Epoxy resin", unit: "litre" }),
+      (error: { status?: number; response?: { code?: string } }) =>
+        error.status === 409 && error.response?.code === "CONSUMABLE_EXISTS",
+    );
+    await assert.rejects(() => consumables.create(asOwner, { name: "Grout", unit: "bucket" }), /piece, litre/);
+    await assert.rejects(() => consumables.create(asOwner, { name: "Blades", unit: "piece", onHand: -3 }), /negative/);
+    const blades = await consumables.create(asOwner, { name: "  Blades  ", unit: "piece", onHand: 12 });
+    assert.equal(blades.name, "Blades");
+  });
+
+  it("refuses money, sales and attendance dated after today", async () => {
+    const { factory, asOwner } = await staffFactory("future");
+    const tomorrow = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+    await assert.rejects(
+      () => expenses.create(asOwner, { category: "other", amount: 100, expenseDate: tomorrow, clientOpId: "fut-exp" }),
+      /expenseDate cannot be after today/,
+    );
+    const customer = await sales.createCustomer(asOwner, "Future Buyer");
+    await assert.rejects(
+      () => sales.createOrder(asOwner, { customerId: customer.id, orderDate: tomorrow, clientOpId: "fut-order", lines: [{ quantitySqft: 10, rate: 100 }] }),
+      /orderDate cannot be after today/,
+    );
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: currentFactoryDate(),
+      clientOpId: "fut-order-ok",
+      lines: [{ quantitySqft: 10, rate: 100 }],
+    })) as { id: string };
+    const invoice = await sales.invoice(asOwner, order.id, "fut-inv");
+    await assert.rejects(
+      () => sales.pay(asOwner, invoice.id, { amount: 10, method: "cash", paidAt: tomorrow, clientOpId: "fut-pay" }),
+      /paidAt cannot be after today/,
+    );
+    const worker = await muster.createWorker(asOwner, { name: "Future Hand", dailyWage: 500 });
+    await assert.rejects(
+      () => muster.mark(asOwner, { workerId: worker.id, date: tomorrow, status: "present" }),
+      /date cannot be after today/,
+    );
+    assert.equal(await prisma.payment.count({ where: { factoryId: factory.id } }), 0);
+  });
+
+  it("counts month-to-date inside this IST month only", async () => {
+    const { factory, asOwner } = await staffFactory("mtd");
+    const today = currentFactoryDate();
+    const [y, m] = today.split("-").map(Number);
+    const lastOfPrevious = new Date(Date.UTC(y!, m! - 1, 0)).toISOString().slice(0, 10);
+    const firstOfNext = new Date(Date.UTC(y!, m!, 1)).toISOString().slice(0, 10);
+    await expenses.create(asOwner, { category: "other", amount: 100, expenseDate: today, clientOpId: "mtd-now" });
+    await expenses.create(asOwner, { category: "other", amount: 7, expenseDate: lastOfPrevious, clientOpId: "mtd-prev" });
+    // A row from before this rule existed, dated into next month: never "this month".
+    await prisma.expense.create({
+      data: { factoryId: factory.id, category: "other", amount: 50_000, expenseDate: new Date(`${firstOfNext}T00:00:00Z`) },
+    });
+    const brief = await reports.ceoBrief(factory.id);
+    assert.equal(brief.expensesMtd, 100, "neither last month's final day nor next month's rows count");
+  });
+
+  /**
+   * Seed one operational day's work. Timestamps are set explicitly rather than
+   * left to now(), because what these tests are checking is precisely which day a
+   * record lands on.
+   */
+  async function seedDay(factoryId: string, day: string) {
+    const at = (istHour: number, istMinute = 0) =>
+      new Date(Date.parse(`${day}T00:00:00+05:30`) + (istHour * 60 + istMinute) * 60_000);
+
+    const machine = await prisma.machine.findFirstOrThrow({
+      where: { factoryId, machineType: "CUTTING" },
+    });
+    const block = await prisma.rawBlock.create({
+      data: {
+        factoryId,
+        serialNumber: `DPR-${day}`,
+        varietyName: "Tan Brown",
+        weightTons: "20",
+        purchaseDate: new Date(`${day}T00:00:00Z`),
+      },
+    });
+    const session = await prisma.cuttingSession.create({
+      data: {
+        factoryId,
+        rawBlockId: block.id,
+        machineId: machine.id,
+        startedAt: at(8),
+        endedAt: at(17),
+        status: "COMPLETED",
+        damagedSlabCount: 2,
+        dayLogs: {
+          create: {
+            operationalDate: new Date(`${day}T00:00:00Z`),
+            runtimeHours: "9.5",
+            downtimeMinutes: 30,
+            powerConsumptionKwh: "412.75",
+            slabsProducedCount: 50,
+          },
+        },
+      },
+    });
+
+    // Three slabs: two in the day shift, one cut at 02:00 the following morning,
+    // which is still this operational day's work.
+    const slabs = [];
+    for (const [index, when] of [at(10), at(14), at(26)].entries()) {
+      slabs.push(
+        await prisma.slab.create({
+          data: {
+            factoryId,
+            parentBlockId: block.id,
+            cuttingSessionId: session.id,
+            slabSerial: `${day}-S${index}`,
+            varietyName: "Tan Brown",
+            lengthFt: "8",
+            widthFt: "5",
+            createdAt: when,
+          },
+        }),
+      );
+    }
+    return { block, session, slabs, at };
+  }
+
+  it("reports a day's production, sales and money from the records", async () => {
+    const { factory } = await staffFactory("dpr");
+    const day = "2026-05-12";
+    const { slabs, at } = await seedDay(factory.id, day);
+
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Shree Marbles", stateCode: "08" },
+    });
+    const order = await prisma.salesOrder.create({
+      data: {
+        factoryId: factory.id,
+        customerId: customer.id,
+        status: "CONFIRMED",
+        orderDate: new Date(`${day}T00:00:00Z`),
+        lines: { create: [{ slabId: slabs[0]!.id, quantitySqft: "40", rate: "150" }] },
+      },
+    });
+    const invoice = await prisma.invoice.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        customerId: customer.id,
+        invoiceNumber: "INV-2026-09001",
+        amount: "7080",
+        taxableAmount: "6000",
+        cgstAmount: "540",
+        sgstAmount: "540",
+        gstRatePct: "18",
+        idempotencyKey: `dpr-inv-${day}`,
+        createdAt: at(16),
+      },
+    });
+    await prisma.payment.create({
+      data: {
+        factoryId: factory.id,
+        invoiceId: invoice.id,
+        amount: "5000",
+        paidAt: new Date(`${day}T00:00:00Z`),
+        method: "neft",
+        idempotencyKey: `dpr-pay-${day}`,
+      },
+    });
+    await prisma.expense.create({
+      data: {
+        factoryId: factory.id,
+        category: "diesel",
+        amount: "1800",
+        toWhom: "HP Pump",
+        expenseDate: new Date(`${day}T00:00:00Z`),
+      },
+    });
+    await prisma.cashSale.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        buyerName: "Counter",
+        amount: "2500",
+        saleDate: new Date(`${day}T00:00:00Z`),
+        clientOpId: `dpr-cash-${day}`,
+        recordedBy: "test",
+      },
+    });
+    await prisma.delivery.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        dispatchedAt: at(18),
+        lines: { create: [{ slabId: slabs[0]!.id }] },
+      },
+    });
+
+    const data = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+
+    assert.equal(data.cutting.machinesRunning, 1);
+    assert.equal(data.cutting.runtimeHours, 9.5);
+    assert.equal(data.cutting.downtimeMinutes, 30);
+    assert.equal(data.cutting.powerKwh, 412.75);
+    assert.equal(data.cutting.slabsProducedPerLog, 50, "what the shop wrote down");
+    assert.equal(data.cutting.slabsAddedToStock, 3, "what actually reached stock");
+    assert.equal(data.cutting.sqftAddedToStock, 120, "three 8x5 slabs");
+    assert.equal(data.cutting.slabsMissingDimensions, 0);
+    assert.equal(data.cutting.blocksCompleted, 1);
+    assert.equal(data.cutting.damagedSlabs, 2);
+
+    assert.equal(data.ordersTaken, 1);
+    assert.equal(data.orderSqft, 40);
+    assert.equal(data.orderValue, 6000);
+    assert.equal(data.invoices.length, 1);
+    assert.equal(data.invoices[0]!.customer, "Shree Marbles");
+    assert.equal(data.invoices[0]!.total, 7080);
+    assert.equal(data.cashSales[0]!.amount, 2500);
+    assert.equal(data.collections[0]!.amount, 5000);
+    assert.equal(data.collections[0]!.invoiceNumber, "INV-2026-09001");
+    assert.equal(data.expenses[0]!.category, "diesel");
+    assert.equal(data.expenses[0]!.paidTo, "HP Pump");
+    assert.equal(data.dispatches[0]!.slabs, 1);
+  });
+
+  it("counts a slab once however many polishing passes it took", async () => {
+    const { factory } = await staffFactory("dprpolish");
+    const day = "2026-09-09";
+    const { slabs } = await seedDay(factory.id, day);
+    const lpm = await prisma.machine.findFirstOrThrow({
+      where: { factoryId: factory.id, machineType: "POLISHING" },
+    });
+    // The same two slabs go through grinding, then resin, then polishing — three
+    // sessions, one day, two slabs finished.
+    for (const processType of ["GRINDING", "RESIN", "POLISHING"] as const) {
+      await prisma.polishingSession.create({
+        data: {
+          factoryId: factory.id,
+          machineId: lpm.id,
+          operationalDate: new Date(`${day}T00:00:00Z`),
+          processType,
+          status: "COMPLETED",
+          slabs: { create: [{ slabId: slabs[0]!.id }, { slabId: slabs[1]!.id }] },
+        },
+      });
+    }
+
+    const data = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+    assert.equal(data.polishing.sessions, 3, "three passes were run");
+    assert.equal(data.polishing.slabsPolished, 2, "over two slabs, not six");
+    assert.equal(data.polishing.sqftPolished, 80, "two 8x5 slabs, counted once each");
+  });
+
+  it("counts machines running, not the day-logs they filed", async () => {
+    const { factory } = await staffFactory("dprmachines");
+    const day = "2026-09-16";
+    await seedDay(factory.id, day);
+    const machine = await prisma.machine.findFirstOrThrow({
+      where: { factoryId: factory.id, machineType: "CUTTING" },
+    });
+    // A second block cut on the same machine the same day: one more session and
+    // day-log, but still one machine on the floor.
+    const second = await prisma.rawBlock.create({
+      data: { factoryId: factory.id, serialNumber: `DPR2-${day}`, varietyName: "Black", weightTons: "18" },
+    });
+    await prisma.cuttingSession.create({
+      data: {
+        factoryId: factory.id,
+        rawBlockId: second.id,
+        machineId: machine.id,
+        startedAt: new Date(`${day}T04:00:00Z`),
+        status: "IN_PROGRESS",
+        dayLogs: {
+          create: { operationalDate: new Date(`${day}T00:00:00Z`), runtimeHours: "4", slabsProducedCount: 20 },
+        },
+      },
+    });
+
+    const data = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+    assert.equal(data.cutting.machinesRunning, 1, "two sessions, one machine");
+    assert.equal(data.cutting.runtimeHours, 13.5, "but both sessions' hours still count");
+    assert.equal(data.cutting.slabsProducedPerLog, 70);
+  });
+
+  it("counts the night shift on the day it was worked, not the calendar day", async () => {
+    const { factory } = await staffFactory("dprnight");
+    const day = "2026-05-20";
+    await seedDay(factory.id, day);
+
+    // The 02:00 slab was cut after midnight, so the calendar has it on the 21st.
+    const worked = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+    const nextDay = await dailyReports.gather(factory.id, new Date("2026-05-21T00:00:00Z"));
+
+    assert.equal(worked.cutting.slabsAddedToStock, 3, "all three belong to the 20th's shift");
+    assert.equal(nextDay.cutting.slabsAddedToStock, 0, "and none of them to the 21st");
+  });
+
+  it("shows stock as it stood on the day, not as it stands now", async () => {
+    const { factory } = await staffFactory("dprstock");
+    const day = "2026-06-03";
+    const { slabs, at } = await seedDay(factory.id, day);
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Later Buyer", stateCode: "08" },
+    });
+    const order = await prisma.salesOrder.create({
+      data: {
+        factoryId: factory.id,
+        customerId: customer.id,
+        status: "CONFIRMED",
+        orderDate: new Date(`${day}T00:00:00Z`),
+      },
+    });
+    // Everything leaves the yard a week later.
+    await prisma.delivery.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        dispatchedAt: new Date(at(12).getTime() + 7 * 86_400_000),
+        lines: { create: slabs.map((slab) => ({ slabId: slab.id })) },
+      },
+    });
+
+    const onTheDay = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+    const afterwards = await dailyReports.gather(factory.id, new Date("2026-06-11T00:00:00Z"));
+
+    assert.equal(onTheDay.closingStock.slabsOnHand, 3, "nothing had shipped yet on the 3rd");
+    assert.equal(afterwards.closingStock.slabsOnHand, 0, "by the 11th it all had");
+    assert.equal(onTheDay.closingStock.blocksOnHand, 0, "the block was cut that same day");
+  });
+
+  it("puts a returned slab back on the yard", async () => {
+    const { factory } = await staffFactory("dprreturn");
+    const day = "2026-07-08";
+    const { slabs, at } = await seedDay(factory.id, day);
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Fussy Buyer", stateCode: "08" },
+    });
+    const order = await prisma.salesOrder.create({
+      data: {
+        factoryId: factory.id,
+        customerId: customer.id,
+        status: "CONFIRMED",
+        orderDate: new Date(`${day}T00:00:00Z`),
+      },
+    });
+    await prisma.delivery.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        dispatchedAt: at(18),
+        lines: { create: [{ slabId: slabs[0]!.id }, { slabId: slabs[1]!.id }] },
+      },
+    });
+    const afterDispatch = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+    assert.equal(afterDispatch.closingStock.slabsOnHand, 1);
+
+    await prisma.customerReturn.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        reason: "edge chipped",
+        createdAt: new Date(at(12).getTime() + 2 * 86_400_000),
+        lines: { create: [{ slabId: slabs[0]!.id }] },
+      },
+    });
+    const afterReturn = await dailyReports.gather(factory.id, new Date("2026-07-11T00:00:00Z"));
+    assert.equal(afterReturn.closingStock.slabsOnHand, 2, "the rejected slab is back in stock");
+  });
+
+  it("builds a workbook a spreadsheet can actually open", async () => {
+    const { factory } = await staffFactory("dprfile");
+    const day = "2026-08-14";
+    await seedDay(factory.id, day);
+
+    const daily = await dailyReports.dailyWorkbook(factory.id, day);
+    assert.equal(daily.fileName, "daily-progress-2026-08-14.xlsx");
+    assert.equal(daily.bytes.subarray(0, 2).toString("latin1"), "PK", "a zip container");
+    assert.ok(daily.bytes.length > 1000);
+
+    const monthly = await dailyReports.monthlyWorkbook(factory.id, "2026-08");
+    assert.equal(monthly.fileName, "daily-progress-2026-08.xlsx");
+    assert.ok(monthly.bytes.length > daily.bytes.length, "a month holds more than a day");
+  });
+
+  it("refuses a date it cannot parse rather than reporting on the wrong day", async () => {
+    const { factory } = await staffFactory("dprbad");
+    for (const bad of ["2026-02-31", "yesterday", "14-08-2026"]) {
+      await assert.rejects(() => dailyReports.dailyWorkbook(factory.id, bad), /date must be|not a real date/i);
+    }
+    await assert.rejects(() => dailyReports.monthlyWorkbook(factory.id, "2026-13"), /month must be|not a real/i);
+  });
+
+  it("leaves tomorrow out of the running month workbook", async () => {
+    const { factory } = await staffFactory("dprfuture");
+    const month = currentFactoryMonth();
+    const workbook = await dailyReports.monthlyWorkbook(factory.id, month);
+    // A month workbook pulled today must not carry tabs for days that have not
+    // happened; the office opens this file every morning.
+    const today = Number(currentFactoryDate().slice(8, 10));
+    const figures = await dailyReports.dailyFigures(factory.id);
+    assert.equal(figures.date.getUTCDate(), today);
+    assert.ok(workbook.bytes.length > 0);
+  });
 });
+

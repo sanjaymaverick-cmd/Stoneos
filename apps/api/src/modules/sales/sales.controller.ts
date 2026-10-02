@@ -64,6 +64,7 @@ export class SalesController {
       clientOpId: string;
       billingMode?: "gst_invoice" | "cash_unbilled";
       lines: Array<{ slabId?: string; quantitySqft: number; rate: number; baseVersion?: number }>;
+      partial?: boolean;
     },
   ) {
     return this.service.createOrder(user, body);
@@ -74,9 +75,9 @@ export class SalesController {
   pack(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: { slabIds: string[] },
+    @Body() body: { slabIds: string[]; partial?: boolean; clientOpId?: string },
   ) {
-    return this.service.pack(user, id, body.slabIds);
+    return this.service.pack(user, id, body.slabIds, body.partial === true);
   }
 
   @Post("sales-orders/:id/dispatch")
@@ -84,7 +85,16 @@ export class SalesController {
   dispatch(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: { slabIds: string[]; clientOpId?: string; vehicleId?: string; ewayDraftId?: string; invoiceId?: string },
+    @Body()
+    body: {
+      slabIds: string[];
+      clientOpId?: string;
+      vehicleId?: string;
+      ewayDraftId?: string;
+      invoiceId?: string;
+      partial?: boolean;
+      occurredAt?: string;
+    },
   ) {
     return this.service.dispatch(user, id, body.slabIds, body);
   }

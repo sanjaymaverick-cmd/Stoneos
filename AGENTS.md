@@ -1,6 +1,6 @@
 # StoneOS agents
 
-Read `docs/handoff.md` before continuing this project. Local-first granite factory app. Postgres 16 via Compose. Do not terraform apply until a host is chosen.
+Read `docs/handoff.md` before continuing this project. Deploying to the live Oracle box: `docs/runbooks/oci-deploy-handoff.md`. Local-first granite factory app. Postgres 16 via Compose. Do not terraform apply until a host is chosen.
 
 | Agent | Invoke | Does |
 |---|---|---|

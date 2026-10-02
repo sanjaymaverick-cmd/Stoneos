@@ -3,7 +3,7 @@ import { MUSTER_PAY_ROLES, canAccess } from "@stoneos/contracts";
 import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { BooksService } from "../books/books.service";
-import { parseFactoryDate, partyNameKey, rupeesToMinor } from "../books/money";
+import { parseBusinessDate, parseFactoryDate, partyNameKey, rupeesToMinor } from "../books/money";
 
 @Injectable()
 export class MusterService {
@@ -47,7 +47,7 @@ export class MusterService {
       where: { id: input.workerId, factoryId: user.factoryId },
     });
     if (!worker) throw new NotFoundException("Worker not found");
-    const day = parseFactoryDate(input.date);
+    const day = parseBusinessDate(input.date, "date");
     return this.prisma.attendance.upsert({
       where: { workerId_operationalDate: { workerId: worker.id, operationalDate: day } },
       update: { status: input.status, otHours: input.otHours },

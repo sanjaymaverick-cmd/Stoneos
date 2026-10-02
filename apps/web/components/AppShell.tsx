@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiFetch, flushQueuedWrites, getToken, outbox, setActor, setToken } from "../lib/api";
+import { apiFetch, clearCachedReads, flushQueuedWrites, getToken, outbox, setActor, setToken } from "../lib/api";
 import { summariseOutbox } from "@stoneos/sync-client";
 import { visibleRoutes } from "../lib/routePolicy";
+import { warmOfflineScreens } from "./ServiceWorker";
 import type { PublicUser } from "@stoneos/contracts";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -24,6 +25,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .then((u) => {
         setUser(u);
         setActor({ userId: u.id, factoryId: u.factoryId });
+        warmOfflineScreens().catch(() => undefined);
       })
       .catch(() => router.replace("/login"));
   }, [router]);
@@ -69,10 +71,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="shell">
-      <div className={`sync ${syncTone}`}>
+      <Link href="/sync" className={`sync ${syncTone}`}>
         {syncLabel}
         {user.mustChangePassword ? " · Change your temporary password" : ""}
-      </div>
+      </Link>
       <nav className="nav">
         <span className="brand">StoneOS</span>
         {links.map((link) => (
@@ -80,16 +82,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {link.label}
           </Link>
         ))}
+        <span className="muted" title="Signed in as">{user.username}</span>
         <button
           className="secondary"
           onClick={async () => {
             await apiFetch("/api/v1/auth/logout", { method: "POST" }).catch(() => undefined);
             setToken(null);
             setActor(null);
+            await clearCachedReads();
             router.replace("/login");
           }}
         >
-          Sign out {user.username}
+          Sign out
         </button>
       </nav>
       <main className="page">{children}</main>

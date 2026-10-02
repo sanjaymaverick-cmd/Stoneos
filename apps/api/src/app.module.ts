@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
-import { APP_GUARD } from "@nestjs/core";
+import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
+import { IdempotencyInterceptor } from "./common/idempotency";
 import { CommonModule } from "./common/common.module";
 import { SessionGuard } from "./common/session.guard";
 import { HealthController } from "./health.controller";
@@ -10,6 +11,7 @@ import { InventoryModule } from "./modules/inventory/inventory.module";
 import { ProductionModule } from "./modules/production/production.module";
 import { ReportsController } from "./modules/reports/reports.controller";
 import { ReportsService } from "./modules/reports/reports.service";
+import { DailyReportService } from "./modules/reports/daily-report.service";
 import { SalesModule } from "./modules/sales/sales.module";
 import { TallyModule } from "./modules/tally/tally.module";
 import { FilesModule } from "./modules/files/files.module";
@@ -37,6 +39,11 @@ import { GstModule } from "./modules/gst/gst.module";
     GstModule,
   ],
   controllers: [HealthController, ReportsController],
-  providers: [ReportsService, { provide: APP_GUARD, useClass: SessionGuard }],
+  providers: [
+    ReportsService,
+    DailyReportService,
+    { provide: APP_GUARD, useClass: SessionGuard },
+    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
+  ],
 })
 export class AppModule {}

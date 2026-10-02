@@ -7,7 +7,9 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InventoryKind, InventoryMovementType, Prisma } from "@prisma/client";
+import { MAX_BLOCK_TONS } from "@stoneos/contracts";
 import { PrismaService } from "../../common/prisma.service";
+import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
 import { BooksService } from "../books/books.service";
 import {
@@ -125,8 +127,21 @@ export class InventoryService {
       qualityNote?: string;
       locationCode?: string;
       clientOpId: string;
+      /** When the truck was unloaded, if it is synced later. */
+      occurredAt?: string;
     },
   ) {
+    const receivedAt = parseOccurredAt(input.occurredAt);
+    assertBlockWeight(input.weightTons);
+    for (const [field, value] of [
+      ["purchaseTaxable", input.purchaseTaxable],
+      ["invoicedAmount", input.invoicedAmount],
+      ["actualAmountPaid", input.actualAmountPaid],
+    ] as const) {
+      if (value != null && (!Number.isFinite(value) || value < 0)) {
+        throw new BadRequestException(`${field} cannot be negative`);
+      }
+    }
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.syncOperation.findUnique({
         where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId } },
@@ -186,6 +201,8 @@ export class InventoryService {
           actualAmountPaid: input.actualAmountPaid,
           qualityNote: input.qualityNote,
           locationId: location.id,
+          purchaseDate: receivedAt,
+          createdAt: receivedAt,
         },
       });
       if (taxable > 0) {
@@ -260,6 +277,11 @@ export class InventoryService {
     });
     if (!snapshot || snapshot.status !== "DRAFT") {
       throw new BadRequestException("Opening count is not in draft");
+    }
+    if (kind === "RAW_BLOCK") {
+      // Counted stock is weighed stock: the same rule as a block received today.
+      const tons = (payload as Record<string, unknown> | null)?.weightTons;
+      assertBlockWeight(tons == null || tons === "" ? undefined : Number(tons));
     }
     return this.prisma.openingInventoryLine.create({
       data: { snapshotId, kind, payload, enteredById: user.id },
@@ -564,4 +586,18 @@ function payloadNumber(value: unknown): number | undefined {
   if (value == null || value === "") return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * A received block has a real weight. Zero or negative tons broke recovery (sqft per
+ * ton) and the stock value; past MAX_BLOCK_TONS it is kilograms typed as tons.
+ */
+export function assertBlockWeight(weightTons: unknown): asserts weightTons is number {
+  if (typeof weightTons !== "number" || !Number.isFinite(weightTons)) {
+    throw new BadRequestException("weightTons is required");
+  }
+  if (weightTons <= 0) throw new BadRequestException("weightTons must be more than 0");
+  if (weightTons > MAX_BLOCK_TONS) {
+    throw new BadRequestException(`weightTons over ${MAX_BLOCK_TONS} is not a block; check kg vs tons`);
+  }
 }

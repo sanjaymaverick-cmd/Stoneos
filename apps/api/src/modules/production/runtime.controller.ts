@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Inject, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, NotFoundException, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { PRODUCTION_INPUT_ROLES } from "@stoneos/contracts";
 import { operationalDateFor } from "@stoneos/domain";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
+import { parseOccurredAt } from "../../common/occurred-at";
 import { PrismaService } from "../../common/prisma.service";
 
 @ApiTags("machines")
@@ -25,13 +26,14 @@ export class MachineRuntimeController {
   @Roles(...PRODUCTION_INPUT_ROLES)
   async log(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: { machineId: string; runtimeHours: number; downtimeMinutes?: number; notes?: string },
+    @Body()
+    body: { machineId: string; runtimeHours: number; downtimeMinutes?: number; notes?: string; occurredAt?: string },
   ) {
     const machine = await this.prisma.machine.findFirst({
       where: { id: body.machineId, factoryId: user.factoryId },
     });
-    if (!machine) throw new Error("Machine not in this factory");
-    const operationalDate = operationalDateFor(new Date());
+    if (!machine) throw new NotFoundException("Machine not in this factory");
+    const operationalDate = operationalDateFor(parseOccurredAt(body.occurredAt));
     return this.prisma.machineRuntimeLog.upsert({
       where: { machineId_operationalDate: { machineId: machine.id, operationalDate } },
       create: {

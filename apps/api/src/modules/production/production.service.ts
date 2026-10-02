@@ -8,6 +8,7 @@ import {
 import { damagedCostAtRawBlock, damagedSlabCount, slabSerial } from "@stoneos/domain";
 import { operationalDateFor } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
+import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 
@@ -40,8 +41,9 @@ export class ProductionService {
 
   async startCutting(
     user: AuthenticatedUser,
-    input: { rawBlockId: string; machineId: string; expectedSlabCount?: number },
+    input: { rawBlockId: string; machineId: string; expectedSlabCount?: number; occurredAt?: string },
   ) {
+    const startedAt = parseOccurredAt(input.occurredAt);
     const block = await this.prisma.rawBlock.findFirst({
       where: { id: input.rawBlockId, factoryId: user.factoryId },
     });
@@ -60,7 +62,7 @@ export class ProductionService {
           factoryId: user.factoryId,
           rawBlockId: block.id,
           machineId: machine.id,
-          startedAt: new Date(),
+          startedAt,
           expectedSlabCount: input.expectedSlabCount,
         },
       });
@@ -90,13 +92,15 @@ export class ProductionService {
       slabsProducedCount?: number;
       notes?: string;
       baseVersion?: number;
+      occurredAt?: string;
     },
   ) {
+    const at = parseOccurredAt(input.occurredAt);
     const session = await this.prisma.cuttingSession.findFirst({
       where: { id: sessionId, factoryId: user.factoryId },
     });
     if (!session) throw new NotFoundException("Session not found");
-    const operationalDate = operationalDateFor(new Date());
+    const operationalDate = operationalDateFor(at);
     if (input.baseVersion != null) {
       const existing = await this.prisma.cuttingDayLog.findUnique({
         where: {
@@ -146,8 +150,10 @@ export class ProductionService {
       widthFt?: number;
       thicknessMm?: number;
       finish?: string;
+      occurredAt?: string;
     },
   ) {
+    const endedAt = parseOccurredAt(input.occurredAt);
     const session = await this.prisma.cuttingSession.findFirst({
       where: { id: sessionId, factoryId: user.factoryId },
       include: { rawBlock: true },
@@ -178,6 +184,8 @@ export class ProductionService {
             widthFt: input.widthFt,
             finish: input.finish,
             locationId: unpolished?.id,
+            // The DPR counts slabs by creation time, so it must be when they were cut.
+            createdAt: endedAt,
           },
         });
         slabs.push(slab);
@@ -196,7 +204,7 @@ export class ProductionService {
         where: { id: session.id },
         data: {
           status: "COMPLETED",
-          endedAt: new Date(),
+          endedAt,
           totalSlabsCut: input.totalSlabsCut,
           finalGoodSlabCount: input.finalGoodSlabCount,
           damagedSlabCount: damaged,
@@ -223,8 +231,15 @@ export class ProductionService {
 
   async startPolishing(
     user: AuthenticatedUser,
-    input: { machineId: string; processType: "GRINDING" | "RESIN" | "POLISHING"; slabIds: string[]; finishType?: string },
+    input: {
+      machineId: string;
+      processType: "GRINDING" | "RESIN" | "POLISHING";
+      slabIds: string[];
+      finishType?: string;
+      occurredAt?: string;
+    },
   ) {
+    const at = parseOccurredAt(input.occurredAt);
     const machine = await this.prisma.machine.findFirst({
       where: { id: input.machineId, factoryId: user.factoryId, machineType: "POLISHING" },
     });
@@ -239,7 +254,7 @@ export class ProductionService {
       data: {
         factoryId: user.factoryId,
         machineId: machine.id,
-        operationalDate: operationalDateFor(new Date()),
+        operationalDate: operationalDateFor(at),
         processType: input.processType,
         finishType: input.finishType,
         slabs: { create: slabs.map((s) => ({ slabId: s.id })) },
