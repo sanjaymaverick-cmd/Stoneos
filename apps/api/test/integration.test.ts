@@ -25,7 +25,9 @@ import { CopilotService } from "../src/modules/books/copilot.service";
 import { MaintenanceService } from "../src/modules/maintenance/maintenance.service";
 import { ReportsService } from "../src/modules/reports/reports.service";
 import { DailyReportService } from "../src/modules/reports/daily-report.service";
+import { LotsService } from "../src/modules/lots/lots.service";
 import { ConsumablesController } from "../src/modules/production/consumables.controller";
+import { INVENTORY_DATA_ROLES } from "@stoneos/contracts";
 import type { AuthenticatedUser } from "../src/common/current-user";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -85,6 +87,7 @@ describe("postgres-backed workflows", () => {
   let copilot: CopilotService;
   let reports: ReportsService;
   let dailyReports: DailyReportService;
+  let lots: LotsService;
   let factoryId = "";
   let owner: AuthenticatedUser;
 
@@ -129,6 +132,7 @@ describe("postgres-backed workflows", () => {
     copilot = new CopilotService(prisma as never, audit);
     reports = new ReportsService(prisma as never);
     dailyReports = new DailyReportService(prisma as never);
+    lots = new LotsService(prisma as never, audit, books);
 
     await prisma.$executeRawUnsafe(`
       DO $$ DECLARE r RECORD;
@@ -2423,6 +2427,299 @@ describe("postgres-backed workflows", () => {
     }
     return { block, session, slabs, at };
   }
+
+
+  /** A received block, priced with both a billed leg and a cash leg. */
+  async function receiveBlock(
+    factoryId: string,
+    serial: string,
+    opts: { taxable?: number; cash?: number; variety?: string } = {},
+  ) {
+    return prisma.rawBlock.create({
+      data: {
+        factoryId,
+        serialNumber: serial,
+        varietyName: opts.variety ?? "Imperial Red",
+        weightTons: "22.000",
+        purchaseTaxable: String(opts.taxable ?? 220_000),
+        purchaseCashAmount: String(opts.cash ?? 220_000),
+        purchaseGstRatePct: "5",
+        purchaseCgst: "5500",
+        purchaseSgst: "5500",
+      },
+    });
+  }
+
+  it("counts a lot through cutting, breakage and sale the way the yard does", async () => {
+    const { factory, asOwner } = await staffFactory("lot");
+    await receiveBlock(factory.id, "VG-001");
+
+    // 96 off the saw, 6 broke on it. The 6 never reached stock.
+    const cut = await lots.recordCut(asOwner, {
+      blockSerial: "VG-001",
+      totalSlabsCut: 96,
+      damagedAtSaw: 6,
+      sqftPerSlab: 49.5,
+      clientOpId: "lot-cut-1",
+    });
+    assert.equal(cut.goodSlabCount, 90);
+    assert.equal(cut.availableSlabs, 90);
+    assert.equal(cut.availableSqft, 4455);
+
+    // The stock screen: one line per lot, no piece list.
+    const stock = await lots.availability(factory.id);
+    assert.equal(stock.lots.length, 1);
+    assert.equal(stock.lots[0]!.blockSerial, "VG-001");
+    assert.equal(stock.lots[0]!.availableSlabs, 90);
+    assert.equal(stock.totalAvailableSqft, 4455);
+
+    // 3 broken moving them across the yard.
+    const off = await lots.writeOffBroken(asOwner, {
+      blockSerial: "VG-001",
+      slabCount: 3,
+      stage: "factory_transport",
+      reason: "forklift tilted the A-frame",
+      clientOpId: "lot-off-1",
+    });
+    assert.equal(off.availableSlabs, 87);
+    // 4,40,000 of cost over 90 good slabs, three of them gone.
+    assert.equal(off.costAmount, Math.round((440_000 / 90) * 3 * 100) / 100);
+
+    // Sell 75 and the owner's example closes: 90 - 3 - 75 = 12.
+    const customer = await sales.createCustomer(asOwner, "Sharma Marbles Jaipur");
+    await lots.sellLots(asOwner, {
+      customerId: customer.id,
+      lines: [{ blockSerial: "VG-001", slabCount: 75, rate: 85 }],
+      clientOpId: "lot-sell-1",
+    });
+    const after = await prisma.rawBlock.findFirstOrThrow({
+      where: { factoryId: factory.id, serialNumber: "VG-001" },
+    });
+    assert.equal(after.goodSlabCount - after.brokenSlabCount - after.soldSlabCount, 12);
+  });
+
+  it("refuses to sell more slabs than the lot holds, naming both numbers", async () => {
+    const { factory, asOwner } = await staffFactory("lotover");
+    await receiveBlock(factory.id, "VG-001");
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 96, damagedAtSaw: 6, sqftPerSlab: 49.5,
+      clientOpId: "ov-cut",
+    });
+    await lots.writeOffBroken(asOwner, {
+      blockSerial: "VG-001", slabCount: 3, stage: "yard", reason: "chipped",
+      clientOpId: "ov-off",
+    });
+    await lots.sellLots(asOwner, {
+      customerId: (await sales.createCustomer(asOwner, "Buyer")).id,
+      lines: [{ blockSerial: "VG-001", slabCount: 75, rate: 85 }],
+      clientOpId: "ov-sell",
+    });
+
+    const second = await sales.createCustomer(asOwner, "Buyer 2");
+    await assert.rejects(
+      () =>
+        lots.sellLots(asOwner, {
+          customerId: second.id,
+          lines: [{ blockSerial: "VG-001", slabCount: 100, rate: 85 }],
+          clientOpId: "ov-sell-2",
+        }),
+      /VG-001 has 12 slabs available/,
+    );
+    // And nothing was deducted by the attempt.
+    const block = await prisma.rawBlock.findFirstOrThrow({
+      where: { factoryId: factory.id, serialNumber: "VG-001" },
+    });
+    assert.equal(block.soldSlabCount, 75);
+  });
+
+  it("bills several lots on one invoice, with the HSN summary and both addresses", async () => {
+    const { factory, asOwner } = await staffFactory("lotbill");
+    await gst.upsertProfile(asOwner, { gstin: "08AAUFV3603N1ZH", stateCode: "08", legalName: "Vedam Granites" });
+    await receiveBlock(factory.id, "VG-101", { variety: "Imperial Red" });
+    await receiveBlock(factory.id, "VG-102", { variety: "Kashmir White" });
+    for (const serial of ["VG-101", "VG-102"]) {
+      await lots.recordCut(asOwner, {
+        blockSerial: serial, totalSlabsCut: 96, damagedAtSaw: 6, sqftPerSlab: 10,
+        clientOpId: `bill-cut-${serial}`,
+      });
+    }
+    const customer = await prisma.customer.create({
+      data: {
+        factoryId: factory.id, name: "Sharma Marbles", stateCode: "08",
+        gstin: "08AABCS1429B1ZX", billingAddress: "MI Road, Jaipur",
+      },
+    });
+
+    // 80 from one lot, 70 from another, invoiced together.
+    const order = await lots.sellLots(asOwner, {
+      customerId: customer.id,
+      lines: [
+        { blockSerial: "VG-101", slabCount: 80, rate: 100 },
+        { blockSerial: "VG-102", slabCount: 70, rate: 100 },
+      ],
+      clientOpId: "bill-sell",
+    });
+    assert.equal(order.lines.length, 2);
+    assert.equal(order.taxableAmount, 80 * 10 * 100 + 70 * 10 * 100);
+
+    const bill = await lots.invoiceOrder(asOwner, {
+      orderId: order.orderId,
+      clientOpId: "bill-inv",
+      shipTo: { name: "Sharma site store", address: "Sitapura, Jaipur", stateCode: "08" },
+    });
+    assert.match(bill.invoiceNumber, /^INV-/);
+    assert.equal(bill.seller.gstin, "08AAUFV3603N1ZH");
+    assert.equal(bill.billTo.name, "Sharma Marbles");
+    assert.equal(bill.billTo.address, "MI Road, Jaipur");
+    assert.equal(bill.shipTo.name, "Sharma site store", "consignee may differ from the buyer");
+    assert.equal(bill.items.length, 2);
+    assert.deepEqual(bill.items.map((i) => i.blockSerial).sort(), ["VG-101", "VG-102"]);
+    assert.equal(bill.items[0]!.hsnCode, "6802");
+
+    // One HSN row, both lines inside it, 18% on the whole taxable value.
+    assert.equal(bill.hsnSummary.length, 1);
+    assert.equal(bill.hsnSummary[0]!.taxableAmount, 150_000);
+    assert.equal(bill.totals.taxableAmount, 150_000);
+    assert.equal(bill.totals.cgstAmount + bill.totals.sgstAmount, 27_000);
+    assert.equal(bill.totals.igstAmount, 0, "same state, so no IGST");
+    assert.equal(bill.totals.payable, 177_000);
+  });
+
+  it("carries two HSN rates on one bill and still adds up", async () => {
+    const { factory, asOwner } = await staffFactory("lotmix");
+    await gst.upsertProfile(asOwner, { gstin: "08AAUFV3603N1ZH", stateCode: "08", legalName: "Vedam" });
+    await receiveBlock(factory.id, "VG-201");
+    await receiveBlock(factory.id, "VG-202");
+    for (const serial of ["VG-201", "VG-202"]) {
+      await lots.recordCut(asOwner, {
+        blockSerial: serial, totalSlabsCut: 11, damagedAtSaw: 1, sqftPerSlab: 10,
+        clientOpId: `mix-cut-${serial}`,
+      });
+    }
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "AP Stone House", stateCode: "37" },
+    });
+    const order = await lots.sellLots(asOwner, {
+      customerId: customer.id,
+      lines: [
+        { blockSerial: "VG-201", slabCount: 10, rate: 1_000 },
+        // Rough blocks are HSN 2516 at 5%, sold off the same order.
+        { blockSerial: "VG-202", slabCount: 10, rate: 500, hsnCode: "2516", gstRatePct: 5 },
+      ],
+      clientOpId: "mix-sell",
+    });
+    const bill = await lots.invoiceOrder(asOwner, { orderId: order.orderId, clientOpId: "mix-inv" });
+
+    assert.equal(bill.hsnSummary.length, 2, "one row per HSN and rate");
+    const slab = bill.hsnSummary.find((h) => h.hsnCode === "6802")!;
+    const block = bill.hsnSummary.find((h) => h.hsnCode === "2516")!;
+    assert.equal(slab.taxableAmount, 100_000);
+    assert.equal(slab.igstAmount, 18_000, "inter-state, so IGST");
+    assert.equal(block.taxableAmount, 50_000);
+    assert.equal(block.igstAmount, 2_500);
+    // The whole bill is the sum of its parts, to the paisa.
+    assert.equal(bill.totals.taxableAmount, 150_000);
+    assert.equal(bill.totals.igstAmount, 20_500);
+    assert.equal(bill.totals.payable, 170_500);
+  });
+
+  it("posts breakage to the ledger and keeps the books balanced", async () => {
+    const { factory, asOwner } = await staffFactory("lotbooks");
+    await receiveBlock(factory.id, "VG-001", { taxable: 180_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 91, damagedAtSaw: 1, sqftPerSlab: 10,
+      clientOpId: "bk-cut",
+    });
+    await lots.writeOffBroken(asOwner, {
+      blockSerial: "VG-001", slabCount: 9, stage: "loading",
+      reason: "edge break while loading", clientOpId: "bk-off",
+    });
+
+    const tb = await books.trialBalance(factory.id);
+    const debits = tb.reduce((sum, row) => sum + row.debit, 0);
+    const credits = tb.reduce((sum, row) => sum + row.credit, 0);
+    assert.equal(
+      Math.round(debits * 100),
+      Math.round(credits * 100),
+      "a write-off must not unbalance the ledger",
+    );
+    const breakage = tb.find((row) => row.code === "EXP_BREAKAGE");
+    assert.ok(breakage, "breakage has its own ledger head");
+    // 1,80,000 over 90 good slabs is 2,000 each; nine of them is 18,000.
+    assert.equal(breakage.balance, 18_000);
+    // And the same value came off stock, so the yard and the balance sheet agree.
+    const stock = tb.find((row) => row.code === "STOCK")!;
+    assert.equal(stock.credit, 18_000);
+  });
+
+  it("records who broke what, and refuses a sales clerk the write-off", async () => {
+    const { factory, asOwner } = await staffFactory("lotaudit");
+    await receiveBlock(factory.id, "VG-001");
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 91, damagedAtSaw: 1, sqftPerSlab: 10,
+      clientOpId: "au-cut",
+    });
+    await lots.writeOffBroken(asOwner, {
+      blockSerial: "VG-001", slabCount: 2, stage: "yard", reason: "cracked in the rain",
+      clientOpId: "au-off",
+    });
+
+    const event = await prisma.auditEvent.findFirst({
+      where: { factoryId: factory.id, action: "lot.write_off" },
+    });
+    assert.ok(event, "stock cannot leave the yard untraceably");
+    assert.equal(event.actorId, asOwner.id);
+    const row = await prisma.stockWriteOff.findFirstOrThrow({ where: { factoryId: factory.id } });
+    assert.equal(row.actorId, asOwner.id);
+    assert.equal(row.reason, "cracked in the rain");
+    assert.equal(row.stage, "yard");
+
+    // Deleting stock is an inventory act, not a sales one.
+    assert.equal(INVENTORY_DATA_ROLES.includes("sales"), false);
+    assert.equal(INVENTORY_DATA_ROLES.includes("inventory"), true);
+  });
+
+  it("replays a resent sale instead of deducting the stock twice", async () => {
+    const { factory, asOwner } = await staffFactory("lotreplay");
+    await receiveBlock(factory.id, "VG-001");
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 91, damagedAtSaw: 1, sqftPerSlab: 10,
+      clientOpId: "rp-cut",
+    });
+    const customer = await sales.createCustomer(asOwner, "Repeat Buyer");
+    const first = await lots.sellLots(asOwner, {
+      customerId: customer.id,
+      lines: [{ blockSerial: "VG-001", slabCount: 40, rate: 100 }],
+      clientOpId: "rp-sell",
+    });
+    const again = await lots.sellLots(asOwner, {
+      customerId: customer.id,
+      lines: [{ blockSerial: "VG-001", slabCount: 40, rate: 100 }],
+      clientOpId: "rp-sell",
+    });
+    assert.equal(first.orderId, again.orderId, "the same send is one sale");
+    const block = await prisma.rawBlock.findFirstOrThrow({
+      where: { factoryId: factory.id, serialNumber: "VG-001" },
+    });
+    assert.equal(block.soldSlabCount, 40, "not 80");
+  });
+
+  it("refuses a second cut on a block already sawn", async () => {
+    const { factory, asOwner } = await staffFactory("lotrecut");
+    await receiveBlock(factory.id, "VG-001");
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 91, damagedAtSaw: 1, sqftPerSlab: 10,
+      clientOpId: "rc-1",
+    });
+    await assert.rejects(
+      () =>
+        lots.recordCut(asOwner, {
+          blockSerial: "VG-001", totalSlabsCut: 50, damagedAtSaw: 0, sqftPerSlab: 10,
+          clientOpId: "rc-2",
+        }),
+      /already cut: 90 slabs recorded/,
+    );
+  });
 
   it("reports a day's production, sales and money from the records", async () => {
     const { factory } = await staffFactory("dpr");
