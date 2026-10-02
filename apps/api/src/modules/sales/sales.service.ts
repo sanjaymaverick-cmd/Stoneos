@@ -61,12 +61,20 @@ export class SalesService {
     });
   }
 
-  orders(factoryId: string) {
-    return this.prisma.salesOrder.findMany({
+  async orders(factoryId: string) {
+    const orders = await this.prisma.salesOrder.findMany({
       where: { factoryId },
-      include: { customer: true, lines: true, invoices: true, deliveries: true },
+      include: {
+        customer: true,
+        lines: {include:{slab:{include:{location:true}}}},
+        invoices: { include: { payments: true, creditNotes: true } },
+        deliveries: {include:{lines:true}},
+        packingLists: true,
+      },
       orderBy: { createdAt: "desc" },
     });
+    // Derive historic dispatch state without rewriting existing rows.
+    return orders.map(o=>{const ids=o.lines.map(l=>l.slabId).filter(Boolean);const delivered=new Set(o.deliveries.flatMap(d=>d.lines.map(l=>l.slabId)));return {...o,status:o.deliveries.length ? ids.every(id=>delivered.has(id!)) ? "DELIVERED" : "PARTIALLY_DELIVERED" : o.status};});
   }
 
   private async assertFactorySlabs(
@@ -90,11 +98,20 @@ export class SalesService {
     user: AuthenticatedUser,
     input: {
       customerId: string;
-      lines: Array<{ slabId?: string; description: string; quantitySqft: number; rate: number }>;
+      lines: Array<{
+        slabId?: string;
+        description: string;
+        quantitySqft: number;
+        rate: number;
+      }>;
     },
   ) {
     await this.assertCustomer(user.factoryId, input.customerId);
-    await this.assertFactorySlabs(this.prisma, user.factoryId, input.lines.map((l) => l.slabId));
+    await this.assertFactorySlabs(
+      this.prisma,
+      user.factoryId,
+      input.lines.map((l) => l.slabId),
+    );
     return this.prisma.quotation.create({
       data: {
         factoryId: user.factoryId,
@@ -110,7 +127,12 @@ export class SalesService {
     input: {
       customerId: string;
       orderDate: string;
-      lines: Array<{ slabId?: string; quantitySqft: number; rate: number; baseVersion?: number }>;
+      lines: Array<{
+        slabId?: string;
+        quantitySqft: number;
+        rate: number;
+        baseVersion?: number;
+      }>;
       clientOpId: string;
       billingMode?: "gst_invoice" | "cash_unbilled";
       /**
@@ -125,12 +147,21 @@ export class SalesService {
     await this.assertCustomer(user.factoryId, input.customerId);
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.syncOperation.findUnique({
-        where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId } },
+        where: {
+          factoryId_clientOpId: {
+            factoryId: user.factoryId,
+            clientOpId: input.clientOpId,
+          },
+        },
       });
       if (existing) return existing.response;
 
       const kept: typeof input.lines = [];
-      const droppedSlabs: Array<{ slabId: string; slabSerial: string; reason: string }> = [];
+      const droppedSlabs: Array<{
+        slabId: string;
+        slabSerial: string;
+        reason: string;
+      }> = [];
       for (const line of input.lines) {
         if (!line.slabId) {
           kept.push(line);
@@ -140,9 +171,12 @@ export class SalesService {
           where: { id: line.slabId, factoryId: user.factoryId },
           include: { location: true },
         });
-        if (!slab) throw new BadRequestException("Slab does not belong to this factory");
+        if (!slab)
+          throw new BadRequestException("Slab does not belong to this factory");
         const refusal =
-          slab.salesStatus === "sold" || slab.salesStatus === "reserved" || slab.salesStatus === "dispatched"
+          slab.salesStatus === "sold" ||
+          slab.salesStatus === "reserved" ||
+          slab.salesStatus === "dispatched"
             ? `Slab ${slab.slabSerial} is not available`
             : slab.location?.code === "UNPOLISHED_STOCK"
               ? `Slab ${slab.slabSerial} has not been polished yet`
@@ -151,7 +185,11 @@ export class SalesService {
                 : null;
         if (refusal) {
           if (input.partial) {
-            droppedSlabs.push({ slabId: slab.id, slabSerial: slab.slabSerial, reason: refusal });
+            droppedSlabs.push({
+              slabId: slab.id,
+              slabSerial: slab.slabSerial,
+              reason: refusal,
+            });
             continue;
           }
           if (line.baseVersion != null && slab.version !== line.baseVersion) {
@@ -183,7 +221,8 @@ export class SalesService {
       if (kept.length === 0) {
         throw new ConflictException({
           code: "SLABS_UNAVAILABLE",
-          message: "Every slab on this order was sold or changed by someone else first",
+          message:
+            "Every slab on this order was sold or changed by someone else first",
           droppedSlabs,
         });
       }
@@ -195,7 +234,11 @@ export class SalesService {
           billingMode: input.billingMode ?? "gst_invoice",
           orderDate: parseBusinessDate(input.orderDate, "orderDate"),
           lines: {
-            create: kept.map(({ slabId, quantitySqft, rate }) => ({ slabId, quantitySqft, rate })),
+            create: kept.map(({ slabId, quantitySqft, rate }) => ({
+              slabId,
+              quantitySqft,
+              rate,
+            })),
           },
         },
         include: { lines: true, customer: true },
@@ -217,7 +260,12 @@ export class SalesService {
     });
   }
 
-  async pack(user: AuthenticatedUser, salesOrderId: string, requested: string[], partial = false) {
+  async pack(
+    user: AuthenticatedUser,
+    salesOrderId: string,
+    requested: string[],
+    partial = false,
+  ) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     return this.prisma.$transaction(async (tx) => {
       let slabIds = requested;
@@ -229,19 +277,26 @@ export class SalesService {
           include: { slab: true },
         });
         const packable = new Set(
-          onOrder.filter((line) => line.slab?.salesStatus === "reserved").map((line) => line.slabId as string),
+          onOrder
+            .filter((line) => line.slab?.salesStatus === "reserved")
+            .map((line) => line.slabId as string),
         );
         slabIds = requested.filter((id) => packable.has(id));
         skippedSlabs = requested.filter((id) => !packable.has(id));
         if (slabIds.length === 0) {
-          throw new ConflictException({ code: "SLABS_UNAVAILABLE", message: "No slab left to pack", skippedSlabs });
+          throw new ConflictException({
+            code: "SLABS_UNAVAILABLE",
+            message: "No slab left to pack",
+            skippedSlabs,
+          });
         }
       }
       await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
       const packing = await tx.inventoryLocation.findFirst({
         where: { factoryId: user.factoryId, code: "PACKING" },
       });
-      if (!packing) throw new BadRequestException("PACKING location is missing");
+      if (!packing)
+        throw new BadRequestException("PACKING location is missing");
       const list = await tx.packingList.create({
         data: {
           factoryId: user.factoryId,
@@ -292,7 +347,9 @@ export class SalesService {
     const dispatchedAt = parseOccurredAt(extra?.occurredAt);
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.syncOperation.findUnique({
-        where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId } },
+        where: {
+          factoryId_clientOpId: { factoryId: user.factoryId, clientOpId },
+        },
       });
       if (existing) {
         // A caller-supplied key reused for a different load is a client bug. Handing
@@ -322,25 +379,41 @@ export class SalesService {
         });
         const shippable = new Set(
           onOrder
-            .filter((line) => line.slab?.locationId === packing?.id && line.slab?.salesStatus !== "dispatched")
+            .filter(
+              (line) =>
+                line.slab?.locationId === packing?.id &&
+                line.slab?.salesStatus !== "dispatched",
+            )
             .map((line) => line.slabId as string),
         );
         slabIds = requested.filter((id) => shippable.has(id));
         skippedSlabs = requested.filter((id) => !shippable.has(id));
         if (slabIds.length === 0) {
-          throw new ConflictException({ code: "SLABS_UNAVAILABLE", message: "No packed slab left to dispatch", skippedSlabs });
+          throw new ConflictException({
+            code: "SLABS_UNAVAILABLE",
+            message: "No packed slab left to dispatch",
+            skippedSlabs,
+          });
         }
       }
       await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
       const deliveredLoc = await tx.inventoryLocation.findFirst({
         where: { factoryId: user.factoryId, code: "DELIVERED" },
       });
-      if (!packing || !deliveredLoc) throw new BadRequestException("PACKING or DELIVERED location is missing");
+      if (!packing || !deliveredLoc)
+        throw new BadRequestException(
+          "PACKING or DELIVERED location is missing",
+        );
       for (const slabId of slabIds) {
-        const slab = await tx.slab.findFirst({ where: { id: slabId, factoryId: user.factoryId } });
-        if (!slab) throw new BadRequestException("Slab does not belong to this factory");
+        const slab = await tx.slab.findFirst({
+          where: { id: slabId, factoryId: user.factoryId },
+        });
+        if (!slab)
+          throw new BadRequestException("Slab does not belong to this factory");
         if (slab.locationId !== packing.id) {
-          throw new BadRequestException("Slab must be in PACKING before dispatch");
+          throw new BadRequestException(
+            "Slab must be in PACKING before dispatch",
+          );
         }
         if (slab.salesStatus === "dispatched") {
           throw new BadRequestException("Slab is already dispatched");
@@ -358,7 +431,11 @@ export class SalesService {
       for (const slabId of slabIds) {
         await tx.slab.update({
           where: { id: slabId },
-          data: { salesStatus: "dispatched", locationId: deliveredLoc.id, version: { increment: 1 } },
+          data: {
+            salesStatus: "dispatched",
+            locationId: deliveredLoc.id,
+            version: { increment: 1 },
+          },
         });
         await tx.inventoryMovement.create({
           data: {
@@ -368,7 +445,9 @@ export class SalesService {
             quantity: 1,
             idempotencyKey: `${clientOpId}:${slabId}`,
             actorId: user.id,
-            notes: extra?.ewayDraftId ? `eway:${extra.ewayDraftId}` : extra?.invoiceId,
+            notes: extra?.ewayDraftId
+              ? `eway:${extra.ewayDraftId}`
+              : extra?.invoiceId,
           },
         });
       }
@@ -401,172 +480,233 @@ export class SalesService {
   ) {
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     if (order.billingMode === "cash_unbilled") {
-      throw new BadRequestException("This order is a cash sale; it cannot be invoiced");
+      throw new BadRequestException(
+        "This order is a cash sale; it cannot be invoiced",
+      );
     }
     const cleanCharges = charges.map((c) => {
       const label = c.label?.trim();
       if (!label) throw new BadRequestException("Every charge needs a label");
       if (!Number.isFinite(c.amount) || c.amount <= 0) {
-        throw new BadRequestException(`Charge "${label}" must be a positive amount`);
+        throw new BadRequestException(
+          `Charge "${label}" must be a positive amount`,
+        );
       }
       return { label, amount: c.amount, taxable: c.taxable !== false };
     });
-    return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.invoice.findUnique({
-        where: { factoryId_idempotencyKey: { factoryId: user.factoryId, idempotencyKey: clientOpId } },
-      });
-      if (existing) return existing;
-      const duplicate = await tx.invoice.findFirst({ where: { salesOrderId: order.id } });
-      if (duplicate) throw new BadRequestException("Order already invoiced");
-      const lines = await tx.salesLineItem.findMany({ where: { salesOrderId: order.id } });
-      // Rates are quoted ex-GST, so this sum is the taxable value, not the payable.
-      const lineTotal = lines.reduce((sum, line) => sum + Number(line.quantitySqft) * Number(line.rate), 0);
-      // Packaging, demurrage, labour and the like are part of the transaction value,
-      // so they are taxed with the slabs unless explicitly billed as a reimbursement.
-      const chargeTaxable = cleanCharges.filter((c) => c.taxable).reduce((sum, c) => sum + c.amount, 0);
-      const chargeExempt = cleanCharges.filter((c) => !c.taxable).reduce((sum, c) => sum + c.amount, 0);
-      const taxable = lineTotal + chargeTaxable;
-      const customer = await tx.customer.findFirst({
-        where: { id: order.customerId, factoryId: user.factoryId },
-      });
-      const gst = await this.resolveGst(tx, user.factoryId, taxable, customer, gstRatePct);
-      const amount = minorToRupees(gst.totalMinor + rupeesToMinor(chargeExempt));
-      const invoiceNumber = await nextDocumentNumber(tx, user.factoryId, "INVOICE");
-      try {
-        const created = await tx.invoice.create({
-          data: {
-            factoryId: user.factoryId,
-            salesOrderId: order.id,
-            customerId: order.customerId,
-            invoiceNumber,
-            amount,
-            taxableAmount: minorToRupees(gst.taxableMinor),
-            cgstAmount: minorToRupees(gst.cgstMinor),
-            sgstAmount: minorToRupees(gst.sgstMinor),
-            igstAmount: minorToRupees(gst.igstMinor),
-            exemptAmount: chargeExempt,
-            gstRatePct: gst.ratePct,
-            placeOfSupply: gst.placeOfSupply,
-            supplierState: gst.supplierState,
-            idempotencyKey: clientOpId,
-            charges: { create: cleanCharges },
-          },
-          include: { charges: true },
-        });
-        await tx.auditEvent.create({
-          data: {
-            factoryId: user.factoryId,
-            actorId: user.id,
-            action: "sales.invoice",
-            entityType: "invoice",
-            entityId: created.id,
-            payload: {
-              amount,
-              taxable,
-              lineTotal,
-              charges: cleanCharges,
-              invoiceNumber,
-              gstRatePct: gst.ratePct,
+    return this.prisma.$transaction(
+      async (tx) => {
+        const existing = await tx.invoice.findUnique({
+          where: {
+            factoryId_idempotencyKey: {
+              factoryId: user.factoryId,
+              idempotencyKey: clientOpId,
             },
           },
         });
-        await this.books.postInvoice(tx, user, {
-          invoiceId: created.id,
-          customerName: customer?.name ?? "Unknown",
-          gst,
-          exemptMinor: rupeesToMinor(chargeExempt),
-          clientOpId,
+        if (existing) return existing;
+        const duplicate = await tx.invoice.findFirst({
+          where: { salesOrderId: order.id },
         });
-        return created;
-      } catch (error) {
-        if (isUniqueViolation(error)) {
-          throw new ConflictException("Invoice number already issued; retry the same clientOpId");
+        if (duplicate) throw new BadRequestException("Order already invoiced");
+        const lines = await tx.salesLineItem.findMany({
+          where: { salesOrderId: order.id },
+        });
+        // Rates are quoted ex-GST, so this sum is the taxable value, not the payable.
+        const lineTotal = lines.reduce(
+          (sum, line) => sum + Number(line.quantitySqft) * Number(line.rate),
+          0,
+        );
+        // Packaging, demurrage, labour and the like are part of the transaction value,
+        // so they are taxed with the slabs unless explicitly billed as a reimbursement.
+        const chargeTaxable = cleanCharges
+          .filter((c) => c.taxable)
+          .reduce((sum, c) => sum + c.amount, 0);
+        const chargeExempt = cleanCharges
+          .filter((c) => !c.taxable)
+          .reduce((sum, c) => sum + c.amount, 0);
+        const taxable = lineTotal + chargeTaxable;
+        const customer = await tx.customer.findFirst({
+          where: { id: order.customerId, factoryId: user.factoryId },
+        });
+        const gst = await this.resolveGst(
+          tx,
+          user.factoryId,
+          taxable,
+          customer,
+          gstRatePct,
+        );
+        const amount = minorToRupees(
+          gst.totalMinor + rupeesToMinor(chargeExempt),
+        );
+        const invoiceNumber = await nextDocumentNumber(
+          tx,
+          user.factoryId,
+          "INVOICE",
+        );
+        try {
+          const created = await tx.invoice.create({
+            data: {
+              factoryId: user.factoryId,
+              salesOrderId: order.id,
+              customerId: order.customerId,
+              invoiceNumber,
+              amount,
+              taxableAmount: minorToRupees(gst.taxableMinor),
+              cgstAmount: minorToRupees(gst.cgstMinor),
+              sgstAmount: minorToRupees(gst.sgstMinor),
+              igstAmount: minorToRupees(gst.igstMinor),
+              exemptAmount: chargeExempt,
+              gstRatePct: gst.ratePct,
+              placeOfSupply: gst.placeOfSupply,
+              supplierState: gst.supplierState,
+              idempotencyKey: clientOpId,
+              charges: { create: cleanCharges },
+            },
+            include: { charges: true },
+          });
+          await tx.auditEvent.create({
+            data: {
+              factoryId: user.factoryId,
+              actorId: user.id,
+              action: "sales.invoice",
+              entityType: "invoice",
+              entityId: created.id,
+              payload: {
+                amount,
+                taxable,
+                lineTotal,
+                charges: cleanCharges,
+                invoiceNumber,
+                gstRatePct: gst.ratePct,
+              },
+            },
+          });
+          await this.books.postInvoice(tx, user, {
+            invoiceId: created.id,
+            customerName: customer?.name ?? "Unknown",
+            gst,
+            exemptMinor: rupeesToMinor(chargeExempt),
+            clientOpId,
+          });
+          return created;
+        } catch (error) {
+          if (isUniqueViolation(error)) {
+            throw new ConflictException(
+              "Invoice number already issued; retry the same clientOpId",
+            );
+          }
+          throw error;
         }
-        throw error;
-      }
-    }, { timeout: 30_000, maxWait: 10_000 });
+      },
+      { timeout: 30_000, maxWait: 10_000 },
+    );
   }
 
   async pay(
     user: AuthenticatedUser,
     invoiceId: string,
-    input: { amount: number; method: string; paidAt: string; clientOpId: string; baseVersion?: number },
+    input: {
+      amount: number;
+      method: string;
+      paidAt: string;
+      clientOpId: string;
+      baseVersion?: number;
+    },
   ) {
     // Backstop, not the primary gate. The route carries PAYMENT_ROLES, but this method
     // is also reached from intake confirmation, where the caller's role is whatever the
     // confirmer happens to hold. Asserting here means no future caller can widen who
     // may settle an invoice by accident.
     assertAllowedRoles(PAYMENT_ROLES, user.role as Role);
-    if (input.amount <= 0) throw new BadRequestException("Amount must be positive");
+    if (input.amount <= 0)
+      throw new BadRequestException("Amount must be positive");
     const paidAt = parseBusinessDate(input.paidAt, "paidAt");
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND factory_id = ${user.factoryId} FOR UPDATE`;
-      const invoice = await tx.invoice.findFirst({
-        where: { id: invoiceId, factoryId: user.factoryId },
-        include: { payments: true, creditNotes: true },
-      });
-      if (!invoice) throw new NotFoundException("Invoice not found");
-      if (input.baseVersion != null && invoice.version !== input.baseVersion) {
-        throw new ConflictException({
-          code: "VERSION_CONFLICT",
-          serverVersion: invoice.version,
-          server: invoice,
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND factory_id = ${user.factoryId} FOR UPDATE`;
+        const invoice = await tx.invoice.findFirst({
+          where: { id: invoiceId, factoryId: user.factoryId },
+          include: { payments: true, creditNotes: true },
         });
-      }
-      const existing = await tx.payment.findUnique({
-        where: { factoryId_idempotencyKey: { factoryId: user.factoryId, idempotencyKey: input.clientOpId } },
-      });
-      if (existing) return existing;
-      const paid = invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0);
-      const credited = invoice.creditNotes.reduce((sum, n) => sum + Number(n.amount), 0);
-      if (paid + input.amount > Number(invoice.amount) - credited + 0.001) {
-        throw new BadRequestException("Payment exceeds invoice amount");
-      }
-      try {
-        const payment = await tx.payment.create({
-          data: {
-            factoryId: user.factoryId,
-            invoiceId: invoice.id,
-            amount: input.amount,
-            method: input.method,
-            paidAt,
-            idempotencyKey: input.clientOpId,
+        if (!invoice) throw new NotFoundException("Invoice not found");
+        if (
+          input.baseVersion != null &&
+          invoice.version !== input.baseVersion
+        ) {
+          throw new ConflictException({
+            code: "VERSION_CONFLICT",
+            serverVersion: invoice.version,
+            server: invoice,
+          });
+        }
+        const existing = await tx.payment.findUnique({
+          where: {
+            factoryId_idempotencyKey: {
+              factoryId: user.factoryId,
+              idempotencyKey: input.clientOpId,
+            },
           },
         });
-        await tx.invoice.update({
-          where: { id: invoice.id },
-          data: { version: { increment: 1 } },
-        });
-        await tx.auditEvent.create({
-          data: {
-            factoryId: user.factoryId,
-            actorId: user.id,
-            action: "sales.payment",
-            entityType: "payment",
-            entityId: payment.id,
-            payload: { invoiceId: invoice.id, amount: input.amount },
-          },
-        });
-        const customer = await tx.customer.findFirst({
-          where: { id: invoice.customerId, factoryId: user.factoryId },
-        });
-        await this.books.postPayment(tx, user, {
-          paymentId: payment.id,
-          invoiceId: invoice.id,
-          customerName: customer?.name ?? "Unknown",
-          amount: input.amount,
-          method: input.method,
-          clientOpId: input.clientOpId,
-          paidAt,
-        });
-        return payment;
-      } catch (error) {
-        if (String(error).includes("Payment exceeds invoice amount")) {
+        if (existing) return existing;
+        const paid = invoice.payments.reduce(
+          (sum, p) => sum + Number(p.amount),
+          0,
+        );
+        const credited = invoice.creditNotes.reduce(
+          (sum, n) => sum + Number(n.amount),
+          0,
+        );
+        if (paid + input.amount > Number(invoice.amount) - credited + 0.001) {
           throw new BadRequestException("Payment exceeds invoice amount");
         }
-        throw error;
-      }
-    }, { timeout: 30_000, maxWait: 10_000 });
+        try {
+          const payment = await tx.payment.create({
+            data: {
+              factoryId: user.factoryId,
+              invoiceId: invoice.id,
+              amount: input.amount,
+              method: input.method,
+              paidAt,
+              idempotencyKey: input.clientOpId,
+            },
+          });
+          await tx.invoice.update({
+            where: { id: invoice.id },
+            data: { version: { increment: 1 } },
+          });
+          await tx.auditEvent.create({
+            data: {
+              factoryId: user.factoryId,
+              actorId: user.id,
+              action: "sales.payment",
+              entityType: "payment",
+              entityId: payment.id,
+              payload: { invoiceId: invoice.id, amount: input.amount },
+            },
+          });
+          const customer = await tx.customer.findFirst({
+            where: { id: invoice.customerId, factoryId: user.factoryId },
+          });
+          await this.books.postPayment(tx, user, {
+            paymentId: payment.id,
+            invoiceId: invoice.id,
+            customerName: customer?.name ?? "Unknown",
+            amount: input.amount,
+            method: input.method,
+            clientOpId: input.clientOpId,
+            paidAt,
+          });
+          return payment;
+        } catch (error) {
+          if (String(error).includes("Payment exceeds invoice amount")) {
+            throw new BadRequestException("Payment exceeds invoice amount");
+          }
+          throw error;
+        }
+      },
+      { timeout: 30_000, maxWait: 10_000 },
+    );
   }
 
   /**
@@ -580,12 +720,19 @@ export class SalesService {
   async recordCashSale(
     user: AuthenticatedUser,
     salesOrderId: string,
-    input: { amount: number; saleDate: string; clientOpId: string; buyerName?: string; note?: string },
+    input: {
+      amount: number;
+      saleDate: string;
+      clientOpId: string;
+      buyerName?: string;
+      note?: string;
+    },
   ) {
     if (!Number.isFinite(input.amount) || input.amount <= 0) {
       throw new BadRequestException("Amount must be positive");
     }
-    if (!input.clientOpId) throw new BadRequestException("clientOpId is required");
+    if (!input.clientOpId)
+      throw new BadRequestException("clientOpId is required");
     const saleDate = parseBusinessDate(input.saleDate, "saleDate");
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     if (order.billingMode !== "cash_unbilled") {
@@ -593,10 +740,17 @@ export class SalesService {
     }
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.cashSale.findUnique({
-        where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId } },
+        where: {
+          factoryId_clientOpId: {
+            factoryId: user.factoryId,
+            clientOpId: input.clientOpId,
+          },
+        },
       });
       if (existing) return existing;
-      const invoiced = await tx.invoice.findFirst({ where: { salesOrderId: order.id } });
+      const invoiced = await tx.invoice.findFirst({
+        where: { salesOrderId: order.id },
+      });
       if (invoiced) throw new BadRequestException("Order is already invoiced");
 
       const sale = await tx.cashSale.create({
@@ -637,12 +791,19 @@ export class SalesService {
     });
   }
 
-  async returnSlabs(user: AuthenticatedUser, salesOrderId: string, slabIds: string[], reason: string) {
+  async returnSlabs(
+    user: AuthenticatedUser,
+    salesOrderId: string,
+    slabIds: string[],
+    reason: string,
+  ) {
     if (!reason?.trim()) throw new BadRequestException("Reason is required");
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     return this.prisma.$transaction(async (tx) => {
       await this.assertFactorySlabs(tx, user.factoryId, slabIds, order.id);
-      const invoice = await tx.invoice.findFirst({ where: { salesOrderId: order.id } });
+      const invoice = await tx.invoice.findFirst({
+        where: { salesOrderId: order.id },
+      });
       const lines = await tx.salesLineItem.findMany({
         where: { salesOrderId: order.id, slabId: { in: slabIds } },
       });
@@ -651,13 +812,24 @@ export class SalesService {
         0,
       );
       if (invoice && creditTaxable <= 0) {
-        throw new BadRequestException("Invoiced return needs a credit amount from order lines");
+        throw new BadRequestException(
+          "Invoiced return needs a credit amount from order lines",
+        );
       }
       for (const slabId of slabIds) {
-        const slab = await tx.slab.findFirst({ where: { id: slabId, factoryId: user.factoryId } });
-        if (!slab) throw new BadRequestException("Slab does not belong to this factory");
-        if (slab.salesStatus !== "sold" && slab.salesStatus !== "reserved" && slab.salesStatus !== "dispatched") {
-          throw new BadRequestException("Slab is not outbound stock for this order");
+        const slab = await tx.slab.findFirst({
+          where: { id: slabId, factoryId: user.factoryId },
+        });
+        if (!slab)
+          throw new BadRequestException("Slab does not belong to this factory");
+        if (
+          slab.salesStatus !== "sold" &&
+          slab.salesStatus !== "reserved" &&
+          slab.salesStatus !== "dispatched"
+        ) {
+          throw new BadRequestException(
+            "Slab is not outbound stock for this order",
+          );
         }
       }
       const ret = await tx.customerReturn.create({
@@ -671,13 +843,22 @@ export class SalesService {
       });
       let creditNote = null;
       if (invoice) {
-        const creditNoteNumber = await nextDocumentNumber(tx, user.factoryId, "CREDIT_NOTE");
+        const creditNoteNumber = await nextDocumentNumber(
+          tx,
+          user.factoryId,
+          "CREDIT_NOTE",
+        );
         // Reverse the tax on the same heads the invoice charged, so a cross-state sale
         // credits IGST and a local one credits CGST + SGST.
         const creditCustomer = await tx.customer.findFirst({
           where: { id: order.customerId, factoryId: user.factoryId },
         });
-        const creditGst = await this.resolveGst(tx, user.factoryId, creditTaxable, creditCustomer);
+        const creditGst = await this.resolveGst(
+          tx,
+          user.factoryId,
+          creditTaxable,
+          creditCustomer,
+        );
         try {
           creditNote = await tx.creditNote.create({
             data: {
@@ -750,21 +931,29 @@ export class SalesService {
   async recovery(factoryId: string) {
     const blocks = await this.prisma.rawBlock.findMany({
       where: { factoryId },
-      include: { slabs: { include: { orderLines: { include: { salesOrder: true } } } } },
+      include: {
+        slabs: { include: { orderLines: { include: { salesOrder: true } }, returnLines: { include: { parent: true } } } },
+      },
     });
-    return blocks.map((block) => {
-      const soldSqft = block.slabs
-        .flatMap((s) => s.orderLines)
-        .filter((line) => line.salesOrder.status === "CONFIRMED" || line.salesOrder.status === "PARTIALLY_DELIVERED" || line.salesOrder.status === "DELIVERED")
-        .reduce((sum, line) => sum + Number(line.quantitySqft), 0);
-      const tons = Number(block.weightTons ?? 0);
-      return {
-        serialNumber: block.serialNumber,
-        soldSqft,
-        weightTons: tons,
-        ratio: recoveryRatio(soldSqft, tons),
-      };
-    });
+    return blocks
+      .filter(
+        (block) =>
+          block.slabs.length > 0 &&
+          block.slabs.every((s) => s.salesStatus === "dispatched"),
+      )
+      .map((block) => {
+        const soldSqft = block.slabs
+          .filter(s=>s.salesStatus === "dispatched")
+          .flatMap(s=>s.orderLines.filter(l=>!s.returnLines.some(r=>r.parent.salesOrderId===l.salesOrderId)))
+          .reduce((sum, line) => sum + Number(line.quantitySqft), 0);
+        const tons = Number(block.weightTons ?? 0);
+        return {
+          serialNumber: block.serialNumber,
+          soldSqft,
+          weightTons: tons,
+          ratio: recoveryRatio(soldSqft, tons),
+        };
+      });
   }
 
   /**

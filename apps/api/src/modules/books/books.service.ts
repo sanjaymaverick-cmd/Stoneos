@@ -4,12 +4,32 @@ import { PrismaService } from "../../common/prisma.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { bankLedgerForMethod, ensureChart, expenseLedgerForCategory } from "./chart";
 import { ensureParty, postVoucher, type PostLine } from "./posting";
-import { minorToRupees, rupeesToMinor, type GstBreakdown } from "./money";
+import {
+  minorToRupees,
+  rupeesToMinor,
+  partyNameKey,
+  type GstBreakdown,
+} from "./money";
 import { operationalDateFor } from "@stoneos/domain";
 
 @Injectable()
 export class BooksService {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
+
+  async collectedPayments(factoryId: string, paidAt: Date) {
+    const r = await this.prisma.payment.aggregate({
+      where: { factoryId, paidAt },
+      _sum: { amount: true },
+    });
+    return Number(r._sum.amount ?? 0);
+  }
+  async collectedCash(factoryId: string, saleDate: Date) {
+    const r = await this.prisma.cashSale.aggregate({
+      where: { factoryId, saleDate },
+      _sum: { amount: true },
+    });
+    return Number(r._sum.amount ?? 0);
+  }
 
   async ensureFactoryChart(factoryId: string) {
     await this.prisma.$transaction((tx) => ensureChart(tx, factoryId));
@@ -89,9 +109,20 @@ export class BooksService {
   async postCreditNote(
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
-    input: { creditNoteId: string; invoiceId: string; customerName: string; gst: GstBreakdown; clientOpId: string },
+    input: {
+      creditNoteId: string;
+      invoiceId: string;
+      customerName: string;
+      gst: GstBreakdown;
+      clientOpId: string;
+    },
   ) {
-    const party = await ensureParty(tx, user.factoryId, input.customerName, "customer");
+    const party = await ensureParty(
+      tx,
+      user.factoryId,
+      input.customerName,
+      "customer",
+    );
     const gst = input.gst;
     // A credit note reverses the original heads: tax comes back out of the same liability.
     const lines: PostLine[] = [
@@ -160,7 +191,13 @@ export class BooksService {
   async postCashSale(
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
-    input: { cashSaleId: string; amountMinor: number; memo: string; clientOpId: string; saleDate?: Date },
+    input: {
+      cashSaleId: string;
+      amountMinor: number;
+      memo: string;
+      clientOpId: string;
+      saleDate?: Date;
+    },
   ) {
     return postVoucher(tx, {
       factoryId: user.factoryId,
@@ -181,7 +218,13 @@ export class BooksService {
   async postLabourPay(
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
-    input: { amountMinor: number; method: string; clientOpId: string; memo: string; date?: Date },
+    input: {
+      amountMinor: number;
+      method: string;
+      clientOpId: string;
+      memo: string;
+      date?: Date;
+    },
   ) {
     const bank = bankLedgerForMethod(input.method);
     return postVoucher(tx, {
@@ -252,7 +295,11 @@ export class BooksService {
     // factory volume this rejected all 104 expenses while reporting nothing wrong.
     const expenseMinor = minor - taxMinor;
 
-    if (gst && Math.abs(gst.taxableMinor - expenseMinor) > EXPENSE_ROUNDING_TOLERANCE_MINOR) {
+    if (
+      gst &&
+      Math.abs(gst.taxableMinor - expenseMinor) >
+        EXPENSE_ROUNDING_TOLERANCE_MINOR
+    ) {
       // Beyond rounding, the two figures disagree about what was actually bought.
       // Absorbing that silently would bury a typo in the cost of running the plant.
       throw new BadRequestException(
@@ -262,7 +309,9 @@ export class BooksService {
       );
     }
 
-    const lines: PostLine[] = [{ ledgerCode: exp, debit: expenseMinor, credit: 0 }];
+    const lines: PostLine[] = [
+      { ledgerCode: exp, debit: expenseMinor, credit: 0 },
+    ];
     for (const [ledgerCode, amount] of taxLines) {
       lines.push({ ledgerCode, debit: amount, credit: 0 });
     }
@@ -287,20 +336,135 @@ export class BooksService {
     });
     const lines = await this.prisma.voucherLine.findMany({
       where: { partyId: { in: parties.map((p) => p.id) } },
-      include: { ledger: true },
+      include: { ledger: true, voucher: true },
     });
-    return parties.map((p) => {
+    const receipts = await this.prisma.rawBlock.findMany({
+      where: { factoryId },
+      include: { supplier: true },
+    });
+    const invoices = await this.prisma.invoice.findMany({
+      where: { factoryId },
+      include: { customer: true, payments: true, creditNotes: true },
+    });
+    const rows = parties.map((p) => {
       const mine = lines.filter((l) => l.partyId === p.id);
-      const ar = mine.filter((l) => l.ledger.code === "AR").reduce((s, l) => s + l.debit - l.credit, 0);
-      const ap = mine.filter((l) => l.ledger.code === "AP").reduce((s, l) => s + l.credit - l.debit, 0);
+      const openingAr = mine
+        .filter(
+          (l) =>
+            l.ledger.code === "AR" &&
+            !["sales_invoice", "sales_pay", "sales_cn"].includes(
+              l.voucher.source,
+            ),
+        )
+        .reduce((s, l) => s + l.debit - l.credit, 0);
+      const invoiceAr = invoices
+        .filter((i) => partyNameKey(i.customer.name) === p.nameKey)
+        .reduce(
+          (s, i) =>
+            s +
+            Math.max(
+              0,
+              rupeesToMinor(Number(i.amount)) -
+                i.payments.reduce(
+                  (n, x) => n + rupeesToMinor(Number(x.amount)),
+                  0,
+                ) -
+                i.creditNotes.reduce(
+                  (n, x) => n + rupeesToMinor(Number(x.amount)),
+                  0,
+                ),
+            ),
+          0,
+        );
+      const ar = openingAr + invoiceAr;
+      const ledgerAp = mine
+        .filter((l) => l.ledger.code === "AP")
+        .reduce((s, l) => s + l.credit - l.debit, 0);
+      const purchases = receipts.filter(
+        (r) =>
+          partyNameKey(r.supplier?.name ?? "Unknown supplier") === p.nameKey,
+      );
+      const unposted = purchases
+        .filter(
+          (r) =>
+            !mine.some(
+              (l) =>
+                l.voucher.source === "block_purchase" &&
+                l.voucher.sourceId === r.id,
+            ),
+        )
+        .reduce((s, r) => s + rupeesToMinor(Number(r.invoicedAmount ?? 0)), 0);
+      const paid = purchases.reduce(
+        (s, r) => s + rupeesToMinor(Number(r.actualAmountPaid ?? 0)),
+        0,
+      );
+      const ap = ledgerAp + unposted - paid;
       return {
         ...p,
         outstandingAr: minorToRupees(ar),
         outstandingAp: minorToRupees(ap),
-        youllGet: minorToRupees(Math.max(0, ar)),
-        youllGive: minorToRupees(Math.max(0, ap)),
+        youllGet: minorToRupees(Math.max(0, ar - ap)),
+        youllGive: minorToRupees(Math.max(0, ap - ar)),
       };
     });
+    // Old invoices may predate ledger posting: show their customer without creating data on a read.
+    const missing = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        kind: string;
+        outstandingAr: number;
+        outstandingAp: number;
+        youllGet: number;
+        youllGive: number;
+      }
+    >();
+    for (const i of invoices) {
+      if (parties.some((p) => p.nameKey === partyNameKey(i.customer.name)))
+        continue;
+      const amount = Math.max(
+        0,
+        Number(i.amount) -
+          i.payments.reduce((n, p) => n + Number(p.amount), 0) -
+          i.creditNotes.reduce((n, c) => n + Number(c.amount), 0),
+      );
+      const row = missing.get(i.customerId) ?? {
+        id: i.customerId,
+        name: i.customer.name,
+        kind: "customer",
+        outstandingAr: 0,
+        outstandingAp: 0,
+        youllGet: 0,
+        youllGive: 0,
+      };
+      row.youllGet += amount;
+      row.outstandingAr += amount;
+      missing.set(i.customerId, row);
+    }
+    for (const r of receipts) {
+      const name = r.supplier?.name ?? "Unknown supplier";
+      if (parties.some((p) => p.nameKey === partyNameKey(name))) continue;
+      const amount = Math.max(
+        0,
+        Number(r.invoicedAmount ?? 0) - Number(r.actualAmountPaid ?? 0),
+      );
+      if (!amount) continue;
+      const key = r.supplierId ?? "unknown-supplier";
+      const row = missing.get(key) ?? {
+        id: key,
+        name,
+        kind: "supplier",
+        outstandingAr: 0,
+        outstandingAp: 0,
+        youllGet: 0,
+        youllGive: 0,
+      };
+      row.youllGive += amount;
+      row.outstandingAp += amount;
+      missing.set(key, row);
+    }
+    return [...rows, ...missing.values()];
   }
 
   async partyStatement(factoryId: string, partyId: string) {

@@ -32,12 +32,12 @@
  * cached page would then be served to the next person on a shared device.
  */
 
-const CACHE = "stoneos-shell-v2";
+const CACHE = "stoneos-shell-v3";
 const OFFLINE_URL = "/offline.html";
 const NAVIGATION_TIMEOUT_MS = 4000;
 
 /* Enough of the app to open cold with no network. */
-const PRECACHE = [OFFLINE_URL, "/login", "/dashboard", "/manifest.webmanifest"];
+const PRECACHE = [OFFLINE_URL, "/login", "/dashboard", "/manifest.webmanifest", "/fonts/IBMPlexSans.ttf", "/fonts/Fraunces.ttf"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

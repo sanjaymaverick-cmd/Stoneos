@@ -24,7 +24,11 @@ export const AUDITOR_ROLE: Role = "auditor";
 
 export const USER_MANAGEMENT_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE];
 export const HISTORICAL_IMPORT_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE];
-export const OPERATIONAL_DATA_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, SUPERVISOR_ROLE];
+export const OPERATIONAL_DATA_ROLES: Role[] = [
+  OWNER_ROLE,
+  MANAGER_ROLE,
+  SUPERVISOR_ROLE,
+];
 export const PRODUCTION_INPUT_ROLES: Role[] = [
   OWNER_ROLE,
   MANAGER_ROLE,
@@ -37,7 +41,12 @@ export const INVENTORY_DATA_ROLES: Role[] = [
   SUPERVISOR_ROLE,
   INVENTORY_ROLE,
 ];
-export const SALES_DATA_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, SUPERVISOR_ROLE, SALES_ROLE];
+export const SALES_DATA_ROLES: Role[] = [
+  OWNER_ROLE,
+  MANAGER_ROLE,
+  SUPERVISOR_ROLE,
+  SALES_ROLE,
+];
 export const SALES_READ_ROLES: Role[] = [
   OWNER_ROLE,
   MANAGER_ROLE,
@@ -55,7 +64,12 @@ export const EXPENSE_DATA_ROLES: Role[] = [
   ACCOUNTANT_ROLE,
 ];
 export const PAYMENT_ROLES: Role[] = [...SALES_DATA_ROLES, ACCOUNTANT_ROLE];
-export const AUDIT_READ_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, ADMIN_ROLE, AUDITOR_ROLE];
+export const AUDIT_READ_ROLES: Role[] = [
+  OWNER_ROLE,
+  MANAGER_ROLE,
+  ADMIN_ROLE,
+  AUDITOR_ROLE,
+];
 /**
  * The owner's own view: the CEO dashboard and the snapshot Copilot.
  *
@@ -77,7 +91,10 @@ export const COMMERCIAL_READ_ROLES: Role[] = [
   AUDITOR_ROLE,
   ADMIN_ROLE,
 ];
-export const BOOKS_STATEMENT_ROLES: Role[] = [...COMMERCIAL_READ_ROLES, SUPERVISOR_ROLE];
+export const BOOKS_STATEMENT_ROLES: Role[] = [
+  ...COMMERCIAL_READ_ROLES,
+  SUPERVISOR_ROLE,
+];
 export const INTAKE_DRAFT_ROLES: Role[] = [
   OWNER_ROLE,
   MANAGER_ROLE,
@@ -85,31 +102,37 @@ export const INTAKE_DRAFT_ROLES: Role[] = [
   OPERATOR_ROLE,
   ACCOUNTANT_ROLE,
 ];
-export const CASH_DRAWER_LOCK_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, ACCOUNTANT_ROLE];
+export const CASH_DRAWER_LOCK_ROLES: Role[] = [
+  OWNER_ROLE,
+  MANAGER_ROLE,
+  ACCOUNTANT_ROLE,
+];
 export const MUSTER_ATTEND_ROLES: Role[] = [
   OWNER_ROLE,
   MANAGER_ROLE,
   SUPERVISOR_ROLE,
   OPERATOR_ROLE,
 ];
-export const MUSTER_PAY_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, ACCOUNTANT_ROLE];
+export const MUSTER_PAY_ROLES: Role[] = [
+  OWNER_ROLE,
+  MANAGER_ROLE,
+  ACCOUNTANT_ROLE,
+];
 export const COPILOT_PROPOSE_ROLES: Role[] = [OWNER_ROLE, ACCOUNTANT_ROLE];
 /**
  * Who may post a journal straight to the general ledger. Narrow on purpose: a journal
  * moves money between accounts with no document behind it.
  */
-export const JOURNAL_POST_ROLES: Role[] = [OWNER_ROLE, MANAGER_ROLE, ACCOUNTANT_ROLE];
+export const JOURNAL_POST_ROLES: Role[] = [
+  OWNER_ROLE,
+  MANAGER_ROLE,
+  ACCOUNTANT_ROLE,
+];
 export const ANY_AUTHENTICATED_ROLE: Role[] = [...ROLES];
 
 export const STAFF_PROVISIONABLE_ROLES: Role[] = [
-  MANAGER_ROLE,
-  ADMIN_ROLE,
   SUPERVISOR_ROLE,
   OPERATOR_ROLE,
-  INVENTORY_ROLE,
-  SALES_ROLE,
-  ACCOUNTANT_ROLE,
-  AUDITOR_ROLE,
 ];
 
 /**
@@ -172,4 +195,11 @@ export function canGrantOwner(role: Role): boolean {
 
 export function canAccess(role: Role, allowed: readonly Role[]): boolean {
   return allowed.includes(role);
+}
+
+/** Compatibility mapping; persisted historic roles are preserved. */
+export function effectiveRole(role: Role): Role {
+  if (["manager", "admin"].includes(role)) return "owner";
+  if (["inventory", "sales"].includes(role)) return "supervisor";
+  return role;
 }

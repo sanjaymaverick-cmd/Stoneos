@@ -31,14 +31,18 @@ export class ReportsService {
   }
 
   async ceoBrief(factoryId: string) {
-    const factory = await this.prisma.factory.findUniqueOrThrow({ where: { id: factoryId } });
+    const factory = await this.prisma.factory.findUniqueOrThrow({
+      where: { id: factoryId },
+    });
     const now = new Date();
     // Month-to-date is a window, not "from the 1st onwards": a payment or expense
     // dated next month is not this month's. Timestamp columns use IST instants;
     // date-only columns use calendar dates, because Postgres truncates an instant
     // bound to a date and 00:00 IST is the previous day in UTC.
     const monthStart = factoryMonthStart(now);
-    const thisMonth = new Date(monthStart.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 7);
+    const thisMonth = new Date(monthStart.getTime() + 5.5 * 3600 * 1000)
+      .toISOString()
+      .slice(0, 7);
     const days = calendarMonthUtcRange(thisMonth);
     const instants = { gte: monthStart, lt: factoryMonthStart(days.end) };
     const dates = { gte: days.start, lt: days.end };
@@ -62,17 +66,34 @@ export class ReportsService {
       damagedCost,
       blocks,
     ] = await Promise.all([
-      this.prisma.rawBlock.count({ where: { factoryId, currentStatus: "in_stock" } }),
+      this.prisma.rawBlock.count({
+        where: { factoryId, currentStatus: "in_stock" },
+      }),
       this.prisma.slab.count({ where: { factoryId, salesStatus: "in_stock" } }),
-      this.prisma.cuttingSession.count({ where: { factoryId, status: "IN_PROGRESS" } }),
-      this.prisma.polishingSession.count({ where: { factoryId, status: "IN_PROGRESS" } }),
-      this.prisma.salesOrder.count({ where: { factoryId, status: "CONFIRMED" } }),
+      this.prisma.cuttingSession.count({
+        where: { factoryId, status: "IN_PROGRESS" },
+      }),
+      this.prisma.polishingSession.count({
+        where: { factoryId, status: "IN_PROGRESS" },
+      }),
+      this.prisma.salesOrder.count({
+        where: { factoryId, status: "CONFIRMED" },
+      }),
       this.prisma.maintenanceJob.count({
         where: { factoryId, completedAt: null, dueOn: { lte: soon } },
       }),
-      this.prisma.invoice.aggregate({ where: { factoryId }, _sum: { amount: true } }),
-      this.prisma.payment.aggregate({ where: { factoryId }, _sum: { amount: true } }),
-      this.prisma.creditNote.aggregate({ where: { factoryId }, _sum: { amount: true } }),
+      this.prisma.invoice.aggregate({
+        where: { factoryId },
+        _sum: { amount: true },
+      }),
+      this.prisma.payment.aggregate({
+        where: { factoryId },
+        _sum: { amount: true },
+      }),
+      this.prisma.creditNote.aggregate({
+        where: { factoryId },
+        _sum: { amount: true },
+      }),
       this.prisma.invoice.aggregate({
         where: { factoryId, createdAt: instants },
         _sum: { amount: true },
@@ -95,23 +116,36 @@ export class ReportsService {
       }),
       this.prisma.rawBlock.findMany({
         where: { factoryId },
-        include: { slabs: { include: { orderLines: { include: { salesOrder: true } } } } },
+        include: {
+          slabs: { include: { orderLines: { include: { salesOrder: true } }, returnLines: { include: { parent: true } } } },
+        },
       }),
     ]);
 
+    const invoices = await this.prisma.invoice.findMany({
+      where: { factoryId },
+      include: { payments: true, creditNotes: true },
+    });
+    const outstandingAr = invoices.reduce(
+      (sum, invoice) =>
+        sum +
+        Math.max(
+          0,
+          Number(invoice.amount) -
+            invoice.payments.reduce((n, p) => n + Number(p.amount), 0) -
+            invoice.creditNotes.reduce((n, c) => n + Number(c.amount), 0),
+        ),
+      0,
+    );
     const recoveryRows = blocks.map((block) => {
       const soldSqft = block.slabs
-        .flatMap((s) => s.orderLines)
-        .filter(
-          (line) =>
-            line.salesOrder.status === "CONFIRMED" ||
-            line.salesOrder.status === "PARTIALLY_DELIVERED" ||
-            line.salesOrder.status === "DELIVERED",
-        )
+        .filter(s=>s.salesStatus === "dispatched")
+        .flatMap(s=>s.orderLines.filter(l=>!s.returnLines.some(r=>r.parent.salesOrderId===l.salesOrderId)))
         .reduce((sum, line) => sum + Number(line.quantitySqft), 0);
-      // A slab counts as committed once it leaves in_stock: reserved and dispatched both
-      // appear in soldSqft above, so numerator and denominator agree on "sold".
-      const unsoldSlabCount = block.slabs.filter((s) => s.salesStatus === "in_stock").length;
+      // Reserved pieces still belong to the yard. Only sold-out blocks contribute.
+      const unsoldSlabCount = block.slabs.filter(
+        (s) => s.salesStatus !== "dispatched",
+      ).length;
       return {
         soldSqft,
         weightTons: Number(block.weightTons ?? 0),
@@ -129,9 +163,9 @@ export class ReportsService {
       recoveryRatio: recovery.ratio,
       settledBlocks: recovery.settledBlocks,
       openBlocks: recovery.openBlocks,
-      outstandingAr: invoicedTotal - creditedTotal - collectedTotal,
+      outstandingAr,
       invoicedMtd: Number(invoicedMtd._sum.amount ?? 0),
-      collectedMtd: Number(collectedMtd._sum.amount ?? 0),
+      collectedMtd: Number(collectedMtd._sum.amount ?? 0) + Number(unbilledCashMtd._sum.amount ?? 0),
       expensesMtd: Number(expensesMtd._sum.amount ?? 0),
       unbilledCashMtd: Number(unbilledCashMtd._sum.amount ?? 0),
       maintenanceDue,
@@ -160,7 +194,9 @@ export class ReportsService {
       narrative: ceoNarrative(snap, exceptions),
       exceptions,
       blockRecoveries: recoveryRows
-        .filter((r) => r.soldSqft > 0)
+        .filter(
+          (r) => r.soldSqft > 0 && r.slabCount > 0 && r.unsoldSlabCount === 0,
+        )
         .map((r) => ({
           ...r,
           settled: r.unsoldSlabCount === 0,

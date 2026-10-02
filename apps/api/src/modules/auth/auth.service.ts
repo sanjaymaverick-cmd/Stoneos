@@ -6,7 +6,7 @@ import {
   hashSessionToken,
   verifyPassword,
 } from "@stoneos/auth";
-import { passwordSchema } from "@stoneos/contracts";
+import { passwordSchema, effectiveRole, type Role } from "@stoneos/contracts";
 import { PrismaService } from "../../common/prisma.service";
 import { AuditService } from "../../common/audit.service";
 import {
@@ -59,7 +59,10 @@ export class AuthService {
     }
     if (!user.active) throw new UnauthorizedException(INVALID_CREDENTIALS);
     if (locked) {
-      const minutes = Math.max(1, Math.ceil((lockedUntil!.getTime() - Date.now()) / 60_000));
+      const minutes = Math.max(
+        1,
+        Math.ceil((lockedUntil!.getTime() - Date.now()) / 60_000),
+      );
       throw new UnauthorizedException(
         `Too many failed attempts. This login is locked for another ${minutes} minute${minutes === 1 ? "" : "s"}.`,
       );
@@ -67,7 +70,11 @@ export class AuthService {
 
     // A clean login clears the slate: someone who mistypes on Monday and gets in on
     // Tuesday is not one bad morning away from suspension.
-    if (user.failedLoginCount > 0 || user.lockoutCount > 0 || user.lockedUntil) {
+    if (
+      user.failedLoginCount > 0 ||
+      user.lockoutCount > 0 ||
+      user.lockedUntil
+    ) {
       await this.prisma.appUser.update({
         where: { id: user.id },
         data: { failedLoginCount: 0, lockoutCount: 0, lockedUntil: null },
@@ -151,10 +158,17 @@ export class AuthService {
    * {@link LOGIN_ATTEMPTS_BEFORE_SUSPEND} more failures suspend it, and only the owner
    * issuing new credentials brings it back.
    */
-  private async registerFailedLogin(user: { id: string; factoryId: string; failedLoginCount: number; lockoutCount: number }) {
+  private async registerFailedLogin(user: {
+    id: string;
+    factoryId: string;
+    failedLoginCount: number;
+    lockoutCount: number;
+  }) {
     const attempts = user.failedLoginCount + 1;
     const threshold =
-      user.lockoutCount === 0 ? LOGIN_ATTEMPTS_BEFORE_LOCK : LOGIN_ATTEMPTS_BEFORE_SUSPEND;
+      user.lockoutCount === 0
+        ? LOGIN_ATTEMPTS_BEFORE_LOCK
+        : LOGIN_ATTEMPTS_BEFORE_SUSPEND;
 
     if (attempts < threshold) {
       await this.prisma.appUser.update({
@@ -225,7 +239,7 @@ export class AuthService {
       username: user.username,
       name: user.name,
       email: user.email,
-      role: user.role,
+      role: effectiveRole(user.role as Role),
       factoryId: user.factoryId,
       mustChangePassword: user.mustChangePassword,
       active: user.active,

@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { hashSessionToken } from "@stoneos/auth";
-import type { Role } from "@stoneos/contracts";
+import { effectiveRole, type Role } from "@stoneos/contracts";
 import { PrismaService } from "./prisma.service";
 import { IS_PUBLIC, ROLES_KEY, type AuthenticatedUser } from "./current-user";
 
@@ -19,6 +19,38 @@ export function assertAllowedRoles(allowed: Role[] | undefined, role: Role) {
   if (!allowed.includes(role)) {
     throw new ForbiddenException("Insufficient role");
   }
+}
+
+/** Authorization on persisted roles; historic read-only accounts never gain writes. */
+export function assertDailyAccess(role: Role, method: string, path: string) {
+  if (path.includes("/auth/")) return;
+  const mapped = effectiveRole(role);
+  if (["accountant", "auditor"].includes(role)) {
+    if (method !== "GET" || !/\/(books|expenses|audit|reports)\b/.test(path))
+      throw new ForbiddenException("Read-only access to Money and Audit");
+    return;
+  }
+  if (
+    mapped !== "owner" &&
+    /\/(admin|audit|expenses|books|gst|tally|intake)\b/.test(path)
+  )
+    throw new ForbiddenException("Owner access required");
+  if (
+    mapped === "supervisor" &&
+    method !== "GET" &&
+    /\/(invoices|sales-orders\/[^/]+\/invoice)(\/|$)/.test(path)
+  )
+    throw new ForbiddenException("Owner records invoices and payments");
+  if (
+    mapped === "operator" &&
+    method !== "GET" &&
+    !/\/(cutting-sessions|polishing-sessions|muster\/attendance)(\/|$)/.test(
+      path,
+    )
+  )
+    throw new ForbiddenException(
+      "Operator can mark attendance and work Cut sessions",
+    );
 }
 
 @Injectable()
@@ -54,7 +86,7 @@ export class SessionGuard implements CanActivate {
       username: user.username,
       name: user.name,
       email: user.email,
-      role: user.role as Role,
+      role: effectiveRole(user.role as Role),
       factoryId: user.factoryId,
       mustChangePassword: user.mustChangePassword,
       active: user.active,
@@ -63,6 +95,8 @@ export class SessionGuard implements CanActivate {
     request.user = authUser;
 
     const path: string = request.path ?? "";
+    assertDailyAccess(user.role as Role, request.method, path);
+
     // A temporary password buys nothing but the ability to replace it. Reads were
     // previously allowed, so a credential slip opened the CEO board, outstanding AR
     // and the CSV exports before it was ever changed.
@@ -73,7 +107,9 @@ export class SessionGuard implements CanActivate {
       // the change-password screen cannot render.
       path.endsWith("/auth/me");
     if (user.mustChangePassword && !allowedOnTempPassword) {
-      throw new ForbiddenException("Temporary password must be changed before continuing");
+      throw new ForbiddenException(
+        "Temporary password must be changed before continuing",
+      );
     }
 
     const allowed = this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [

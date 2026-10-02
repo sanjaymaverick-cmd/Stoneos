@@ -50,7 +50,7 @@ export default function RokadPage() {
     }
   }
 
-  const canLock = me ? canAccess(me.role, CASH_DRAWER_LOCK_ROLES) : false;
+  const canLock = me?.role === "owner";
   const cash = data?.cash ?? [];
 
   return (
@@ -78,7 +78,7 @@ export default function RokadPage() {
             <button type="submit">Lock drawer</button>
           </form>
         ) : (
-          <p className="empty">Only owner, manager, or accountant can lock the drawer.</p>
+          <p className="empty">The owner locks the drawer.</p>
         )}
       </div>
       {cash.length === 0 ? (
