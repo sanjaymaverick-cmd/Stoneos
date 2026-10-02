@@ -7,6 +7,7 @@ COPY apps/desktop/package.json apps/desktop/
 COPY apps/android/package.json apps/android/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/domain/package.json packages/domain/
+COPY packages/xlsx/package.json packages/xlsx/
 COPY packages/auth/package.json packages/auth/
 COPY packages/storage/package.json packages/storage/
 COPY packages/sync-client/package.json packages/sync-client/

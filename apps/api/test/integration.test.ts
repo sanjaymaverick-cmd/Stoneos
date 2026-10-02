@@ -23,6 +23,7 @@ import { MusterService } from "../src/modules/muster/muster.service";
 import { GstService } from "../src/modules/gst/gst.service";
 import { CopilotService } from "../src/modules/books/copilot.service";
 import { ReportsService } from "../src/modules/reports/reports.service";
+import { DailyReportService } from "../src/modules/reports/daily-report.service";
 import { ConsumablesController } from "../src/modules/production/consumables.controller";
 import type { AuthenticatedUser } from "../src/common/current-user";
 
@@ -82,6 +83,7 @@ describe("postgres-backed workflows", () => {
   let gst: GstService;
   let copilot: CopilotService;
   let reports: ReportsService;
+  let dailyReports: DailyReportService;
   let factoryId = "";
   let owner: AuthenticatedUser;
 
@@ -124,6 +126,7 @@ describe("postgres-backed workflows", () => {
     gst = new GstService(prisma as never);
     copilot = new CopilotService(prisma as never, audit);
     reports = new ReportsService(prisma as never);
+    dailyReports = new DailyReportService(prisma as never);
 
     await prisma.$executeRawUnsafe(`
       DO $$ DECLARE r RECORD;
@@ -2178,4 +2181,346 @@ describe("postgres-backed workflows", () => {
     const brief = await reports.ceoBrief(factory.id);
     assert.equal(brief.expensesMtd, 100, "neither last month's final day nor next month's rows count");
   });
+
+  /**
+   * Seed one operational day's work. Timestamps are set explicitly rather than
+   * left to now(), because what these tests are checking is precisely which day a
+   * record lands on.
+   */
+  async function seedDay(factoryId: string, day: string) {
+    const at = (istHour: number, istMinute = 0) =>
+      new Date(Date.parse(`${day}T00:00:00+05:30`) + (istHour * 60 + istMinute) * 60_000);
+
+    const machine = await prisma.machine.findFirstOrThrow({
+      where: { factoryId, machineType: "CUTTING" },
+    });
+    const block = await prisma.rawBlock.create({
+      data: {
+        factoryId,
+        serialNumber: `DPR-${day}`,
+        varietyName: "Tan Brown",
+        weightTons: "20",
+        purchaseDate: new Date(`${day}T00:00:00Z`),
+      },
+    });
+    const session = await prisma.cuttingSession.create({
+      data: {
+        factoryId,
+        rawBlockId: block.id,
+        machineId: machine.id,
+        startedAt: at(8),
+        endedAt: at(17),
+        status: "COMPLETED",
+        damagedSlabCount: 2,
+        dayLogs: {
+          create: {
+            operationalDate: new Date(`${day}T00:00:00Z`),
+            runtimeHours: "9.5",
+            downtimeMinutes: 30,
+            powerConsumptionKwh: "412.75",
+            slabsProducedCount: 50,
+          },
+        },
+      },
+    });
+
+    // Three slabs: two in the day shift, one cut at 02:00 the following morning,
+    // which is still this operational day's work.
+    const slabs = [];
+    for (const [index, when] of [at(10), at(14), at(26)].entries()) {
+      slabs.push(
+        await prisma.slab.create({
+          data: {
+            factoryId,
+            parentBlockId: block.id,
+            cuttingSessionId: session.id,
+            slabSerial: `${day}-S${index}`,
+            varietyName: "Tan Brown",
+            lengthFt: "8",
+            widthFt: "5",
+            createdAt: when,
+          },
+        }),
+      );
+    }
+    return { block, session, slabs, at };
+  }
+
+  it("reports a day's production, sales and money from the records", async () => {
+    const { factory } = await staffFactory("dpr");
+    const day = "2026-05-12";
+    const { slabs, at } = await seedDay(factory.id, day);
+
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Shree Marbles", stateCode: "08" },
+    });
+    const order = await prisma.salesOrder.create({
+      data: {
+        factoryId: factory.id,
+        customerId: customer.id,
+        status: "CONFIRMED",
+        orderDate: new Date(`${day}T00:00:00Z`),
+        lines: { create: [{ slabId: slabs[0]!.id, quantitySqft: "40", rate: "150" }] },
+      },
+    });
+    const invoice = await prisma.invoice.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        customerId: customer.id,
+        invoiceNumber: "INV-2026-09001",
+        amount: "7080",
+        taxableAmount: "6000",
+        cgstAmount: "540",
+        sgstAmount: "540",
+        gstRatePct: "18",
+        idempotencyKey: `dpr-inv-${day}`,
+        createdAt: at(16),
+      },
+    });
+    await prisma.payment.create({
+      data: {
+        factoryId: factory.id,
+        invoiceId: invoice.id,
+        amount: "5000",
+        paidAt: new Date(`${day}T00:00:00Z`),
+        method: "neft",
+        idempotencyKey: `dpr-pay-${day}`,
+      },
+    });
+    await prisma.expense.create({
+      data: {
+        factoryId: factory.id,
+        category: "diesel",
+        amount: "1800",
+        toWhom: "HP Pump",
+        expenseDate: new Date(`${day}T00:00:00Z`),
+      },
+    });
+    await prisma.cashSale.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        buyerName: "Counter",
+        amount: "2500",
+        saleDate: new Date(`${day}T00:00:00Z`),
+        clientOpId: `dpr-cash-${day}`,
+        recordedBy: "test",
+      },
+    });
+    await prisma.delivery.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        dispatchedAt: at(18),
+        lines: { create: [{ slabId: slabs[0]!.id }] },
+      },
+    });
+
+    const data = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+
+    assert.equal(data.cutting.machinesRunning, 1);
+    assert.equal(data.cutting.runtimeHours, 9.5);
+    assert.equal(data.cutting.downtimeMinutes, 30);
+    assert.equal(data.cutting.powerKwh, 412.75);
+    assert.equal(data.cutting.slabsProducedPerLog, 50, "what the shop wrote down");
+    assert.equal(data.cutting.slabsAddedToStock, 3, "what actually reached stock");
+    assert.equal(data.cutting.sqftAddedToStock, 120, "three 8x5 slabs");
+    assert.equal(data.cutting.slabsMissingDimensions, 0);
+    assert.equal(data.cutting.blocksCompleted, 1);
+    assert.equal(data.cutting.damagedSlabs, 2);
+
+    assert.equal(data.ordersTaken, 1);
+    assert.equal(data.orderSqft, 40);
+    assert.equal(data.orderValue, 6000);
+    assert.equal(data.invoices.length, 1);
+    assert.equal(data.invoices[0]!.customer, "Shree Marbles");
+    assert.equal(data.invoices[0]!.total, 7080);
+    assert.equal(data.cashSales[0]!.amount, 2500);
+    assert.equal(data.collections[0]!.amount, 5000);
+    assert.equal(data.collections[0]!.invoiceNumber, "INV-2026-09001");
+    assert.equal(data.expenses[0]!.category, "diesel");
+    assert.equal(data.expenses[0]!.paidTo, "HP Pump");
+    assert.equal(data.dispatches[0]!.slabs, 1);
+  });
+
+  it("counts a slab once however many polishing passes it took", async () => {
+    const { factory } = await staffFactory("dprpolish");
+    const day = "2026-09-09";
+    const { slabs } = await seedDay(factory.id, day);
+    const lpm = await prisma.machine.findFirstOrThrow({
+      where: { factoryId: factory.id, machineType: "POLISHING" },
+    });
+    // The same two slabs go through grinding, then resin, then polishing — three
+    // sessions, one day, two slabs finished.
+    for (const processType of ["GRINDING", "RESIN", "POLISHING"] as const) {
+      await prisma.polishingSession.create({
+        data: {
+          factoryId: factory.id,
+          machineId: lpm.id,
+          operationalDate: new Date(`${day}T00:00:00Z`),
+          processType,
+          status: "COMPLETED",
+          slabs: { create: [{ slabId: slabs[0]!.id }, { slabId: slabs[1]!.id }] },
+        },
+      });
+    }
+
+    const data = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+    assert.equal(data.polishing.sessions, 3, "three passes were run");
+    assert.equal(data.polishing.slabsPolished, 2, "over two slabs, not six");
+    assert.equal(data.polishing.sqftPolished, 80, "two 8x5 slabs, counted once each");
+  });
+
+  it("counts machines running, not the day-logs they filed", async () => {
+    const { factory } = await staffFactory("dprmachines");
+    const day = "2026-09-16";
+    await seedDay(factory.id, day);
+    const machine = await prisma.machine.findFirstOrThrow({
+      where: { factoryId: factory.id, machineType: "CUTTING" },
+    });
+    // A second block cut on the same machine the same day: one more session and
+    // day-log, but still one machine on the floor.
+    const second = await prisma.rawBlock.create({
+      data: { factoryId: factory.id, serialNumber: `DPR2-${day}`, varietyName: "Black", weightTons: "18" },
+    });
+    await prisma.cuttingSession.create({
+      data: {
+        factoryId: factory.id,
+        rawBlockId: second.id,
+        machineId: machine.id,
+        startedAt: new Date(`${day}T04:00:00Z`),
+        status: "IN_PROGRESS",
+        dayLogs: {
+          create: { operationalDate: new Date(`${day}T00:00:00Z`), runtimeHours: "4", slabsProducedCount: 20 },
+        },
+      },
+    });
+
+    const data = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+    assert.equal(data.cutting.machinesRunning, 1, "two sessions, one machine");
+    assert.equal(data.cutting.runtimeHours, 13.5, "but both sessions' hours still count");
+    assert.equal(data.cutting.slabsProducedPerLog, 70);
+  });
+
+  it("counts the night shift on the day it was worked, not the calendar day", async () => {
+    const { factory } = await staffFactory("dprnight");
+    const day = "2026-05-20";
+    await seedDay(factory.id, day);
+
+    // The 02:00 slab was cut after midnight, so the calendar has it on the 21st.
+    const worked = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+    const nextDay = await dailyReports.gather(factory.id, new Date("2026-05-21T00:00:00Z"));
+
+    assert.equal(worked.cutting.slabsAddedToStock, 3, "all three belong to the 20th's shift");
+    assert.equal(nextDay.cutting.slabsAddedToStock, 0, "and none of them to the 21st");
+  });
+
+  it("shows stock as it stood on the day, not as it stands now", async () => {
+    const { factory } = await staffFactory("dprstock");
+    const day = "2026-06-03";
+    const { slabs, at } = await seedDay(factory.id, day);
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Later Buyer", stateCode: "08" },
+    });
+    const order = await prisma.salesOrder.create({
+      data: {
+        factoryId: factory.id,
+        customerId: customer.id,
+        status: "CONFIRMED",
+        orderDate: new Date(`${day}T00:00:00Z`),
+      },
+    });
+    // Everything leaves the yard a week later.
+    await prisma.delivery.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        dispatchedAt: new Date(at(12).getTime() + 7 * 86_400_000),
+        lines: { create: slabs.map((slab) => ({ slabId: slab.id })) },
+      },
+    });
+
+    const onTheDay = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+    const afterwards = await dailyReports.gather(factory.id, new Date("2026-06-11T00:00:00Z"));
+
+    assert.equal(onTheDay.closingStock.slabsOnHand, 3, "nothing had shipped yet on the 3rd");
+    assert.equal(afterwards.closingStock.slabsOnHand, 0, "by the 11th it all had");
+    assert.equal(onTheDay.closingStock.blocksOnHand, 0, "the block was cut that same day");
+  });
+
+  it("puts a returned slab back on the yard", async () => {
+    const { factory } = await staffFactory("dprreturn");
+    const day = "2026-07-08";
+    const { slabs, at } = await seedDay(factory.id, day);
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Fussy Buyer", stateCode: "08" },
+    });
+    const order = await prisma.salesOrder.create({
+      data: {
+        factoryId: factory.id,
+        customerId: customer.id,
+        status: "CONFIRMED",
+        orderDate: new Date(`${day}T00:00:00Z`),
+      },
+    });
+    await prisma.delivery.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        dispatchedAt: at(18),
+        lines: { create: [{ slabId: slabs[0]!.id }, { slabId: slabs[1]!.id }] },
+      },
+    });
+    const afterDispatch = await dailyReports.gather(factory.id, new Date(`${day}T00:00:00Z`));
+    assert.equal(afterDispatch.closingStock.slabsOnHand, 1);
+
+    await prisma.customerReturn.create({
+      data: {
+        factoryId: factory.id,
+        salesOrderId: order.id,
+        reason: "edge chipped",
+        createdAt: new Date(at(12).getTime() + 2 * 86_400_000),
+        lines: { create: [{ slabId: slabs[0]!.id }] },
+      },
+    });
+    const afterReturn = await dailyReports.gather(factory.id, new Date("2026-07-11T00:00:00Z"));
+    assert.equal(afterReturn.closingStock.slabsOnHand, 2, "the rejected slab is back in stock");
+  });
+
+  it("builds a workbook a spreadsheet can actually open", async () => {
+    const { factory } = await staffFactory("dprfile");
+    const day = "2026-08-14";
+    await seedDay(factory.id, day);
+
+    const daily = await dailyReports.dailyWorkbook(factory.id, day);
+    assert.equal(daily.fileName, "daily-progress-2026-08-14.xlsx");
+    assert.equal(daily.bytes.subarray(0, 2).toString("latin1"), "PK", "a zip container");
+    assert.ok(daily.bytes.length > 1000);
+
+    const monthly = await dailyReports.monthlyWorkbook(factory.id, "2026-08");
+    assert.equal(monthly.fileName, "daily-progress-2026-08.xlsx");
+    assert.ok(monthly.bytes.length > daily.bytes.length, "a month holds more than a day");
+  });
+
+  it("refuses a date it cannot parse rather than reporting on the wrong day", async () => {
+    const { factory } = await staffFactory("dprbad");
+    for (const bad of ["2026-02-31", "yesterday", "14-08-2026"]) {
+      await assert.rejects(() => dailyReports.dailyWorkbook(factory.id, bad), /date must be|not a real date/i);
+    }
+    await assert.rejects(() => dailyReports.monthlyWorkbook(factory.id, "2026-13"), /month must be|not a real/i);
+  });
+
+  it("leaves tomorrow out of the running month workbook", async () => {
+    const { factory } = await staffFactory("dprfuture");
+    const month = currentFactoryMonth();
+    const workbook = await dailyReports.monthlyWorkbook(factory.id, month);
+    // A month workbook pulled today must not carry tabs for days that have not
+    // happened; the office opens this file every morning.
+    const today = Number(currentFactoryDate().slice(8, 10));
+    const figures = await dailyReports.dailyFigures(factory.id);
+    assert.equal(figures.date.getUTCDate(), today);
+    assert.ok(workbook.bytes.length > 0);
+  });
 });
+
