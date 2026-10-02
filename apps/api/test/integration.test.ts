@@ -1384,6 +1384,138 @@ describe("postgres-backed workflows", () => {
     );
   });
 
+  /**
+   * Build an order over several slabs, packed and ready to ship.
+   *
+   * Shared by the partial-dispatch cases, which all need the same starting point:
+   * one order whose slabs can leave the yard in more than one lorry.
+   */
+  async function orderReadyToShip(label: string, slabCount: number) {
+    const { factory, asOwner } = await staffFactory(label);
+    const finished = await prisma.inventoryLocation.findFirstOrThrow({
+      where: { factoryId: factory.id, code: "FINISHED_STOCK" },
+    });
+    const slabs = [];
+    for (let i = 0; i < slabCount; i += 1) {
+      slabs.push(
+        await prisma.slab.create({
+          data: {
+            factoryId: factory.id,
+            slabSerial: `${label}-${i}`,
+            varietyName: "Tan Brown",
+            locationId: finished.id,
+          },
+        }),
+      );
+    }
+    const customer = await sales.createCustomer(asOwner, `${label} Co`);
+    const order = (await sales.createOrder(asOwner, {
+      customerId: customer.id,
+      orderDate: "2026-09-12",
+      clientOpId: `${label}-order`,
+      lines: slabs.map((slab) => ({ slabId: slab.id, quantitySqft: 10, rate: 100 })),
+    })) as { id: string };
+    await sales.pack(asOwner, order.id, slabs.map((s) => s.id));
+    return { factory, asOwner, order, slabs };
+  }
+
+  const statusOf = async (orderId: string) =>
+    (await prisma.salesOrder.findUniqueOrThrow({ where: { id: orderId } })).status;
+
+  it("ships the rest of the order on a second lorry", async () => {
+    // The yard loads what fits, then sends the remainder later. Both batches must
+    // actually move. The first default clientOpId was derived from the order alone,
+    // so the second call matched the first one's stored response, answered 201 and
+    // shipped nothing: half the order stayed in PACKING while the books showed it
+    // gone.
+    const { factory, asOwner, order, slabs } = await orderReadyToShip("twoloads", 4);
+    const firstLoad = slabs.slice(0, 2).map((s) => s.id);
+    const secondLoad = slabs.slice(2).map((s) => s.id);
+
+    const first = await sales.dispatch(asOwner, order.id, firstLoad);
+    const second = await sales.dispatch(asOwner, order.id, secondLoad);
+
+    assert.notEqual(
+      (first as { id: string }).id,
+      (second as { id: string }).id,
+      "a different load is a different delivery, not a replay",
+    );
+    assert.equal(await prisma.delivery.count({ where: { factoryId: factory.id } }), 2);
+    const dispatched = await prisma.slab.count({
+      where: { factoryId: factory.id, salesStatus: "dispatched" },
+    });
+    assert.equal(dispatched, 4, "every slab on the order left the yard");
+    assert.equal(
+      await prisma.inventoryMovement.count({
+        where: { factoryId: factory.id, movementType: "DISPATCH" },
+      }),
+      4,
+    );
+  });
+
+  it("still treats a resent identical load as one dispatch", async () => {
+    // The other half of the contract: an offline device that resends the same
+    // batch must not ship it twice.
+    const { factory, asOwner, order, slabs } = await orderReadyToShip("resend", 2);
+    const load = slabs.map((s) => s.id);
+    const first = await sales.dispatch(asOwner, order.id, load);
+    const replay = await sales.dispatch(asOwner, order.id, load);
+    assert.equal((first as { id: string }).id, (replay as { id: string }).id);
+    assert.equal(await prisma.delivery.count({ where: { factoryId: factory.id } }), 1);
+    assert.equal(
+      await prisma.inventoryMovement.count({
+        where: { factoryId: factory.id, movementType: "DISPATCH" },
+      }),
+      2,
+      "two slabs, one dispatch each",
+    );
+  });
+
+  it("walks the order from CONFIRMED to PARTIALLY_DELIVERED to DELIVERED", async () => {
+    // Nothing advanced the order's status, so an order that had entirely shipped
+    // still read CONFIRMED. Every report that counts open orders was wrong.
+    const { asOwner, order, slabs } = await orderReadyToShip("walk", 3);
+    assert.equal(await statusOf(order.id), "CONFIRMED");
+
+    await sales.dispatch(asOwner, order.id, [slabs[0]!.id]);
+    assert.equal(await statusOf(order.id), "PARTIALLY_DELIVERED", "one of three has gone");
+
+    await sales.dispatch(asOwner, order.id, [slabs[1]!.id]);
+    assert.equal(await statusOf(order.id), "PARTIALLY_DELIVERED", "two of three");
+
+    await sales.dispatch(asOwner, order.id, [slabs[2]!.id]);
+    assert.equal(await statusOf(order.id), "DELIVERED", "the last slab closes the order");
+  });
+
+  it("marks an order delivered when its whole load goes at once", async () => {
+    const { asOwner, order, slabs } = await orderReadyToShip("oneload", 3);
+    await sales.dispatch(asOwner, order.id, slabs.map((s) => s.id));
+    assert.equal(await statusOf(order.id), "DELIVERED");
+  });
+
+  it("refuses a clientOpId reused for a different load, at the service", async () => {
+    // Reusing a key for different slabs is a client bug. Answering it with the
+    // first load's response is how the original fault stayed invisible, so it is
+    // refused rather than quietly mis-answered.
+    //
+    // Service level only, and deliberately so: over HTTP the global
+    // IdempotencyInterceptor looks a key up on (factory, clientOpId) alone and
+    // replays before this code runs, so a real client still receives the first
+    // load's response. Verified by hand against a running server. Teaching that
+    // interceptor to compare a request hash would change every write route in the
+    // app, offline replay included, so it belongs in its own change. This keeps the
+    // service correct on its own terms meanwhile.
+    const { asOwner, order, slabs } = await orderReadyToShip("reuse", 2);
+    await sales.dispatch(asOwner, order.id, [slabs[0]!.id], { clientOpId: "reuse-key-1" });
+    await assert.rejects(
+      () => sales.dispatch(asOwner, order.id, [slabs[1]!.id], { clientOpId: "reuse-key-1" }),
+      /different request|CLIENT_OP_ID_REUSED/i,
+    );
+    // And the slab it refused to ship is still in the yard.
+    const untouched = await prisma.slab.findUniqueOrThrow({ where: { id: slabs[1]!.id } });
+    assert.notEqual(untouched.salesStatus, "dispatched");
+  });
+
   it("dispatches packed slabs and retries the same clientOpId", async () => {
     const { factory, asOwner } = await staffFactory("disp");
     const finished = await prisma.inventoryLocation.findFirst({
