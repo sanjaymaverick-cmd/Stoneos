@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { visibleRoutes, canAccessPath } from "./routePolicy.ts";
+import type { Role } from "@stoneos/contracts";
 describe("yard navigation", () => {
   it("has exactly five primary destinations in order", () =>
     assert.deepEqual(
@@ -30,5 +31,27 @@ describe("yard navigation", () => {
       ),
       false,
     );
+  });
+});
+
+describe("lot screens", () => {
+  it("follows the yard's roles", () => {
+    // Counting and selling stock is floor work; the books roles have no business there.
+    for (const role of ["owner", "manager", "supervisor", "inventory", "sales"] as Role[]) {
+      assert.equal(canAccessPath(role, "/lots"), true, `${role} should reach /lots`);
+      assert.equal(canAccessPath(role, "/lots/sell"), true, `${role} should reach /lots/sell`);
+    }
+    for (const role of ["accountant", "auditor", "operator"] as Role[]) {
+      assert.equal(canAccessPath(role, "/lots"), false, `${role} should not reach /lots`);
+      assert.equal(canAccessPath(role, "/lots/sell"), false, `${role} should not reach /lots/sell`);
+    }
+  });
+
+  it("adds no sixth tab", () => {
+    // The five primary destinations are the point of the Today/Yard/Cut/Sell/Money
+    // layout. The lot screens hang off Yard and Sell instead of crowding the bar.
+    const tabs = visibleRoutes("owner").map((r) => r.href);
+    assert.equal(tabs.includes("/lots"), false);
+    assert.equal(tabs.includes("/lots/sell"), false);
   });
 });

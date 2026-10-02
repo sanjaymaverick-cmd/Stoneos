@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { attachFile, Attachments } from "../../components/Attachments";
 import { ref } from "../../lib/api";
@@ -121,6 +122,9 @@ export default function InventoryPage() {
   return (
     <AppShell>
       <h1>Yard</h1>
+      <p>
+        <Link href="/lots">Lots — stock by block, record a cut, write off breakage →</Link>
+      </p>
       <div className="card">
         <h2>Receive raw block</h2>
         <form onSubmit={onSubmit}>

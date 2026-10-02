@@ -51,6 +51,8 @@ export const routes: Array<{
     { href: "/intake", label: "Drafts", roles: owners },
     { href: "/files", label: "Attachments", roles: floor },
     { href: "/setup/opening-inventory", label: "Opening count", roles: owners },
+    { href: "/lots", label: "Lots", roles: floor },
+    { href: "/lots/sell", label: "Sell by lot", roles: floor },
     { href: "/sync", label: "Sync", roles: all },
   ].map((r) => ({ ...r, nav: false })),
 ];

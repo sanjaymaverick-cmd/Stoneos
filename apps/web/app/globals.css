@@ -525,3 +525,16 @@ th {
 .sync-dot.stuck {
   background: var(--accent);
 }
+
+/* Seller, bill-to and ship-to sit side by side on a bill. */
+.parties {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 12px;
+}
+@media (max-width: 900px) {
+  .parties {
+    grid-template-columns: 1fr;
+  }
+}
