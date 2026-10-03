@@ -32,6 +32,7 @@ export const routes: Array<{
   { href: "/sales", label: "Sell", roles: floor },
   { href: "/sales/reports", label: "Party reports", roles: [...floor, ...money], nav: false },
   { href: "/expenses", label: "Money", roles: money },
+  { href: "/parties", label: "Buyers & suppliers", roles: [...floor, ...money], nav: false },
   ...[
     {
       href: "/muster",

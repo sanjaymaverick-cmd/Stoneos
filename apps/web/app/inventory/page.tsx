@@ -6,6 +6,7 @@ import { attachFile, Attachments } from "../../components/Attachments";
 import { ref } from "../../lib/api";
 import { VarietyChips } from "../../components/VarietyChips";
 import { AppShell } from "../../components/AppShell";
+import { CustomerForm } from "../../components/CustomerForm";
 import { EmptyState } from "../../components/EmptyState";
 import { apiFetch, isQueued } from "../../lib/api";
 import { bodyOf, queuedAt, useOutbox } from "../../lib/useOutbox";
@@ -66,7 +67,6 @@ export default function InventoryPage() {
   const { items, refresh: refreshQueue } = useOutbox();
   const queuedBlocks = queuedAt(items, "/api/v1/inventory/raw-blocks");
   const [slabs, setSlabs] = useState<Slab[]>([]);
-  const [supplierName, setSupplierName] = useState("");
   const receiveOp = useRef(crypto.randomUUID());
 
   async function refresh() {
@@ -312,29 +312,9 @@ export default function InventoryPage() {
           ) : null}
           <button type="submit">Receive</button>
         </form>
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            await apiFetch("/api/v1/inventory/suppliers", {
-              method: "POST",
-              body: JSON.stringify({ name: supplierName }),
-            });
-            setSupplierName("");
-            await refresh().catch(() => undefined);
-          }}
-        >
-          <label>
-            New supplier
-            <input
-              value={supplierName}
-              onChange={(e) => setSupplierName(e.target.value)}
-              required
-            />
-          </label>
-          <button type="submit" className="secondary">
-            Add supplier
-          </button>
-        </form>
+        <CustomerForm kind="supplier" heading="Add a supplier" onAdded={(_result,message)=>{setNotice(message);void refresh().catch(()=>undefined);}} />
+        <p><Link href="/parties">Manage buyers & suppliers →</Link></p>
+
       </div>
       <div className="card">
         <h2>Cash on an older block</h2>

@@ -272,6 +272,7 @@ export default function SalesPage() {
   return (
     <AppShell>
       <h1>Sell</h1>
+      <p><Link href="/parties">Add / edit buyers & suppliers →</Link></p>
       <p><Link href="/sales/reports">Reports · customer and supplier statements, payments and dues →</Link></p>
       {/*
         This page is the older per-slab flow: it sells named pieces. The yard works

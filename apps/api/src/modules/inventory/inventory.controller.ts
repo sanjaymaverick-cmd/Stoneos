@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Patch, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { InventoryKind } from "@prisma/client";
 import {
@@ -47,7 +47,7 @@ export class InventoryController {
   }
 
   @Get("suppliers")
-  @Roles(...INVENTORY_DATA_ROLES)
+  @Roles(...SALES_READ_ROLES)
   suppliers(@CurrentUser() user: AuthenticatedUser) {
     return this.service.suppliers(user.factoryId);
   }
@@ -62,12 +62,23 @@ export class InventoryController {
       contactInfo?: string;
       stateCode?: string;
       gstin?: string;
+      billingAddress?: string;
+      shippingAddress?: string;
     },
   ) {
     return this.service.createSupplier(user, body.name, body.contactInfo, {
       stateCode: body.stateCode,
       gstin: body.gstin,
+      billingAddress: body.billingAddress,
+      shippingAddress: body.shippingAddress,
     });
+  }
+
+  @Patch("suppliers/:id")
+  @Roles(...INVENTORY_DATA_ROLES)
+  updateSupplier(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string,
+    @Body() body: {name?:string;contactInfo?:string|null;gstin?:string|null;stateCode?:string|null;billingAddress?:string|null;shippingAddress?:string|null}) {
+    return this.service.updateSupplier(user,id,body);
   }
 
   /**
