@@ -13,6 +13,7 @@
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "../../../components/AppShell";
+import { CustomerForm } from "../../../components/CustomerForm";
 import { EmptyState } from "../../../components/EmptyState";
 import { apiFetch, isQueued } from "../../../lib/api";
 import { formatInr, todayIst } from "../../../lib/format";
@@ -378,7 +379,20 @@ export default function SellLotsPage() {
                   ))}
                 </select>
               </label>
+              {customers.length === 0 ? (
+                <p className="muted">
+                  No customers yet. Add one below — the GSTIN decides whether their
+                  bill carries CGST + SGST or IGST.
+                </p>
+              ) : null}
             </div>
+
+            <CustomerForm
+              heading="New buyer"
+              onAdded={() => {
+                void load();
+              }}
+            />
 
             <div className="card">
               <h2>Add a lot</h2>

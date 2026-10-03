@@ -18,6 +18,7 @@ import { isUniqueViolation, nextDocumentNumber } from "./document-number";
 import { BooksService } from "../books/books.service";
 import {
   GST_DEFAULTS,
+  cleanGstin,
   gstOnTaxable,
   minorToRupees,
   normaliseStateCode,
@@ -38,18 +39,48 @@ export class SalesService {
     return this.prisma.customer.findMany({ where: { factoryId }, orderBy: { name: "asc" } });
   }
 
+  /**
+   * A buyer, with everything a tax invoice needs printed on it.
+   *
+   * The GSTIN is the load-bearing field: it decides CGST+SGST against IGST, and a
+   * buyer saved without one is billed as an unregistered local sale forever after.
+   * So it is validated rather than quietly stored — a GSTIN typed one character
+   * short used to be kept as-is, and the wrong tax was charged with nothing to show
+   * for it on screen.
+   */
   async createCustomer(
     user: AuthenticatedUser,
     name: string,
     contactInfo?: string,
-    gst?: { stateCode?: string | null; gstin?: string | null },
+    gst?: {
+      stateCode?: string | null;
+      gstin?: string | null;
+      billingAddress?: string | null;
+      shippingAddress?: string | null;
+    },
   ) {
-    const gstin = gst?.gstin?.trim().toUpperCase() || null;
-    // A buyer's GSTIN already states their place of supply; trust it over a typed code.
-    const stateCode =
-      (gstin ? stateCodeFromGstin(gstin) : null) ?? normaliseStateCode(gst?.stateCode);
+    const trimmed = name?.trim();
+    if (!trimmed) throw new BadRequestException("A customer needs a name");
+    const gstin = cleanGstin(gst?.gstin);
+    const claimed = normaliseStateCode(gst?.stateCode);
+    const fromGstin = gstin ? stateCodeFromGstin(gstin) : null;
+    // The first two characters of a GSTIN ARE the state. A typed code that disagrees
+    // would route tax to the wrong heads, so refuse rather than silently pick one.
+    if (claimed && fromGstin && claimed !== fromGstin) {
+      throw new BadRequestException(
+        `State code ${claimed} contradicts GSTIN ${gstin}, which is state ${fromGstin}`,
+      );
+    }
     return this.prisma.customer.create({
-      data: { factoryId: user.factoryId, name, contactInfo, stateCode, gstin },
+      data: {
+        factoryId: user.factoryId,
+        name: trimmed,
+        contactInfo: contactInfo?.trim() || null,
+        stateCode: fromGstin ?? claimed,
+        gstin,
+        billingAddress: gst?.billingAddress?.trim() || null,
+        shippingAddress: gst?.shippingAddress?.trim() || null,
+      },
     });
   }
 

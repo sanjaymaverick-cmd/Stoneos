@@ -1672,7 +1672,7 @@ describe("postgres-backed workflows", () => {
     const bill = async (name: string, stateCode: string | undefined, tag: string) => {
       // Registered dealers, so these belong in B2B; the retail path is covered separately.
       const customer = await sales.createCustomer(asOwner, name, undefined, {
-        gstin: `${stateCode}AABCP0000${stateCode}1Z9`,
+        gstin: `${stateCode}AABCP0000P1Z9`,
       });
       const order = (await sales.createOrder(asOwner, {
         customerId: customer.id,
@@ -2870,6 +2870,192 @@ describe("postgres-backed workflows", () => {
     assert.equal(figures.polishing.sessions, 2);
     assert.equal(figures.polishing.slabsPolished, 50);
     assert.equal(figures.polishing.sqftPolished, 500);
+  });
+
+  it("puts the cash leg on an older block and posts only the difference", async () => {
+    const { factory, asOwner } = await staffFactory("fixcash");
+    // Received the way every block before today was: billed leg only.
+    await receiveBlock(factory.id, "VG-OLD", { taxable: 200_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-OLD", totalSlabsCut: 100, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "fx-cut",
+    });
+
+    const fixed = await inventory.correctPurchaseCash(asOwner, {
+      blockSerial: "VG-OLD",
+      purchaseCashAmount: 50_000,
+      reason: "cash leg was never entered at receipt",
+      clientOpId: "fx-1",
+    });
+    assert.equal(fixed.previousCashAmount, 0);
+    assert.equal(fixed.purchaseCashAmount, 50_000);
+    assert.equal(fixed.costBasis, 250_000);
+    assert.equal(fixed.costPerSlab, 2_500);
+
+    // Posted as stock bought for cash, and the books still balance.
+    let tb = await books.trialBalance(factory.id);
+    assert.equal(
+      Math.round(tb.reduce((n, r) => n + r.debit, 0) * 100),
+      Math.round(tb.reduce((n, r) => n + r.credit, 0) * 100),
+      "a correction must not unbalance the ledger",
+    );
+    // receiveBlock here writes the row directly and posts no purchase voucher, so
+    // STOCK carries this correction and nothing else.
+    assert.equal(tb.find((r) => r.code === "CASH")!.credit, 50_000);
+    assert.equal(tb.find((r) => r.code === "STOCK")!.debit, 50_000);
+
+    // Correcting again posts only the difference, not the whole amount again.
+    const again = await inventory.correctPurchaseCash(asOwner, {
+      blockSerial: "VG-OLD",
+      purchaseCashAmount: 60_000,
+      reason: "found another 10k in the khata",
+      clientOpId: "fx-2",
+    });
+    assert.equal(again.previousCashAmount, 50_000);
+    tb = await books.trialBalance(factory.id);
+    assert.equal(tb.find((r) => r.code === "CASH")!.credit, 60_000);
+    assert.equal(tb.find((r) => r.code === "STOCK")!.debit, 60_000);
+
+    // And a correction downwards reverses rather than posting a negative.
+    await inventory.correctPurchaseCash(asOwner, {
+      blockSerial: "VG-OLD",
+      purchaseCashAmount: 40_000,
+      reason: "double counted the advance",
+      clientOpId: "fx-3",
+    });
+    tb = await books.trialBalance(factory.id);
+    assert.equal(tb.find((r) => r.code === "CASH")!.credit, 60_000);
+    assert.equal(tb.find((r) => r.code === "CASH")!.debit, 20_000);
+    assert.equal(tb.find((r) => r.code === "STOCK")!.credit, 20_000, "reversed, not negative");
+    assert.equal(
+      Math.round(tb.reduce((n, r) => n + r.debit, 0) * 100),
+      Math.round(tb.reduce((n, r) => n + r.credit, 0) * 100),
+    );
+
+    // The corrected basis is what a write-off is valued at from now on.
+    const off = await lots.writeOffBroken(asOwner, {
+      blockSerial: "VG-OLD", slabCount: 2, stage: "yard",
+      reason: "cracked", clientOpId: "fx-off",
+    });
+    assert.equal(off.costAmount, 4_800, "240000 over 100 slabs is 2400 each");
+  });
+
+  it("refuses a cash correction with no reason, and replays as one", async () => {
+    const { factory, asOwner } = await staffFactory("fixguard");
+    await receiveBlock(factory.id, "VG-OLD", { taxable: 100_000, cash: 0 });
+
+    await assert.rejects(
+      () =>
+        inventory.correctPurchaseCash(asOwner, {
+          blockSerial: "VG-OLD", purchaseCashAmount: 1_000, reason: "   ",
+          clientOpId: "g-1",
+        }),
+      /why the cash amount is being changed/,
+    );
+    await assert.rejects(
+      () =>
+        inventory.correctPurchaseCash(asOwner, {
+          blockSerial: "VG-OLD", purchaseCashAmount: -5, reason: "typo",
+          clientOpId: "g-2",
+        }),
+      /cannot be negative/,
+    );
+    await assert.rejects(
+      () =>
+        inventory.correctPurchaseCash(asOwner, {
+          blockSerial: "NOPE", purchaseCashAmount: 10, reason: "x", clientOpId: "g-3",
+        }),
+      /No block NOPE/,
+    );
+
+    // A resent correction must not post the difference twice.
+    const first = await inventory.correctPurchaseCash(asOwner, {
+      blockSerial: "VG-OLD", purchaseCashAmount: 25_000, reason: "khata entry",
+      clientOpId: "g-ok",
+    });
+    const replay = await inventory.correctPurchaseCash(asOwner, {
+      blockSerial: "VG-OLD", purchaseCashAmount: 25_000, reason: "khata entry",
+      clientOpId: "g-ok",
+    });
+    assert.deepEqual(replay, first);
+    const tb = await books.trialBalance(factory.id);
+    assert.equal(tb.find((r) => r.code === "CASH")!.credit, 25_000);
+  });
+
+  it("keeps a buyer's GSTIN, addresses and state, and refuses a malformed one", async () => {
+    const { factory, asOwner } = await staffFactory("cust");
+
+    const buyer = await sales.createCustomer(asOwner, "Sharma Marbles", "9876543210", {
+      gstin: "08aabcs1429b1zx",
+      billingAddress: "MI Road, Jaipur",
+      shippingAddress: "Sitapura site store",
+    });
+    assert.equal(buyer.gstin, "08AABCS1429B1ZX", "upper-cased on the way in");
+    // The state is read off the GSTIN, never asked for twice.
+    assert.equal(buyer.stateCode, "08");
+    assert.equal(buyer.billingAddress, "MI Road, Jaipur");
+    assert.equal(buyer.shippingAddress, "Sitapura site store");
+    assert.equal(buyer.contactInfo, "9876543210");
+
+    // A GSTIN one character short used to be stored as typed, and every bill to that
+    // buyer went out with it.
+    await assert.rejects(
+      () => sales.createCustomer(asOwner, "Typo Traders", undefined, { gstin: "08AABCS1429B1Z" }),
+      /must be 15 characters in the GST format/,
+    );
+    // A typed state that contradicts the GSTIN would route tax to the wrong heads.
+    await assert.rejects(
+      () =>
+        sales.createCustomer(asOwner, "Wrong State", undefined, {
+          gstin: "08AABCS1429B1ZX", stateCode: "37",
+        }),
+      /contradicts GSTIN/,
+    );
+    await assert.rejects(() => sales.createCustomer(asOwner, "   "), /needs a name/);
+
+    // No GSTIN is a legitimate answer for a counter buyer.
+    const counter = await sales.createCustomer(asOwner, "Counter Buyer", undefined, {
+      gstin: "", stateCode: "8",
+    });
+    assert.equal(counter.gstin, null);
+    assert.equal(counter.stateCode, "08", "8 and 08 are the same state");
+    assert.equal(
+      (await prisma.customer.count({ where: { factoryId: factory.id } })),
+      2,
+      "the three refusals saved nothing",
+    );
+  });
+
+  it("bills an out-of-state buyer IGST off the GSTIN the customer form captured", async () => {
+    const { factory, asOwner } = await staffFactory("custigst");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08ZZZZZ0000Z1ZX", stateCode: "08", legalName: "Test Granites",
+    });
+    await receiveBlock(factory.id, "VG-001", { taxable: 100_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 100, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "ig-cut",
+    });
+    // Andhra Pradesh is state 37. Saved with only a name, this buyer would have been
+    // billed CGST+SGST as though the stone never left Rajasthan.
+    const buyer = await sales.createCustomer(asOwner, "Vizag Stones", undefined, {
+      gstin: "37AABCS1429B1ZX", billingAddress: "Vizag",
+    });
+    const order = await lots.sellLots(asOwner, {
+      customerId: buyer.id,
+      clientOpId: "ig-sell",
+      lines: [{ blockSerial: "VG-001", slabCount: 50, rate: 80 }],
+    });
+    const bill = await lots.invoiceOrder(asOwner, {
+      orderId: order.orderId, clientOpId: "ig-inv",
+    });
+    assert.equal(bill.interState, true);
+    assert.equal(bill.placeOfSupply, "37");
+    assert.equal(bill.totals.igstAmount, 7_200, "18% as IGST");
+    assert.equal(bill.totals.cgstAmount, 0);
+    assert.equal(bill.totals.sgstAmount, 0);
+    assert.equal(bill.billTo.gstin, "37AABCS1429B1ZX");
+    assert.equal(bill.billTo.address, "Vizag");
   });
 
   it("posts breakage to the ledger and keeps the books balanced", async () => {

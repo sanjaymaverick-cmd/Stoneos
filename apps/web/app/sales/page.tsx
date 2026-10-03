@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { Attachments } from "../../components/Attachments";
 import { VarietyChips } from "../../components/VarietyChips";
 import { AppShell } from "../../components/AppShell";
+import { CustomerForm } from "../../components/CustomerForm";
 import { EmptyState } from "../../components/EmptyState";
 import { apiFetch, isQueued, pendingRef, ref } from "../../lib/api";
 import { bodyOf, queuedAt, useOutbox } from "../../lib/useOutbox";
@@ -68,7 +69,6 @@ export default function SalesPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [slabs, setSlabs] = useState<Slab[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [name, setName] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [slabId, setSlabId] = useState("");
   const [qty, setQty] = useState("32");
@@ -207,18 +207,6 @@ export default function SalesPage() {
     })),
   ];
 
-  async function addCustomer(event: FormEvent) {
-    event.preventDefault();
-    await run(async () => {
-      await apiFetch("/api/v1/customers", {
-        method: "POST",
-        label: `New customer ${name}`,
-        body: JSON.stringify({ name }),
-      });
-      setName("");
-    });
-  }
-
   async function createOrder(event: FormEvent) {
     event.preventDefault();
     const who = customerName(customerId);
@@ -273,11 +261,29 @@ export default function SalesPage() {
   return (
     <AppShell>
       <h1>Sell</h1>
-      <p>
-        <Link href="/lots/sell">Sell by lot — pick blocks and slab counts, bill them together →</Link>
-        {" · "}
-        <Link href="/lots/dispatch">To dispatch →</Link>
-      </p>
+      {/*
+        This page is the older per-slab flow: it sells named pieces. The yard works
+        by the lot now, and everything added since — the cash-and-billed split, the
+        HSN picker, the tax invoice — is on the lot screens. It was a line of link
+        text here, which is to say invisible, so it is a card.
+      */}
+      <div className="card">
+        <h2>Selling by the lot</h2>
+        <p className="muted">
+          Pick a block and a slab count — &ldquo;80 from VG-101, 70 from VG-102&rdquo; —
+          take part of it in cash if that is the deal, and bill the whole order on one
+          tax invoice with HSN codes and both addresses.
+        </p>
+        <p>
+          <Link href="/lots/sell">
+            <b>Sell by lot and raise the invoice →</b>
+          </Link>
+        </p>
+        <p className="muted">
+          <Link href="/lots">Lots on the yard</Link> ·{" "}
+          <Link href="/lots/dispatch">What is still to go out</Link>
+        </p>
+      </div>
       {notice ? (
         <p className="muted" role="status">
           {notice}
@@ -288,19 +294,7 @@ export default function SalesPage() {
           {error}
         </p>
       ) : null}
-      <div className="card">
-        <form onSubmit={addCustomer}>
-          <label>
-            Customer name
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </label>
-          <button type="submit">Add customer</button>
-        </form>
-      </div>
+      <CustomerForm onAdded={() => void refresh()} />
       <div className="card">
         <h2>Reserve / order</h2>
         <form onSubmit={createOrder}>

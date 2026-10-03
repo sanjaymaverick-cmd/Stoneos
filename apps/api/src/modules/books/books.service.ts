@@ -220,6 +220,52 @@ export class BooksService {
   }
 
   /**
+   * Correct the cash leg of a purchase already on the books.
+   *
+   * Blocks received before the yard screen asked for a cash amount carry none, so
+   * their cost basis is the billed leg alone and every valuation off it is short.
+   * This posts the difference, not the whole amount, so a block corrected twice is
+   * not counted twice.
+   *
+   * A negative delta (the recorded cash was too high) reverses the same two heads
+   * rather than posting a negative, because a ledger line is an amount and a side,
+   * and a negative debit is neither.
+   */
+  async postCashPurchaseCorrection(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    input: {
+      rawBlockId: string;
+      deltaMinor: number;
+      clientOpId: string;
+      memo: string;
+      purchaseDate?: Date;
+    },
+  ) {
+    const amount = Math.abs(input.deltaMinor);
+    const increase = input.deltaMinor > 0;
+    return postVoucher(tx, {
+      factoryId: user.factoryId,
+      type: "purchase",
+      source: "block_purchase_cash",
+      clientOpId: input.clientOpId,
+      createdBy: user.id,
+      operationalDate: input.purchaseDate,
+      sourceId: input.rawBlockId,
+      memo: input.memo,
+      lines: increase
+        ? [
+            { ledgerCode: "STOCK", debit: amount, credit: 0 },
+            { ledgerCode: "CASH", debit: 0, credit: amount },
+          ]
+        : [
+            { ledgerCode: "CASH", debit: amount, credit: 0 },
+            { ledgerCode: "STOCK", debit: 0, credit: amount },
+          ],
+    });
+  }
+
+  /**
    * A counter sale settled in cash against no invoice. Cash is real and so is the
    * stock that left, so both are booked; the revenue simply lands on its own ledger.
    */

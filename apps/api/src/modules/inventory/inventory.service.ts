@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import { InventoryKind, InventoryMovementType, Prisma } from "@prisma/client";
 import { MAX_BLOCK_TONS } from "@stoneos/contracts";
+import { costPerSlab } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
 import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
@@ -107,6 +108,122 @@ export class InventoryService {
       entityId: supplier.id,
     });
     return supplier;
+  }
+
+  /**
+   * Put a cash amount on a block that was received before the yard screen asked for one.
+   *
+   * Every block taken in before this field reached the form carries nothing in the
+   * cash leg, so its cost basis is the billed amount alone and the cost of each slab
+   * off it is understated. This is the correction path: the owner enters what was
+   * actually paid, with a reason, and the difference is posted.
+   *
+   * Only the cash leg. Changing the billed amount would mean amending a vendor's tax
+   * invoice and the input credit claimed against it, which is not something to do
+   * from a yard screen.
+   *
+   * What this does NOT do is re-value history. Breakage already written off was
+   * valued at the cost basis of the day, and those ledger entries stand; only
+   * write-offs made from now on use the corrected figure. Restating a posted expense
+   * would change months that may already be filed.
+   */
+  async correctPurchaseCash(
+    user: AuthenticatedUser,
+    input: {
+      blockSerial: string;
+      purchaseCashAmount: number;
+      reason: string;
+      clientOpId: string;
+    },
+  ) {
+    if (!Number.isFinite(input.purchaseCashAmount) || input.purchaseCashAmount < 0) {
+      throw new BadRequestException("Cash amount cannot be negative");
+    }
+    const reason = input.reason?.trim();
+    if (!reason) {
+      throw new BadRequestException("Say why the cash amount is being changed");
+    }
+    if (!input.clientOpId) throw new BadRequestException("clientOpId is required");
+
+    return this.prisma.$transaction(async (tx) => {
+      const replay = await tx.syncOperation.findUnique({
+        where: {
+          factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId },
+        },
+      });
+      if (replay) return replay.response;
+
+      const block = await tx.rawBlock.findFirst({
+        where: { factoryId: user.factoryId, serialNumber: input.blockSerial.trim() },
+      });
+      if (!block) throw new NotFoundException(`No block ${input.blockSerial} in this factory`);
+
+      const before = Number(block.purchaseCashAmount ?? 0);
+      const after = input.purchaseCashAmount;
+      const deltaMinor = rupeesToMinor(after) - rupeesToMinor(before);
+
+      await tx.rawBlock.update({
+        where: { id: block.id },
+        data: { purchaseCashAmount: after, version: { increment: 1 } },
+      });
+
+      // Nothing moved, so nothing is posted. Still audited: an attempt to change a
+      // cost basis is worth a record even when it changed nothing.
+      if (deltaMinor !== 0) {
+        await this.books.postCashPurchaseCorrection(tx, user, {
+          rawBlockId: block.id,
+          deltaMinor,
+          clientOpId: `purchase-cash-fix:${input.clientOpId}`,
+          memo: `Block ${block.serialNumber} — cash corrected: ${reason}`,
+          purchaseDate: block.purchaseDate ?? block.createdAt,
+        });
+      }
+
+      const taxable = Number(block.purchaseTaxable ?? 0);
+      const response = {
+        blockId: block.id,
+        blockSerial: block.serialNumber,
+        previousCashAmount: before,
+        purchaseCashAmount: after,
+        purchaseTaxable: taxable,
+        costBasis: taxable + after,
+        goodSlabCount: block.goodSlabCount,
+        costPerSlab: costPerSlab({
+          purchaseTaxable: taxable,
+          purchaseCashAmount: after,
+          goodSlabCount: block.goodSlabCount,
+        }),
+      };
+
+      await tx.syncOperation.create({
+        data: {
+          factoryId: user.factoryId,
+          clientOpId: input.clientOpId,
+          actorId: user.id,
+          method: "POST",
+          path: "/api/v1/inventory/raw-blocks/correct-cash",
+          requestHash: input.clientOpId,
+          statusCode: 200,
+          response: response as unknown as Prisma.InputJsonValue,
+        },
+      });
+      await tx.auditEvent.create({
+        data: {
+          factoryId: user.factoryId,
+          actorId: user.id,
+          action: "inventory.purchase_cash_corrected",
+          entityType: "raw_block",
+          entityId: block.id,
+          payload: {
+            blockSerial: block.serialNumber,
+            previousCashAmount: before,
+            purchaseCashAmount: after,
+            reason,
+          },
+        },
+      });
+      return response;
+    });
   }
 
   async receiveBlock(
