@@ -272,7 +272,14 @@ export class ProductionService {
     if (session.status !== "IN_PROGRESS") {
       throw new BadRequestException("Session is not in progress");
     }
-    const blocked = session.slabs.filter((link) =>
+    // A session line is either an identified slab or a count off a lot. This is the
+    // per-piece path: lot lines have no slab to flip, and a lot run is recorded
+    // already completed, so there is nothing here for them to do.
+    const pieces = session.slabs.filter(
+      (link): link is typeof link & { slabId: string; slab: NonNullable<typeof link.slab> } =>
+        link.slabId !== null && link.slab !== null,
+    );
+    const blocked = pieces.filter((link) =>
       ["sold", "reserved", "voided", "dispatched"].includes(link.slab.salesStatus),
     );
     if (blocked.length > 0) {
@@ -285,7 +292,7 @@ export class ProductionService {
         })
       : null;
     await this.prisma.$transaction(async (tx) => {
-      for (const link of session.slabs) {
+      for (const link of pieces) {
         if (sellable) {
           await tx.slab.update({
             where: { id: link.slabId },
@@ -358,7 +365,12 @@ export class ProductionService {
       slabsCut,
       runtimeHours: cutting.reduce((sum, row) => sum + Number(row.runtimeHours ?? 0), 0),
       downtimeMinutes: cutting.reduce((sum, row) => sum + (row.downtimeMinutes ?? 0), 0),
-      slabsPolished: polishing.reduce((sum, row) => sum + row.slabs.length, 0),
+      // A per-piece line is one slab; a lot line is a count. Counting rows would
+      // report a 50-slab lot run as a single slab polished.
+      slabsPolished: polishing.reduce(
+        (sum, row) => sum + row.slabs.reduce((n, line) => n + (line.slabCount ?? 1), 0),
+        0,
+      ),
     };
   }
 }

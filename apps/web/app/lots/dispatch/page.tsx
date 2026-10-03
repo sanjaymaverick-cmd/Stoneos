@@ -172,7 +172,9 @@ export default function DispatchPage() {
                 {order.lots.map((lot) => (
                   <tr key={lot.blockSerial}>
                     <td>
-                      <strong>{lot.blockSerial}</strong>
+                      <strong>
+                        {lot.blockSerial}-{lot.stillToGo}
+                      </strong>
                     </td>
                     <td>{lot.variety}</td>
                     <td className="num muted">{lot.ordered}</td>

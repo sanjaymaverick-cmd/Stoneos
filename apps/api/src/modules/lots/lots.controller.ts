@@ -60,13 +60,45 @@ export class LotsController {
     return this.lots.writeOffBroken(user, body);
   }
 
+  /**
+   * Put a count off a lot through the polishing line: "VG01-70, send 50 through".
+   * Production input, not a sales action — the shed records it at end of shift.
+   */
+  @Post("polish")
+  @Roles(...PRODUCTION_INPUT_ROLES)
+  polish(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body()
+    body: {
+      blockSerial: string;
+      slabCount: number;
+      machineId: string;
+      processType: "GRINDING" | "RESIN" | "POLISHING";
+      finishType?: string;
+      runtimeHours?: number;
+      downtimeMinutes?: number;
+      occurredAt?: string;
+      clientOpId: string;
+    },
+  ) {
+    return this.lots.polishLot(user, body);
+  }
+
   /** Sell counts from one or more lots as a single order. */
   @Post("sell")
   @Roles(...SALES_DATA_ROLES)
   sell(
     @CurrentUser() user: AuthenticatedUser,
     @Body()
-    body: { customerId: string; orderDate?: string; lines: LotLineInput[]; clientOpId: string },
+    body: {
+      customerId: string;
+      orderDate?: string;
+      lines: LotLineInput[];
+      clientOpId: string;
+      /** Taken in cash against no bill. Posted to its own ledger and excluded from the return. */
+      cashAmount?: number;
+      cashNote?: string;
+    },
   ) {
     return this.lots.sellLots(user, body);
   }

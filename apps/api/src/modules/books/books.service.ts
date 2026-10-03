@@ -185,6 +185,41 @@ export class BooksService {
   }
 
   /**
+   * The cash leg of a block purchase: paid outside the GST bill, so no input credit.
+   *
+   * An unregistered quarry supplier cannot charge tax, so there is none to reclaim —
+   * the whole amount is cost of stone. Posted as its own voucher rather than folded
+   * into the taxable leg so the two can always be told apart afterwards, and so a
+   * block bought wholly in cash still produces a purchase entry.
+   */
+  async postCashPurchase(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    input: {
+      rawBlockId: string;
+      amountMinor: number;
+      clientOpId: string;
+      memo: string;
+      purchaseDate?: Date;
+    },
+  ) {
+    return postVoucher(tx, {
+      factoryId: user.factoryId,
+      type: "purchase",
+      source: "block_purchase_cash",
+      clientOpId: input.clientOpId,
+      createdBy: user.id,
+      operationalDate: input.purchaseDate,
+      sourceId: input.rawBlockId,
+      memo: input.memo,
+      lines: [
+        { ledgerCode: "STOCK", debit: input.amountMinor, credit: 0 },
+        { ledgerCode: "CASH", debit: 0, credit: input.amountMinor },
+      ],
+    });
+  }
+
+  /**
    * A counter sale settled in cash against no invoice. Cash is real and so is the
    * stock that left, so both are booked; the revenue simply lands on its own ledger.
    */

@@ -166,6 +166,7 @@ enum VoucherSource {
   sales_cn
   cash_sale
   block_purchase
+  block_purchase_cash
   expense_create
   intake_confirm
   muster_pay
@@ -448,6 +449,10 @@ model RawBlock {
   goodSlabCount   Int      @default(0) @map("good_slab_count")
   brokenSlabCount Int      @default(0) @map("broken_slab_count")
   soldSlabCount   Int      @default(0) @map("sold_slab_count")
+  /// How many of the lot have come off the polishing line. Deliberately not part of
+  /// availability: polishing changes what a slab is, not whether the yard still has
+  /// it. Kept so the floor can see VG-001 has 70 left but only 50 of them finished.
+  polishedSlabCount Int    @default(0) @map("polished_slab_count")
   /// Nominal finished area of one slab off this block, set when the cut is recorded.
   /// Slabs from one block are sawn to the same size, so a count converts to sqft.
   sqftPerSlab     Decimal? @map("sqft_per_slab") @db.Decimal(8, 2)
@@ -459,6 +464,7 @@ model RawBlock {
   writeOffs       StockWriteOff[]
   salesLines      SalesLineItem[]
   deliveryLines   DeliveryLine[]
+  polishingLots   PolishingSessionSlab[]
 
   @@unique([factoryId, serialNumber])
   @@map("raw_block")
@@ -654,14 +660,24 @@ model PolishingSession {
   @@map("polishing_session")
 }
 
+/// A line on a polishing session: either one identified slab, or a count off a lot.
+///
+/// The per-piece path is the older one and is untouched. A lot has no piece
+/// identities at all — a cut records counts against the block and never creates Slab
+/// rows — so a lot line names the block and how many of its slabs went through.
+/// Exactly one of the two is set.
 model PolishingSessionSlab {
   id                 String           @id @default(uuid())
   polishingSessionId String           @map("polishing_session_id")
   session            PolishingSession @relation(fields: [polishingSessionId], references: [id])
-  slabId             String           @map("slab_id")
-  slab               Slab             @relation(fields: [slabId], references: [id])
+  slabId             String?          @map("slab_id")
+  slab               Slab?            @relation(fields: [slabId], references: [id])
+  rawBlockId         String?          @map("raw_block_id")
+  rawBlock           RawBlock?        @relation(fields: [rawBlockId], references: [id])
+  slabCount          Int?             @map("slab_count")
 
   @@unique([polishingSessionId, slabId])
+  @@unique([polishingSessionId, rawBlockId])
   @@map("polishing_session_slab")
 }
 

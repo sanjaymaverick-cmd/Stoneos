@@ -78,8 +78,13 @@ export class DailyReportService {
         select: {
           runtimeHours: true,
           downtimeMinutes: true,
+          processType: true,
           slabs: {
-            select: { slab: { select: { id: true, lengthFt: true, widthFt: true } } },
+            select: {
+              slabCount: true,
+              slab: { select: { id: true, lengthFt: true, widthFt: true } },
+              rawBlock: { select: { sqftPerSlab: true } },
+            },
           },
         },
       }),
@@ -132,7 +137,22 @@ export class DailyReportService {
     // slab finished today usually appears two or three times. Counting the rows
     // would report more sqft polished than the factory owns.
     const polishedSlabs = new Map(
-      polishingSessions.flatMap((session) => session.slabs.map((s) => [s.slab.id, s.slab] as const)),
+      polishingSessions.flatMap((session) =>
+        session.slabs.flatMap((s) => (s.slab ? [[s.slab.id, s.slab] as const] : [])),
+      ),
+    );
+
+    // Lot lines carry a count, not identities, so they cannot be de-duplicated the
+    // way pieces are: there is no way to tell whether 50 ground and 50 polished are
+    // the same fifty. Only the POLISHING stage is counted — it is the one that makes
+    // stock sellable, and a slab can be polished only once, so the day's POLISHING
+    // lines can be summed without double counting.
+    const lotLines = polishingSessions
+      .filter((session) => session.processType === "POLISHING")
+      .flatMap((session) => session.slabs.filter((s) => s.rawBlock && s.slabCount));
+    const lotSlabsPolished = sum(lotLines.map((line) => line.slabCount ?? 0));
+    const lotSqftPolished = sum(
+      lotLines.map((line) => (line.slabCount ?? 0) * num(line.rawBlock?.sqftPerSlab)),
     );
 
     return {
@@ -154,8 +174,8 @@ export class DailyReportService {
         sessions: polishingSessions.length,
         runtimeHours: sum(polishingSessions.map((s) => num(s.runtimeHours))),
         downtimeMinutes: sum(polishingSessions.map((s) => s.downtimeMinutes ?? 0)),
-        slabsPolished: polishedSlabs.size,
-        sqftPolished: sum([...polishedSlabs.values()].map(slabSqft)),
+        slabsPolished: polishedSlabs.size + lotSlabsPolished,
+        sqftPolished: sum([...polishedSlabs.values()].map(slabSqft)) + lotSqftPolished,
       },
       ordersTaken: orders.length,
       orderSqft: sum(orders.flatMap((o) => o.lines.map((l) => num(l.quantitySqft)))),

@@ -84,6 +84,8 @@ export class InventoryController {
       purchaseTaxable?: number;
       /** Statutory slab; defaults to 5% for rough blocks (HSN 2516). */
       gstRatePct?: number;
+      /** Paid in cash outside the bill: cost of stone, but no GST and no credit. */
+      purchaseCashAmount?: number;
       supplierInvoiceNo?: string;
       invoicedAmount?: number;
       actualAmountPaid?: number;

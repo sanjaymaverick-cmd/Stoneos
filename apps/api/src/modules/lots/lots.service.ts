@@ -12,10 +12,14 @@ import {
   availableSlabs,
   checkCutCounts,
   checkSlabsAvailable,
+  checkSlabsPolishable,
   costPerSlab,
   goodFromCut,
   groupTaxLines,
+  lotLabel,
   lotSqft,
+  operationalDateFor,
+  polishableSlabs,
   totalTax,
   uniformRatePct,
   type TaxGroupInput,
@@ -77,6 +81,7 @@ export class LotsService {
         goodSlabCount: true,
         brokenSlabCount: true,
         soldSlabCount: true,
+        polishedSlabCount: true,
         sqftPerSlab: true,
       },
     });
@@ -86,10 +91,14 @@ export class LotsService {
         return {
           blockId: block.id,
           blockSerial: block.serialNumber,
+          /// "VG01-70" — the block and what is left on it, as the floor says it.
+          label: lotLabel(block.serialNumber, available),
           variety: block.varietyName,
           goodSlabCount: block.goodSlabCount,
           brokenSlabCount: block.brokenSlabCount,
           soldSlabCount: block.soldSlabCount,
+          polishedSlabCount: block.polishedSlabCount,
+          unpolishedSlabs: polishableSlabs(block),
           availableSlabs: available,
           sqftPerSlab: num(block.sqftPerSlab),
           availableSqft: lotSqft(available, num(block.sqftPerSlab) || null),
@@ -298,6 +307,149 @@ export class LotsService {
    * as one bill. Availability is checked and deducted inside the transaction, so two
    * clerks selling the last slabs at once cannot both succeed.
    */
+  /**
+   * Put a count off a lot through the polishing line.
+   *
+   * The lot has no piece identities — a cut records counts against the block and
+   * never creates Slab rows — so the floor selects the lot, not seventy slabs: "VG01-70,
+   * send 50 through". Recorded as a finished session rather than started and later
+   * closed, because that is how the shed reports it at the end of a shift.
+   *
+   * Only POLISHING advances the finished tally. Grinding and resin are stages on the
+   * way and leave a slab unsellable, so counting them would overstate finished stock.
+   *
+   * Nothing here moves stock. A polished slab is the same slab: availability is
+   * unchanged, which is why a lot can read "70 available, 50 polished".
+   */
+  async polishLot(
+    user: AuthenticatedUser,
+    input: {
+      blockSerial: string;
+      slabCount: number;
+      machineId: string;
+      processType: "GRINDING" | "RESIN" | "POLISHING";
+      finishType?: string;
+      runtimeHours?: number;
+      downtimeMinutes?: number;
+      occurredAt?: string;
+      clientOpId: string;
+    },
+  ) {
+    if (!input.clientOpId) throw new BadRequestException("clientOpId is required");
+    const at = parseOccurredAt(input.occurredAt);
+
+    return this.prisma.$transaction(async (tx) => {
+      // A resent run would put the same slabs through twice and overstate finished
+      // stock, so this is idempotent at the service and not only over HTTP.
+      const replay = await tx.syncOperation.findUnique({
+        where: {
+          factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId },
+        },
+      });
+      if (replay) {
+        const earlier = replay.response as { sessionId?: string } | null;
+        if (earlier?.sessionId) return this.polishResult(tx, earlier.sessionId);
+      }
+
+      const machine = await tx.machine.findFirst({
+        where: { id: input.machineId, factoryId: user.factoryId, machineType: "POLISHING" },
+      });
+      if (!machine) throw new NotFoundException("Polishing machine not found");
+
+      const block = await this.requireBlock(tx, user.factoryId, input.blockSerial);
+      if (block.goodSlabCount <= 0) {
+        throw new BadRequestException(
+          `${block.serialNumber} has not been cut yet, so nothing can be polished`,
+        );
+      }
+      const finishing = input.processType === "POLISHING";
+      const issue = finishing
+        ? checkSlabsPolishable(block, input.slabCount)
+        : checkSlabsAvailable(
+            // Grinding and resin do not consume the lot, so they are bounded by what
+            // the block yielded rather than by what is unsold.
+            { ...block, soldSlabCount: 0, brokenSlabCount: block.brokenSlabCount },
+            input.slabCount,
+          );
+      if (issue) throw new BadRequestException(issue.message);
+
+      const session = await tx.polishingSession.create({
+        data: {
+          factoryId: user.factoryId,
+          machineId: machine.id,
+          operationalDate: operationalDateFor(at),
+          processType: input.processType,
+          finishType: input.finishType?.trim() || null,
+          runtimeHours:
+            input.runtimeHours === undefined ? null : new Prisma.Decimal(input.runtimeHours),
+          downtimeMinutes: input.downtimeMinutes ?? null,
+          status: "COMPLETED",
+          slabs: { create: [{ rawBlockId: block.id, slabCount: input.slabCount }] },
+        },
+      });
+
+      if (finishing) {
+        await tx.rawBlock.update({
+          where: { id: block.id },
+          data: {
+            polishedSlabCount: { increment: input.slabCount },
+            version: { increment: 1 },
+          },
+        });
+      }
+
+      await tx.syncOperation.create({
+        data: {
+          factoryId: user.factoryId,
+          clientOpId: input.clientOpId,
+          actorId: user.id,
+          method: "POST",
+          path: "/api/v1/lots/polish",
+          requestHash: input.clientOpId,
+          statusCode: 201,
+          response: { sessionId: session.id } as Prisma.InputJsonValue,
+        },
+      });
+      await this.audit.record({
+        factoryId: user.factoryId,
+        actorId: user.id,
+        action: "lot.polish",
+        entityType: "polishing_session",
+        entityId: session.id,
+        payload: {
+          blockSerial: block.serialNumber,
+          slabCount: input.slabCount,
+          processType: input.processType,
+          machine: machine.name,
+        },
+      });
+      return this.polishResult(tx, session.id);
+    });
+  }
+
+  /** What the shed gets back: the run, and where the lot now stands. */
+  private async polishResult(tx: Prisma.TransactionClient, sessionId: string) {
+    const session = await tx.polishingSession.findUniqueOrThrow({
+      where: { id: sessionId },
+      include: { machine: true, slabs: { include: { rawBlock: true } } },
+    });
+    const lotLine = session.slabs.find((line) => line.rawBlock);
+    const block = lotLine?.rawBlock ?? null;
+    const left = block ? polishableSlabs(block) : 0;
+    return {
+      sessionId: session.id,
+      processType: session.processType,
+      machine: session.machine.name,
+      operationalDate: session.operationalDate,
+      blockSerial: block?.serialNumber ?? null,
+      slabCount: lotLine?.slabCount ?? 0,
+      polishedSlabCount: block?.polishedSlabCount ?? 0,
+      unpolishedSlabs: left,
+      availableSlabs: block ? availableSlabs(block) : 0,
+      label: block ? lotLabel(block.serialNumber, availableSlabs(block)) : null,
+    };
+  }
+
   async sellLots(
     user: AuthenticatedUser,
     input: {
@@ -305,10 +457,22 @@ export class LotsService {
       orderDate?: string;
       lines: LotLineInput[];
       clientOpId: string;
+      /**
+       * Consideration taken in cash against no bill. Recorded, never hidden: it is
+       * posted to SALES_UNBILLED, it shows in the day's figures, and the GST return
+       * reports it separately as excluded so the filed turnover is never mistaken
+       * for the whole turnover. A supply is taxable whether or not it was invoiced.
+       */
+      cashAmount?: number;
+      cashNote?: string;
     },
   ) {
     if (!input.lines?.length) throw new BadRequestException("A sale needs at least one lot line");
     const orderDate = parseBusinessDate(input.orderDate ?? new Date(), "orderDate");
+    const cashAmount = input.cashAmount ?? 0;
+    if (!Number.isFinite(cashAmount) || cashAmount < 0) {
+      throw new BadRequestException("Cash amount cannot be negative");
+    }
 
     return this.prisma.$transaction(async (tx) => {
       // Idempotent at the service, not only over HTTP. A resent sale that slipped
@@ -339,12 +503,17 @@ export class LotsService {
         },
       });
 
+      // What goes on the bill, in paise. A sale may be wholly billed, wholly cash,
+      // or part of each; this decides which, after every line has been priced.
+      let billedMinor = 0;
       for (const line of input.lines) {
         const block = await this.requireBlock(tx, user.factoryId, line.blockSerial);
         const issue = checkSlabsAvailable(block, line.slabCount);
         if (issue) throw new BadRequestException(issue.message);
-        if (!Number.isFinite(line.rate) || line.rate <= 0) {
-          throw new BadRequestException(`Rate for ${line.blockSerial} must be above zero`);
+        // Zero is allowed, but only on a sale whose consideration is the cash leg.
+        // A line priced at nothing with nothing paid outside the bill is a mistake.
+        if (!Number.isFinite(line.rate) || line.rate < 0) {
+          throw new BadRequestException(`Rate for ${line.blockSerial} cannot be negative`);
         }
         const perSlab = num(block.sqftPerSlab);
         if (perSlab <= 0) {
@@ -371,9 +540,50 @@ export class LotsService {
             rate: new Prisma.Decimal(line.rate),
           },
         });
+        billedMinor += rupeesToMinor(lotSqft(line.slabCount, perSlab) * line.rate);
         await tx.rawBlock.update({
           where: { id: block.id },
           data: { soldSlabCount: { increment: line.slabCount }, version: { increment: 1 } },
+        });
+      }
+
+      if (billedMinor <= 0 && cashAmount <= 0) {
+        throw new BadRequestException(
+          "A sale needs a rate on at least one line, a cash amount, or both",
+        );
+      }
+
+      // Nothing on the bill means there is no bill. The order is marked so that
+      // invoicing refuses it outright rather than raising one for zero.
+      if (billedMinor <= 0) {
+        await tx.salesOrder.update({
+          where: { id: order.id },
+          data: { billingMode: "cash_unbilled", version: { increment: 1 } },
+        });
+      }
+
+      if (cashAmount > 0) {
+        const sale = await tx.cashSale.create({
+          data: {
+            factoryId: user.factoryId,
+            salesOrderId: order.id,
+            buyerName: customer.name,
+            amount: new Prisma.Decimal(cashAmount),
+            saleDate: orderDate,
+            note: input.cashNote?.trim() || null,
+            clientOpId: `${input.clientOpId}:cash`,
+            recordedBy: user.id,
+          },
+        });
+        await this.books.postCashSale(tx, user, {
+          cashSaleId: sale.id,
+          amountMinor: rupeesToMinor(cashAmount),
+          memo:
+            billedMinor > 0
+              ? `Cash leg of lot sale to ${customer.name} (not on the bill)`
+              : `Cash lot sale to ${customer.name} (no invoice)`,
+          clientOpId: `cashsale:${input.clientOpId}`,
+          saleDate: orderDate,
         });
       }
 
@@ -398,6 +608,9 @@ export class LotsService {
         payload: {
           customer: customer.name,
           lines: input.lines.map((l) => ({ block: l.blockSerial, slabs: l.slabCount })),
+          billedAmount: minorToRupees(billedMinor),
+          cashAmount,
+          unbilled: cashAmount > 0,
         },
       });
       return this.orderResult(tx, order.id);
@@ -633,7 +846,7 @@ export class LotsService {
   private async orderResult(tx: Prisma.TransactionClient, orderId: string) {
     const order = await tx.salesOrder.findUniqueOrThrow({
       where: { id: orderId },
-      include: { customer: true, lines: { include: { rawBlock: true } } },
+      include: { customer: true, cashSale: true, lines: { include: { rawBlock: true } } },
     });
     return {
       orderId: order.id,
@@ -653,6 +866,10 @@ export class LotsService {
         (sum, line) => sum + num(line.quantitySqft) * num(line.rate),
         0,
       ),
+      billingMode: order.billingMode,
+      // The cash leg, if any. Carried on the result so a split sale never reads as a
+      // short one: billed + cash is what the customer actually owes.
+      cashAmount: num(order.cashSale?.amount),
     };
   }
 
@@ -693,6 +910,13 @@ export class LotsService {
         throw new BadRequestException("Order already invoiced");
       }
       if (order.lines.length === 0) throw new BadRequestException("Order has no lines");
+      // A sale taken wholly in cash has nothing to put on a bill. Raising one for
+      // zero would file a nil supply and leave the real one unaccounted.
+      if (order.billingMode === "cash_unbilled") {
+        throw new BadRequestException(
+          "This sale was taken in cash with no bill, so it cannot be invoiced",
+        );
+      }
 
       const profile = await tx.gstProfile.findUnique({ where: { factoryId: user.factoryId } });
       const factory = await tx.factory.findUniqueOrThrow({ where: { id: user.factoryId } });

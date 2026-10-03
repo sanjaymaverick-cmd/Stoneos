@@ -2623,6 +2623,255 @@ describe("postgres-backed workflows", () => {
     assert.equal(bill.totals.payable, 170_500);
   });
 
+  it("prices a block from both legs of the purchase, and books the cash one", async () => {
+    const { factory, asOwner } = await staffFactory("buycash");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08ZZZZZ0000Z1ZX", stateCode: "08", legalName: "Test Granites",
+    });
+    // 2,00,000 on the bill plus 50,000 in cash. The cash carries no GST, so there is
+    // no input credit on it — but it is still what the stone cost.
+    const received = await inventory.receiveBlock(asOwner, {
+      serialNumber: "VG-900",
+      varietyName: "Imperial Red",
+      weightTons: 20,
+      purchaseTaxable: 200_000,
+      purchaseCashAmount: 50_000,
+      clientOpId: "buy-cash-1",
+    });
+    const blockId = (received as { block: { id: string } }).block.id;
+    const stored = await prisma.rawBlock.findUniqueOrThrow({ where: { id: blockId } });
+    assert.equal(Number(stored.purchaseTaxable), 200_000);
+    assert.equal(Number(stored.purchaseCashAmount), 50_000);
+    // The vendor is owed only the bill: 2,00,000 + 5% = 2,10,000. The cash is gone.
+    assert.equal(Number(stored.invoicedAmount), 210_000);
+
+    const tb = await books.trialBalance(factory.id);
+    const debits = tb.reduce((sum, row) => sum + row.debit, 0);
+    const credits = tb.reduce((sum, row) => sum + row.credit, 0);
+    assert.equal(Math.round(debits * 100), Math.round(credits * 100), "books must balance");
+    // Both legs are stock; only the billed leg created a payable and input credit.
+    assert.equal(tb.find((row) => row.code === "STOCK")!.debit, 250_000);
+    assert.equal(tb.find((row) => row.code === "AP")!.credit, 210_000);
+    assert.equal(tb.find((row) => row.code === "CASH")!.credit, 50_000);
+    assert.equal(tb.find((row) => row.code === "GST_INPUT_CGST")!.debit, 5_000);
+
+    // And the cost basis the write-off valuation uses is both legs over the good slabs.
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-900", totalSlabsCut: 100, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "buy-cash-cut",
+    });
+    const off = await lots.writeOffBroken(asOwner, {
+      blockSerial: "VG-900", slabCount: 2, stage: "yard",
+      reason: "cracked in the stack", clientOpId: "buy-cash-off",
+    });
+    // 2,50,000 over 100 slabs is 2,500 each, not the 2,000 the bill alone would give.
+    assert.equal(off.costAmount, 5_000);
+  });
+
+  it("takes part of a lot sale in cash and leaves it off the bill, not off the books", async () => {
+    const { factory, asOwner } = await staffFactory("sellcash");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08ZZZZZ0000Z1ZX", stateCode: "08", legalName: "Test Granites",
+    });
+    await receiveBlock(factory.id, "VG-001", { taxable: 100_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 100, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "sc-cut",
+    });
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Part Cash Traders", stateCode: "08" },
+    });
+
+    // 50 slabs x 10 sqft x 80 = 40,000 billed, plus 15,000 in cash.
+    const order = await lots.sellLots(asOwner, {
+      customerId: customer.id,
+      clientOpId: "sc-sell",
+      cashAmount: 15_000,
+      cashNote: "balance settled at the gate",
+      lines: [{ blockSerial: "VG-001", slabCount: 50, rate: 80 }],
+    });
+    assert.equal(order.taxableAmount, 40_000);
+    assert.equal(order.cashAmount, 15_000);
+    assert.equal(order.billingMode, "gst_invoice");
+
+    // The bill carries the billed leg only.
+    const bill = await lots.invoiceOrder(asOwner, { orderId: order.orderId, clientOpId: "sc-inv" });
+    assert.equal(bill.totals.taxableAmount, 40_000);
+    assert.equal(bill.totals.payable, 47_200);
+
+    // The cash is on its own ledger, so turnover on SALES still reconciles to the
+    // invoices and the books still balance.
+    const tb = await books.trialBalance(factory.id);
+    const debits = tb.reduce((sum, row) => sum + row.debit, 0);
+    const credits = tb.reduce((sum, row) => sum + row.credit, 0);
+    assert.equal(Math.round(debits * 100), Math.round(credits * 100), "books must balance");
+    assert.equal(tb.find((row) => row.code === "SALES")!.credit, 40_000);
+    assert.equal(tb.find((row) => row.code === "SALES_UNBILLED")!.credit, 15_000);
+
+    // And the return reports it as excluded rather than silently dropping it.
+    const month = new Date().toISOString().slice(0, 7);
+    const gstr = await gst.gstr1(factory.id, month);
+    assert.equal(gstr.totals.taxable, 40_000);
+    assert.equal(gstr.excludedCashSales.count, 1);
+    assert.equal(gstr.excludedCashSales.amount, 15_000);
+  });
+
+  it("refuses to invoice a lot sale that was taken wholly in cash", async () => {
+    const { factory, asOwner } = await staffFactory("allcash");
+    await receiveBlock(factory.id, "VG-001", { taxable: 100_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 100, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "ac-cut",
+    });
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Counter Buyer", stateCode: "08" },
+    });
+    const order = await lots.sellLots(asOwner, {
+      customerId: customer.id,
+      clientOpId: "ac-sell",
+      cashAmount: 60_000,
+      lines: [{ blockSerial: "VG-001", slabCount: 20, rate: 0 }],
+    });
+    assert.equal(order.billingMode, "cash_unbilled");
+    assert.equal(order.cashAmount, 60_000);
+    // Stock still left the yard.
+    assert.equal((await lots.availability(factory.id)).lots[0]!.availableSlabs, 80);
+    await assert.rejects(
+      () => lots.invoiceOrder(asOwner, { orderId: order.orderId, clientOpId: "ac-inv" }),
+      /taken in cash with no bill/,
+    );
+    // A sale for nothing at all is still refused.
+    await assert.rejects(
+      () =>
+        lots.sellLots(asOwner, {
+          customerId: customer.id,
+          clientOpId: "ac-nothing",
+          lines: [{ blockSerial: "VG-001", slabCount: 1, rate: 0 }],
+        }),
+      /a cash amount/,
+    );
+  });
+
+  it("sends a count off a lot through the line without moving the stock", async () => {
+    const { factory, asOwner } = await staffFactory("polishlot");
+    await receiveBlock(factory.id, "VG-001");
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 70, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "pl-cut",
+    });
+    const lpm = await prisma.machine.findFirstOrThrow({
+      where: { factoryId: factory.id, machineType: "POLISHING" },
+    });
+
+    // The lot reads VG-001-70 before anything happens to it.
+    const before = (await lots.availability(factory.id)).lots[0]!;
+    assert.equal(before.label, "VG-001-70");
+    assert.equal(before.unpolishedSlabs, 70);
+    assert.equal(before.polishedSlabCount, 0);
+
+    const run = await lots.polishLot(asOwner, {
+      blockSerial: "VG-001",
+      slabCount: 50,
+      machineId: lpm.id,
+      processType: "POLISHING",
+      finishType: "mirror",
+      runtimeHours: 7.5,
+      clientOpId: "pl-run",
+    });
+    assert.equal(run.slabCount, 50);
+    assert.equal(run.polishedSlabCount, 50);
+    assert.equal(run.unpolishedSlabs, 20);
+    // Polishing changes what a slab is, not whether the yard has it.
+    assert.equal(run.availableSlabs, 70);
+    assert.equal(run.label, "VG-001-70");
+
+    // Resending the same run does not put the slabs through twice.
+    const replay = await lots.polishLot(asOwner, {
+      blockSerial: "VG-001", slabCount: 50, machineId: lpm.id,
+      processType: "POLISHING", clientOpId: "pl-run",
+    });
+    assert.equal(replay.sessionId, run.sessionId);
+    assert.equal(replay.polishedSlabCount, 50);
+
+    // Only 20 are left unfinished, so 21 is refused.
+    await assert.rejects(
+      () =>
+        lots.polishLot(asOwner, {
+          blockSerial: "VG-001", slabCount: 21, machineId: lpm.id,
+          processType: "POLISHING", clientOpId: "pl-over",
+        }),
+      /has 20 unpolished slabs, so 21 cannot go through/,
+    );
+
+    // Grinding is a stage on the way, so it does not count as finished.
+    await lots.polishLot(asOwner, {
+      blockSerial: "VG-001", slabCount: 20, machineId: lpm.id,
+      processType: "GRINDING", clientOpId: "pl-grind",
+    });
+    const after = (await lots.availability(factory.id)).lots[0]!;
+    assert.equal(after.polishedSlabCount, 50);
+    assert.equal(after.unpolishedSlabs, 20);
+  });
+
+  it("shows the lot shrinking as it sells, and keeps the polished tally", async () => {
+    const { factory, asOwner } = await staffFactory("lotlabel");
+    await receiveBlock(factory.id, "VG-001");
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 70, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "ll-cut",
+    });
+    const lpm = await prisma.machine.findFirstOrThrow({
+      where: { factoryId: factory.id, machineType: "POLISHING" },
+    });
+    await lots.polishLot(asOwner, {
+      blockSerial: "VG-001", slabCount: 70, machineId: lpm.id,
+      processType: "POLISHING", clientOpId: "ll-polish",
+    });
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Label Buyer", stateCode: "08" },
+    });
+    await lots.sellLots(asOwner, {
+      customerId: customer.id,
+      clientOpId: "ll-sell",
+      lines: [{ blockSerial: "VG-001", slabCount: 50, rate: 90 }],
+    });
+
+    // The whole of the user's example: VG-001-70, sell 50, balance reads VG-001-20.
+    const lot = (await lots.availability(factory.id)).lots[0]!;
+    assert.equal(lot.label, "VG-001-20");
+    assert.equal(lot.availableSlabs, 20);
+    // All 70 were finished before any went out, so nothing is left to polish.
+    assert.equal(lot.polishedSlabCount, 70);
+    assert.equal(lot.unpolishedSlabs, 0);
+  });
+
+  it("counts a lot polishing run as its slabs, not as one row", async () => {
+    const { factory, asOwner } = await staffFactory("polishday");
+    await receiveBlock(factory.id, "VG-001");
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 70, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "pd-cut",
+    });
+    const lpm = await prisma.machine.findFirstOrThrow({
+      where: { factoryId: factory.id, machineType: "POLISHING" },
+    });
+    // Ground first, then polished: the same fifty through twice. Only the polishing
+    // stage may be counted, or the day would report a hundred slabs finished.
+    await lots.polishLot(asOwner, {
+      blockSerial: "VG-001", slabCount: 50, machineId: lpm.id,
+      processType: "GRINDING", clientOpId: "pd-grind",
+    });
+    await lots.polishLot(asOwner, {
+      blockSerial: "VG-001", slabCount: 50, machineId: lpm.id,
+      processType: "POLISHING", runtimeHours: 8, clientOpId: "pd-polish",
+    });
+
+    const figures = await dailyReports.dailyFigures(factory.id);
+    assert.equal(figures.polishing.sessions, 2);
+    assert.equal(figures.polishing.slabsPolished, 50);
+    assert.equal(figures.polishing.sqftPolished, 500);
+  });
+
   it("posts breakage to the ledger and keeps the books balanced", async () => {
     const { factory, asOwner } = await staffFactory("lotbooks");
     await receiveBlock(factory.id, "VG-001", { taxable: 180_000, cash: 0 });

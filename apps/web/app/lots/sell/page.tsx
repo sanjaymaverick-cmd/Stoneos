@@ -20,8 +20,11 @@ import { formatInr, todayIst } from "../../../lib/format";
 type Lot = {
   blockId: string;
   blockSerial: string;
+  /** "VG01-70" — the block and what is left on it. */
+  label: string;
   variety: string;
   availableSlabs: number;
+  polishedSlabCount: number;
   sqftPerSlab: number;
 };
 type Availability = { lots: Lot[] };
@@ -43,6 +46,8 @@ type OrderResult = {
   orderId: string;
   customer: string;
   taxableAmount: number;
+  billingMode: string;
+  cashAmount: number;
   lines: Array<{ blockSerial: string | null; slabCount: number | null }>;
 };
 
@@ -106,6 +111,10 @@ export default function SellLotsPage() {
   const [gstRatePct, setGstRatePct] = useState(String(HSN_CHOICES[0]!.rate));
   const [description, setDescription] = useState("");
 
+  // What is settled in cash against no bill, for the whole sale.
+  const [cashAmount, setCashAmount] = useState("");
+  const [cashNote, setCashNote] = useState("");
+
   // Consignee
   const [shipName, setShipName] = useState("");
   const [shipAddress, setShipAddress] = useState("");
@@ -160,7 +169,9 @@ export default function SellLotsPage() {
         }`,
       );
     }
-    if (!Number(rate)) return setError("Enter a rate per sqft");
+    if (rate.trim() === "" || Number(rate) < 0 || !Number.isFinite(Number(rate))) {
+      return setError("Enter a rate per sqft — 0 only if the whole sale is in cash");
+    }
 
     setBasket((rows) => [
       ...rows,
@@ -185,6 +196,7 @@ export default function SellLotsPage() {
   const basketTaxable = basket.reduce((n, l) => n + lineAmount(l), 0);
   /** Indicative only: the server computes the tax that counts, per HSN and rate. */
   const basketTax = basket.reduce((n, l) => n + (lineAmount(l) * l.gstRatePct) / 100, 0);
+  const cash = Number(cashAmount || 0);
 
   async function confirmSale(event: FormEvent) {
     event.preventDefault();
@@ -198,6 +210,8 @@ export default function SellLotsPage() {
           customerId,
           orderDate: todayIst(),
           clientOpId: stableOp("sell"),
+          cashAmount: cash > 0 ? cash : undefined,
+          cashNote: cashNote.trim() || undefined,
           lines: basket.map((l) => ({
             blockSerial: l.blockSerial,
             slabCount: l.slabCount,
@@ -216,7 +230,14 @@ export default function SellLotsPage() {
       delete opIds.current.sell;
       setOrder(result);
       setBasket([]);
-      setNotice(`Sale confirmed for ${result.customer}. Stock deducted.`);
+      setCashAmount("");
+      setCashNote("");
+      setNotice(
+        result.cashAmount > 0
+          ? `Sale confirmed for ${result.customer}. Stock deducted. ` +
+            `${formatInr(result.cashAmount)} recorded as cash with no bill.`
+          : `Sale confirmed for ${result.customer}. Stock deducted.`,
+      );
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -273,13 +294,33 @@ export default function SellLotsPage() {
 
         {bill ? <BillView bill={bill} onDone={() => setBill(null)} /> : null}
 
-        {!bill && order ? (
+        {!bill && order && order.billingMode === "cash_unbilled" ? (
+          <div className="card">
+            <h2>Cash sale recorded</h2>
+            <p className="muted">
+              {order.customer} ·{" "}
+              {order.lines.map((l) => `${l.blockSerial} × ${l.slabCount}`).join(", ")} ·{" "}
+              {formatInr(order.cashAmount)} in cash
+            </p>
+            <p className="muted">
+              Nothing was put on a bill, so there is no tax invoice to raise. The stock
+              is out of the yard and the cash is on the books; the GST return lists this
+              separately as excluded turnover.
+            </p>
+            <button type="button" onClick={() => setOrder(null)}>
+              Start another sale
+            </button>
+          </div>
+        ) : null}
+
+        {!bill && order && order.billingMode !== "cash_unbilled" ? (
           <div className="card">
             <h2>Invoice this sale</h2>
             <p className="muted">
               {order.customer} ·{" "}
               {order.lines.map((l) => `${l.blockSerial} × ${l.slabCount}`).join(", ")} ·
-              taxable {formatInr(order.taxableAmount)}
+              billed {formatInr(order.taxableAmount)}
+              {order.cashAmount > 0 ? ` · ${formatInr(order.cashAmount)} in cash` : ""}
             </p>
             <p className="muted">
               Ship to, if the goods go somewhere other than the billing address. A
@@ -351,7 +392,8 @@ export default function SellLotsPage() {
                     <option value="">Choose a lot</option>
                     {lots.map((lot) => (
                       <option key={lot.blockId} value={lot.blockSerial}>
-                        {lot.blockSerial} · {lot.variety} · {remaining(lot)} available
+                        {lot.blockSerial}-{remaining(lot)} · {lot.variety} ·{" "}
+                        {lot.polishedSlabCount} polished
                       </option>
                     ))}
                   </select>
@@ -471,23 +513,70 @@ export default function SellLotsPage() {
                     </tbody>
                   </table>
                   <p className="hint">
-                    Taxable {formatInr(basketTaxable)} · GST about{" "}
+                    Billed {formatInr(basketTaxable)} · GST about{" "}
                     {formatInr(Math.round(basketTax * 100) / 100)} · around{" "}
                     {formatInr(Math.round((basketTaxable + basketTax) * 100) / 100)}.
                     The invoice works out the exact tax per HSN.
                   </p>
+                  <label>
+                    Taken in cash, no bill (₹)
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="1"
+                      value={cashAmount}
+                      onChange={(e) => setCashAmount(e.target.value)}
+                    />
+                  </label>
+                  {cash > 0 ? (
+                    <>
+                      <label>
+                        What this cash is for
+                        <input
+                          value={cashNote}
+                          onChange={(e) => setCashNote(e.target.value)}
+                          placeholder="optional note"
+                        />
+                      </label>
+                      <p className="hint">
+                        Customer pays about{" "}
+                        {formatInr(
+                          Math.round((basketTaxable + basketTax + cash) * 100) / 100,
+                        )}{" "}
+                        in all: {formatInr(Math.round((basketTaxable + basketTax) * 100) / 100)}{" "}
+                        on the bill and {formatInr(cash)} in cash.
+                      </p>
+                      <p className="muted">
+                        The cash is recorded on its own ledger and shows in the day&apos;s
+                        figures. It is left off the tax invoice, so the GST return reports
+                        it separately as excluded — the filed turnover is never mistaken
+                        for the whole turnover. A supply is taxable whether or not a bill
+                        was raised.
+                      </p>
+                    </>
+                  ) : null}
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
                       void confirmSale(e);
                     }}
                   >
-                    <button type="submit" disabled={!customerId}>
+                    <button
+                      type="submit"
+                      disabled={!customerId || (basketTaxable <= 0 && cash <= 0)}
+                    >
                       Confirm sale and deduct stock
                     </button>
                   </form>
                   {!customerId ? (
                     <p className="muted">Choose a customer first.</p>
+                  ) : null}
+                  {customerId && basketTaxable <= 0 && cash <= 0 ? (
+                    <p className="muted">
+                      Put a rate on a line, or a cash amount, or both — otherwise this
+                      sale is for nothing.
+                    </p>
                   ) : null}
                 </>
               )}

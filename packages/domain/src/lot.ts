@@ -22,10 +22,58 @@ export interface LotCounts {
   /** Written off after stocking: broken in the yard, in transport, while loading. */
   brokenSlabCount: number;
   soldSlabCount: number;
+  /// Been through the polishing line. Optional because most callers do not ask for
+  /// it, and because it must never be mistaken for a fourth term of availability.
+  polishedSlabCount?: number;
 }
 
 export function availableSlabs(lot: LotCounts): number {
   return lot.goodSlabCount - lot.brokenSlabCount - lot.soldSlabCount;
+}
+
+/**
+ * How the yard names a lot: the block, then how many slabs are in it.
+ *
+ *     VG01-70
+ *
+ * One label for one lot, not seventy labels for seventy pieces. The count is the
+ * live one, so the same block reads VG01-70 before a sale and VG01-20 after fifty go
+ * out — which is exactly how the floor describes it, and why the count belongs in
+ * the label rather than in a column beside it.
+ */
+export function lotLabel(serialNumber: string, slabCount: number): string {
+  return `${serialNumber}-${slabCount}`;
+}
+
+/**
+ * How many of this lot could still go through the polishing line.
+ *
+ * Slabs that broke never will, and a slab is not polished twice. Sold slabs are
+ * deliberately NOT subtracted: a buyer may take rough stock, and polishing a lot
+ * before the lorry comes is ordinary. So this is what remains unfinished of
+ * everything the block yielded, not what is unfinished and still unsold.
+ */
+export function polishableSlabs(lot: LotCounts): number {
+  return lot.goodSlabCount - lot.brokenSlabCount - (lot.polishedSlabCount ?? 0);
+}
+
+/** Whether this many slabs of the lot can go through the line. */
+export function checkSlabsPolishable(
+  lot: LotCounts & { serialNumber: string },
+  wanted: number,
+): LotIssue | null {
+  if (!Number.isInteger(wanted) || wanted <= 0) {
+    return { message: `Slab count must be a whole number above zero, got ${wanted}` };
+  }
+  const left = polishableSlabs(lot);
+  if (wanted > left) {
+    return {
+      message:
+        `${lot.serialNumber} has ${left} unpolished slab${left === 1 ? "" : "s"}, ` +
+        `so ${wanted} cannot go through`,
+    };
+  }
+  return null;
 }
 
 /** Area of a count of slabs. Zero when the cut never recorded a slab size. */
