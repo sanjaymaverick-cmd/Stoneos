@@ -40,6 +40,104 @@ export class SalesService {
   }
 
   /**
+   * Change a buyer's details.
+   *
+   * Mostly this exists because every customer added before the form captured a GSTIN
+   * has none, and without one their bills go out as unregistered local sales. Those
+   * rows cannot be fixed by adding the buyer again — that would leave two of them,
+   * with the orders on the wrong one.
+   *
+   * Only the fields passed are touched: `undefined` leaves a field alone, while an
+   * explicit empty string clears it. That distinction matters here, because clearing
+   * a GSTIN is a real thing to want (a buyer whose registration lapsed) and must not
+   * be indistinguishable from not mentioning it.
+   */
+  async updateCustomer(
+    user: AuthenticatedUser,
+    customerId: string,
+    input: {
+      name?: string;
+      contactInfo?: string | null;
+      stateCode?: string | null;
+      gstin?: string | null;
+      billingAddress?: string | null;
+      shippingAddress?: string | null;
+    },
+  ) {
+    const existing = await this.prisma.customer.findFirst({
+      where: { id: customerId, factoryId: user.factoryId },
+    });
+    if (!existing) throw new NotFoundException("Customer not found");
+
+    const data: Prisma.CustomerUpdateInput = { version: { increment: 1 } };
+
+    if (input.name !== undefined) {
+      const name = input.name.trim();
+      if (!name) throw new BadRequestException("A customer needs a name");
+      data.name = name;
+    }
+    if (input.contactInfo !== undefined) data.contactInfo = input.contactInfo?.trim() || null;
+    if (input.billingAddress !== undefined) {
+      data.billingAddress = input.billingAddress?.trim() || null;
+    }
+    if (input.shippingAddress !== undefined) {
+      data.shippingAddress = input.shippingAddress?.trim() || null;
+    }
+
+    // The GSTIN and the state move together: the first two characters of a GSTIN ARE
+    // the state, so whichever is being changed, they are resolved against each other
+    // and against whatever is already stored.
+    const touchingGst = input.gstin !== undefined || input.stateCode !== undefined;
+    if (touchingGst) {
+      const gstin = input.gstin === undefined ? existing.gstin : cleanGstin(input.gstin);
+      const claimed =
+        input.stateCode === undefined
+          ? normaliseStateCode(existing.stateCode)
+          : normaliseStateCode(input.stateCode);
+      const fromGstin = gstin ? stateCodeFromGstin(gstin) : null;
+      if (claimed && fromGstin && claimed !== fromGstin) {
+        throw new BadRequestException(
+          `State code ${claimed} contradicts GSTIN ${gstin}, which is state ${fromGstin}`,
+        );
+      }
+      data.gstin = gstin;
+      data.stateCode = fromGstin ?? claimed;
+    }
+
+    const updated = await this.prisma.customer.update({ where: { id: existing.id }, data });
+
+    // Who a bill is made out to, and at what tax, is worth a record when it changes.
+    await this.prisma.auditEvent.create({
+      data: {
+        factoryId: user.factoryId,
+        actorId: user.id,
+        action: "sales.customer_updated",
+        entityType: "customer",
+        entityId: existing.id,
+        payload: {
+          before: {
+            name: existing.name,
+            gstin: existing.gstin,
+            stateCode: existing.stateCode,
+            billingAddress: existing.billingAddress,
+            shippingAddress: existing.shippingAddress,
+            contactInfo: existing.contactInfo,
+          },
+          after: {
+            name: updated.name,
+            gstin: updated.gstin,
+            stateCode: updated.stateCode,
+            billingAddress: updated.billingAddress,
+            shippingAddress: updated.shippingAddress,
+            contactInfo: updated.contactInfo,
+          },
+        },
+      },
+    });
+    return updated;
+  }
+
+  /**
    * A buyer, with everything a tax invoice needs printed on it.
    *
    * The GSTIN is the load-bearing field: it decides CGST+SGST against IGST, and a

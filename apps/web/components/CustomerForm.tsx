@@ -35,20 +35,40 @@ const STATES: Array<{ code: string; name: string }> = [
 
 const stateName = (code: string) => STATES.find((s) => s.code === code)?.name ?? null;
 
+export type EditableCustomer = {
+  id: string;
+  name: string;
+  gstin?: string | null;
+  stateCode?: string | null;
+  billingAddress?: string | null;
+  shippingAddress?: string | null;
+  contactInfo?: string | null;
+};
+
 export function CustomerForm({
   onAdded,
   heading = "Add a customer",
+  editing,
+  onCancel,
 }: {
-  /** Called once the server has the buyer, so the caller can refresh its list. */
-  onAdded?: (result: unknown) => void;
+  /**
+   * Called once the server has the buyer, so the caller can refresh its list. The
+   * message is handed up because a caller that closes this card on success would
+   * otherwise unmount the confirmation with it, and the save would look like nothing
+   * happened.
+   */
+  onAdded?: (result: unknown, message: string) => void;
   heading?: string;
+  /** When set, the form changes the buyer rather than making a new one. */
+  editing?: EditableCustomer;
+  onCancel?: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [gstin, setGstin] = useState("");
-  const [stateCode, setStateCode] = useState("");
-  const [billingAddress, setBillingAddress] = useState("");
-  const [shippingAddress, setShippingAddress] = useState("");
-  const [contactInfo, setContactInfo] = useState("");
+  const [name, setName] = useState(editing?.name ?? "");
+  const [gstin, setGstin] = useState(editing?.gstin ?? "");
+  const [stateCode, setStateCode] = useState(editing?.stateCode ?? "");
+  const [billingAddress, setBillingAddress] = useState(editing?.billingAddress ?? "");
+  const [shippingAddress, setShippingAddress] = useState(editing?.shippingAddress ?? "");
+  const [contactInfo, setContactInfo] = useState(editing?.contactInfo ?? "");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -71,32 +91,54 @@ export function CustomerForm({
     }
     setBusy(true);
     try {
-      const result = await apiFetch("/api/v1/customers", {
-        method: "POST",
-        label: `New customer ${name.trim()}`,
-        body: JSON.stringify({
-          name: name.trim(),
-          gstin: typed || undefined,
-          stateCode: gstinState ?? stateCode ?? undefined,
-          billingAddress: billingAddress.trim() || undefined,
-          shippingAddress: shippingAddress.trim() || undefined,
-          contactInfo: contactInfo.trim() || undefined,
-        }),
-      });
-      setNotice(
+      // Editing sends every field, empty string included: a blank GSTIN on an edit
+      // means "clear it", which is different from not mentioning it.
+      const body = editing
+        ? {
+            name: name.trim(),
+            gstin: typed,
+            stateCode: gstinState ?? stateCode,
+            billingAddress: billingAddress.trim(),
+            shippingAddress: shippingAddress.trim(),
+            contactInfo: contactInfo.trim(),
+          }
+        : {
+            name: name.trim(),
+            gstin: typed || undefined,
+            stateCode: gstinState ?? stateCode ?? undefined,
+            billingAddress: billingAddress.trim() || undefined,
+            shippingAddress: shippingAddress.trim() || undefined,
+            contactInfo: contactInfo.trim() || undefined,
+          };
+      const result = await apiFetch(
+        editing ? `/api/v1/customers/${editing.id}` : "/api/v1/customers",
+        {
+          method: editing ? "PATCH" : "POST",
+          label: editing ? `Update ${name.trim()}` : `New customer ${name.trim()}`,
+          body: JSON.stringify(body),
+        },
+      );
+      const message = (
         isQueued(result)
           ? `${name.trim()} saved on this device; they will sync.`
-          : typed
-            ? `${name.trim()} added — ${typed}, ${stateName(typed.slice(0, 2)) ?? `state ${typed.slice(0, 2)}`}.`
-            : `${name.trim()} added with no GSTIN, so their bills are unregistered sales.`,
+          : editing
+            ? typed
+              ? `${name.trim()} updated — ${typed}, ${stateName(typed.slice(0, 2)) ?? `state ${typed.slice(0, 2)}`}. Bills from now on use it.`
+              : `${name.trim()} updated with no GSTIN, so their bills stay unregistered sales.`
+            : typed
+              ? `${name.trim()} added — ${typed}, ${stateName(typed.slice(0, 2)) ?? `state ${typed.slice(0, 2)}`}.`
+              : `${name.trim()} added with no GSTIN, so their bills are unregistered sales.`
       );
-      setName("");
-      setGstin("");
-      setStateCode("");
-      setBillingAddress("");
-      setShippingAddress("");
-      setContactInfo("");
-      onAdded?.(result);
+      setNotice(message);
+      if (!editing) {
+        setName("");
+        setGstin("");
+        setStateCode("");
+        setBillingAddress("");
+        setShippingAddress("");
+        setContactInfo("");
+      }
+      onAdded?.(result, message);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -106,7 +148,14 @@ export function CustomerForm({
 
   return (
     <div className="card">
-      <h2>{heading}</h2>
+      <h2>{editing ? `Edit ${editing.name}` : heading}</h2>
+      {editing && !editing.gstin ? (
+        <p className="muted">
+          This buyer has no GSTIN, so every bill to them so far has gone out as an
+          unregistered local sale. Adding it fixes bills from now on; invoices already
+          raised are unchanged.
+        </p>
+      ) : null}
       {notice ? <p className="hint">{notice}</p> : null}
       {error ? <p className="error">{error}</p> : null}
       <form onSubmit={submit}>
@@ -182,8 +231,16 @@ export function CustomerForm({
           />
         </label>
         <button type="submit" disabled={busy || !name.trim() || !gstinLooksRight}>
-          {busy ? "Saving…" : "Add customer"}
+          {busy ? "Saving…" : editing ? "Save changes" : "Add customer"}
         </button>
+        {editing && onCancel ? (
+          <>
+            {" "}
+            <button type="button" className="secondary" onClick={onCancel}>
+              Cancel
+            </button>
+          </>
+        ) : null}
       </form>
     </div>
   );

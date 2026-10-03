@@ -182,3 +182,14 @@ test("polishing refuses nonsense counts and reads singular at one", () => {
 test("a lot with no polishing recorded is entirely unpolished", () => {
   assert.equal(polishableSlabs({ goodSlabCount: 70, brokenSlabCount: 0, soldSlabCount: 0 }), 70);
 });
+
+test("a lot broken into after polishing has none left to polish, not minus three", () => {
+  // 73 cut, all 73 polished, then 3 broke in the yard. good - broken - polished = -3.
+  const block = { serialNumber: "VG-015", goodSlabCount: 73, brokenSlabCount: 3, soldSlabCount: 31, polishedSlabCount: 73 };
+  assert.equal(polishableSlabs(block), 0);
+  assert.equal(availableSlabs(block), 39, "availability is untouched by any of this");
+  assert.equal(
+    checkSlabsPolishable(block, 1)?.message,
+    "VG-015 has 0 unpolished slabs, so 1 cannot go through",
+  );
+});

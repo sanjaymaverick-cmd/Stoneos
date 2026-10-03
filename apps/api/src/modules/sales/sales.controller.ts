@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Patch, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { PAYMENT_ROLES, SALES_DATA_ROLES, SALES_READ_ROLES } from "@stoneos/contracts";
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
@@ -38,6 +38,28 @@ export class SalesController {
       billingAddress: body.billingAddress,
       shippingAddress: body.shippingAddress,
     });
+  }
+
+  /**
+   * Change a buyer. Chiefly for the ones added before the form captured a GSTIN:
+   * without one their bills go out as unregistered local sales.
+   */
+  @Patch("customers/:id")
+  @Roles(...SALES_DATA_ROLES)
+  updateCustomer(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body()
+    body: {
+      name?: string;
+      contactInfo?: string | null;
+      stateCode?: string | null;
+      gstin?: string | null;
+      billingAddress?: string | null;
+      shippingAddress?: string | null;
+    },
+  ) {
+    return this.service.updateCustomer(user, id, body);
   }
 
   @Get("quotations")
