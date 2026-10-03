@@ -24,6 +24,7 @@ import { GstService } from "../src/modules/gst/gst.service";
 import { CopilotService } from "../src/modules/books/copilot.service";
 import { MaintenanceService } from "../src/modules/maintenance/maintenance.service";
 import { ReportsService } from "../src/modules/reports/reports.service";
+import { PartyReportService } from "../src/modules/reports/party-report.service";
 import { DailyReportService } from "../src/modules/reports/daily-report.service";
 import { LotsService } from "../src/modules/lots/lots.service";
 import { ConsumablesController } from "../src/modules/production/consumables.controller";
@@ -41,11 +42,8 @@ const apiRoot = path.resolve(root, "..");
  * for invoices it had just written. Deriving it keeps the test about GST and not
  * about the calendar.
  *
- * It is also a reminder of an open gap. `Invoice` has no `invoiceDate` column, so
- * gstr1() filters on `createdAt` — the moment the row was written. A September
- * invoice entered on 1 October therefore files in October's return, which is
- * wrong and is exactly what happens at every month end. Tracked as C10 in
- * docs/architecture-critic-review.md.
+ * Invoice dates default to today; explicit backdated invoices are tested separately
+ * against fiscal numbering, ledger dates, and their original GST month.
  */
 function currentFactoryDate(): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -2565,9 +2563,12 @@ describe("postgres-backed workflows", () => {
     const bill = await lots.invoiceOrder(asOwner, {
       orderId: order.orderId,
       clientOpId: "bill-inv",
+      invoiceDate: "2026-09-30",
       shipTo: { name: "Sharma site store", address: "Sitapura, Jaipur", stateCode: "08" },
     });
     assert.match(bill.invoiceNumber, /^INV-/);
+    assert.equal(bill.invoiceDate,"2026-09-30");
+    assert.equal((await prisma.voucher.findFirstOrThrow({where:{factoryId:factory.id,source:"sales_invoice"}})).operationalDate.toISOString().slice(0,10),"2026-09-30");
     assert.equal(bill.seller.gstin, "08AAUFV3603N1ZH");
     assert.equal(bill.billTo.name, "Sharma Marbles");
     assert.equal(bill.billTo.address, "MI Road, Jaipur");
@@ -2714,6 +2715,11 @@ describe("postgres-backed workflows", () => {
     assert.equal(gstr.totals.taxable, 40_000);
     assert.equal(gstr.excludedCashSales.count, 1);
     assert.equal(gstr.excludedCashSales.amount, 15_000);
+    const report = await new PartyReportService(prisma as never).report(factory.id, {side: "customer"});
+    assert.equal(report.totals.charges, 62_200);
+    assert.equal(report.totals.received, 15_000);
+    assert.equal(report.summary[0]?.due, 47_200);
+    assert.equal(report.rows.filter(r => r.type === "Sale").length, 2);
   });
 
   it("refuses to invoice a lot sale that was taken wholly in cash", async () => {
@@ -2734,6 +2740,11 @@ describe("postgres-backed workflows", () => {
     });
     assert.equal(order.billingMode, "cash_unbilled");
     assert.equal(order.cashAmount, 60_000);
+    const report = await new PartyReportService(prisma as never).report(factory.id, {side: "customer"});
+    assert.equal(report.totals.charges, 60_000);
+    assert.equal(report.totals.received, 60_000);
+    assert.equal(report.summary[0]?.due, 0);
+    assert.equal(report.rows.find(r => r.type === "Payment received")?.mode, "cash");
     // Stock still left the yard.
     assert.equal((await lots.availability(factory.id)).lots[0]!.availableSlabs, 80);
     await assert.rejects(
@@ -3722,5 +3733,35 @@ describe("postgres-backed workflows", () => {
     const figures = await dailyReports.dailyFigures(factory.id);
     assert.equal(figures.date.getUTCDate(), today);
     assert.ok(workbook.bytes.length > 0);
+  });
+
+  it("uses invoice dates across fiscal numbering, books, GSTR and customer statements", async()=>{
+    const {factory,asOwner}=await staffFactory("invoice-date");
+    const customer=await sales.createCustomer(asOwner,"Dated Buyer");
+    const order=await sales.createOrder(asOwner,{customerId:customer.id,orderDate:currentFactoryDate(),clientOpId:"dated-order",lines:[{quantitySqft:10,rate:100}]}) as {id:string};
+    const invoice=await sales.invoice(asOwner,order.id,"dated-invoice",[],undefined,"2025-03-31");
+    assert.equal(invoice.invoiceDate?.toISOString().slice(0,10),"2025-03-31");
+    assert.ok(invoice.invoiceNumber.startsWith("INV-2024-"));
+    const voucher=await prisma.voucher.findFirstOrThrow({where:{factoryId:factory.id,source:"sales_invoice"}});
+    assert.equal(voucher.operationalDate.toISOString().slice(0,10),"2025-03-31");
+    const gstr=await gst.gstr1(factory.id,"2025-03");
+    assert.ok(gstr.csv.includes(invoice.invoiceNumber));
+    await sales.pay(asOwner,invoice.id,{amount:250,paidAt:"2025-04-01",method:"UPI",clientOpId:"dated-pay"});
+    const service=new PartyReportService(prisma as never);
+    const r=await service.report(factory.id,{from:"2025-04-01",to:"2025-04-30",side:"customer"});
+    assert.equal(r.summary[0]?.opening,1000);assert.equal(r.summary[0]?.due,750);
+    assert.equal(r.rows[0]?.mode,"UPI");assert.equal(r.rows.length,1);
+    const book=await service.workbook(factory.id,{});assert.equal(book.bytes.readUInt32LE(0),0x04034b50);
+    const other=await staffFactory("other-date");assert.equal((await service.report(other.factory.id)).rows.length,0);
+    await assert.rejects(()=>service.report(other.factory.id,{partyId:"customer:"+customer.id}),/belong/);
+    await assert.rejects(()=>sales.invoice(asOwner,order.id,"future-date",[],undefined,"2099-01-01"),/invoiceDate/);
+    await assert.rejects(()=>sales.invoice(asOwner,order.id,"invalid-date",[],undefined,"2026-02-31"),/invoiceDate/);
+  });
+  it("reports purchase cost, supplier payments and unknown historical payment modes without duplicate vouchers",async()=>{
+    const {factory,asOwner}=await staffFactory("purchase-report");const supplier=await inventory.createSupplier(asOwner,"Quarry report");
+    await inventory.receiveBlock(asOwner,{serialNumber:"PR-01",varietyName:"Grey",weightTons:10,supplierId:supplier.id,invoicedAmount:1000,actualAmountPaid:250,purchaseCashAmount:100,purchasePaymentMethod:"bank transfer",clientOpId:"purchase-r1"});
+    const r=await new PartyReportService(prisma as never).report(factory.id,{side:"supplier"});
+    assert.equal(r.summary[0]?.due,750);assert.equal(r.totals.paid,350);assert.equal(r.rows.filter(e=>e.type==="Purchase").length,1);
+    assert.ok(r.rows.some(e=>e.mode==="bank transfer"));
   });
 });

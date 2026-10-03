@@ -9,6 +9,7 @@ import {
 import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
 import { PrismaService } from "../../common/prisma.service";
 import { DailyReportService, type GeneratedWorkbook } from "./daily-report.service";
+import { PartyReportService, type PartyFilters } from "./party-report.service";
 import { ReportsService } from "./reports.service";
 
 const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -39,9 +40,22 @@ function sendWorkbook(res: Response, workbook: GeneratedWorkbook): StreamableFil
 export class ReportsController {
   constructor(
     @Inject(ReportsService) private reports: ReportsService,
+    @Inject(PartyReportService) private partyReports: PartyReportService,
     @Inject(DailyReportService) private dailyReports: DailyReportService,
     @Inject(PrismaService) private prisma: PrismaService,
   ) {}
+
+  @Get("parties")
+  @Roles(...COMMERCIAL_READ_ROLES)
+  parties(@CurrentUser() user: AuthenticatedUser, @Query() filters: PartyFilters) {
+    return this.partyReports.report(user.factoryId, filters);
+  }
+  @Get("parties.xlsx")
+  @Roles(...COMMERCIAL_READ_ROLES)
+  async partyWorkbook(@CurrentUser() user: AuthenticatedUser, @Query() filters: PartyFilters, @Res({ passthrough: true }) res: Response) {
+    res.set("Cache-Control", "no-store");
+    return sendWorkbook(res, await this.partyReports.workbook(user.factoryId, filters));
+  }
 
   @Get("today")
   @Roles(...ANY_AUTHENTICATED_ROLE)

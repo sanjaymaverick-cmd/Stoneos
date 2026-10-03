@@ -247,6 +247,7 @@ export class InventoryService {
       supplierInvoiceNo?: string;
       invoicedAmount?: number;
       actualAmountPaid?: number;
+      purchasePaymentMethod?: string;
       qualityNote?: string;
       locationCode?: string;
       clientOpId: string;
@@ -325,6 +326,7 @@ export class InventoryService {
           // The vendor is owed the whole bill; the block is valued at the taxable amount.
           invoicedAmount: input.invoicedAmount ?? (taxable ? minorToRupees(gst.totalMinor) : undefined),
           actualAmountPaid: input.actualAmountPaid,
+          purchasePaymentMethod: input.purchasePaymentMethod?.trim() || null,
           qualityNote: input.qualityNote,
           locationId: location.id,
           purchaseDate: receivedAt,

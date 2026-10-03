@@ -93,7 +93,7 @@ export class DailyReportService {
         select: { lines: { select: { quantitySqft: true, rate: true } } },
       }),
       this.prisma.invoice.findMany({
-        where: { factoryId, createdAt: { gte: start, lt: end } },
+        where: { factoryId, OR: [{ invoiceDate: date }, { invoiceDate: null, createdAt: { gte: start, lt: end } }] },
         select: {
           invoiceNumber: true,
           taxableAmount: true,

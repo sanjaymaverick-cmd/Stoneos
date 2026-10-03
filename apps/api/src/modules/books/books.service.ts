@@ -44,6 +44,7 @@ export class BooksService {
       gst: GstBreakdown;
       /** Charges billed outside the taxable value. Owed by the customer, never taxed. */
       exemptMinor?: number;
+      invoiceDate?: Date;
       clientOpId: string;
     },
   ) {
@@ -62,6 +63,7 @@ export class BooksService {
       factoryId: user.factoryId,
       type: "sales",
       source: "sales_invoice",
+      operationalDate: input.invoiceDate,
       clientOpId: input.clientOpId,
       createdBy: user.id,
       sourceId: input.invoiceId,

@@ -11,6 +11,7 @@
  * a tax invoice is a document, and what it says must be what was recorded.
  */
 
+import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "../../../components/AppShell";
 import { CustomerForm } from "../../../components/CustomerForm";
@@ -54,6 +55,7 @@ type OrderResult = {
 
 type Bill = {
   invoiceNumber: string;
+  invoiceDate: string;
   seller: { legalName: string | null; gstin: string | null; stateCode: string | null };
   billTo: { name: string; address: string | null; gstin: string | null; stateCode: string | null };
   shipTo: { name: string | null; address: string | null; gstin: string | null; stateCode: string | null };
@@ -115,6 +117,8 @@ export default function SellLotsPage() {
   // What is settled in cash against no bill, for the whole sale.
   const [cashAmount, setCashAmount] = useState("");
   const [cashNote, setCashNote] = useState("");
+
+  const [invoiceDate, setInvoiceDate] = useState(todayIst());
 
   // Consignee
   const [shipName, setShipName] = useState("");
@@ -255,6 +259,7 @@ export default function SellLotsPage() {
         label: `Invoice · ${order.customer}`,
         body: JSON.stringify({
           orderId: order.orderId,
+          invoiceDate,
           clientOpId: stableOp(`inv:${order.orderId}`),
           shipTo:
             shipName || shipAddress || shipGstin || shipState
@@ -284,6 +289,7 @@ export default function SellLotsPage() {
       <div className="page">
         <div className="dash-head">
           <h1>Sell by lot</h1>
+          <p><Link href="/sales/reports">Customer / supplier reports and dues →</Link></p>
           <p className="muted">
             Choose a block and how many slabs go. Add as many lots as the load needs,
             then bill them together.
@@ -333,6 +339,10 @@ export default function SellLotsPage() {
                 void makeInvoice();
               }}
             >
+              <label>
+                Invoice date
+                <input type="date" required max={todayIst()} value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+              </label>
               <label>
                 Consignee name
                 <input value={shipName} onChange={(e) => setShipName(e.target.value)} />
@@ -608,6 +618,7 @@ function BillView({ bill, onDone }: { bill: Bill; onDone: () => void }) {
   return (
     <div className="card wide">
       <h2>Tax invoice {bill.invoiceNumber}</h2>
+      <p>Invoice date: {bill.invoiceDate}</p>
       <div className="parties">
         <div>
           <h3>Seller</h3>

@@ -14,6 +14,7 @@ import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { assertAllowedRoles } from "../../common/session.guard";
 import { PAYMENT_ROLES, type Role } from "@stoneos/contracts";
+import { invoiceBusinessDate } from "./invoice-date";
 import { isUniqueViolation, nextDocumentNumber } from "./document-number";
 import { BooksService } from "../books/books.service";
 import {
@@ -606,7 +607,9 @@ export class SalesService {
     charges: Array<{ label: string; amount: number; taxable?: boolean }> = [],
     /** Statutory slab for this supply. Defaults to 18% for finished slabs (HSN 6802). */
     gstRatePct?: number,
+    invoiceDateInput?: string,
   ) {
+    const invoiceDate = invoiceBusinessDate(invoiceDateInput);
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     if (order.billingMode === "cash_unbilled") {
       throw new BadRequestException(
@@ -672,6 +675,7 @@ export class SalesService {
           tx,
           user.factoryId,
           "INVOICE",
+          invoiceDate,
         );
         try {
           const created = await tx.invoice.create({
@@ -680,6 +684,7 @@ export class SalesService {
               salesOrderId: order.id,
               customerId: order.customerId,
               invoiceNumber,
+              invoiceDate,
               amount,
               taxableAmount: minorToRupees(gst.taxableMinor),
               cgstAmount: minorToRupees(gst.cgstMinor),
@@ -713,6 +718,7 @@ export class SalesService {
           });
           await this.books.postInvoice(tx, user, {
             invoiceId: created.id,
+            invoiceDate,
             customerName: customer?.name ?? "Unknown",
             gst,
             exemptMinor: rupeesToMinor(chargeExempt),
@@ -748,8 +754,9 @@ export class SalesService {
     // confirmer happens to hold. Asserting here means no future caller can widen who
     // may settle an invoice by accident.
     assertAllowedRoles(PAYMENT_ROLES, user.role as Role);
-    if (input.amount <= 0)
+    if (!Number.isFinite(input.amount) || input.amount <= 0)
       throw new BadRequestException("Amount must be positive");
+    if (typeof input.method !== "string" || !input.method.trim()) throw new BadRequestException("Payment mode is required");
     const paidAt = parseBusinessDate(input.paidAt, "paidAt");
     return this.prisma.$transaction(
       async (tx) => {
