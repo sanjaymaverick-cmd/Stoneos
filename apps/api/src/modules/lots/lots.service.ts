@@ -39,6 +39,7 @@ import {
   rupeesToMinor,
   stateCodeFromGstin,
 } from "../books/money";
+import { invoiceBusinessDate } from "../sales/invoice-date";
 import { nextDocumentNumber } from "../sales/document-number";
 
 /** Prisma hands Decimal back; the arithmetic here wants plain numbers. */
@@ -887,6 +888,7 @@ export class LotsService {
     input: {
       orderId: string;
       clientOpId: string;
+      invoiceDate?: string;
       shipTo?: { name?: string; address?: string; gstin?: string; stateCode?: string };
     },
   ) {
@@ -946,13 +948,15 @@ export class LotsService {
       const groups = groupTaxLines(taxInput, interState);
       const totals = totalTax(groups);
 
-      const number = await nextDocumentNumber(tx, user.factoryId, "INVOICE", order.orderDate);
+      const invoiceDate = invoiceBusinessDate(input.invoiceDate);
+      const number = await nextDocumentNumber(tx, user.factoryId, "INVOICE", invoiceDate);
       const invoice = await tx.invoice.create({
         data: {
           factoryId: user.factoryId,
           salesOrderId: order.id,
           customerId: order.customer.id,
           invoiceNumber: number,
+          invoiceDate,
           amount: new Prisma.Decimal(minorToRupees(totals.totalMinor)),
           taxableAmount: new Prisma.Decimal(minorToRupees(totals.taxableMinor)),
           cgstAmount: new Prisma.Decimal(minorToRupees(totals.cgstMinor)),
@@ -989,6 +993,7 @@ export class LotsService {
       await this.books.ensureFactoryChart(user.factoryId);
       await this.books.postInvoice(tx, user, {
         invoiceId: invoice.id,
+        invoiceDate,
         customerName: order.customer.name,
         gst: {
           taxableMinor: totals.taxableMinor,
@@ -1028,6 +1033,7 @@ export class LotsService {
     });
     return {
       invoiceNumber: invoice.invoiceNumber,
+      invoiceDate: (invoice.invoiceDate ?? invoice.createdAt).toISOString().slice(0, 10),
       invoiceId: invoice.id,
       seller: {
         legalName: invoice.sellerLegalName,

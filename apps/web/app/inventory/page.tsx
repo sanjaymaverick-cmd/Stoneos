@@ -54,6 +54,8 @@ export default function InventoryPage() {
   const [supplierId, setSupplierId] = useState("");
   const [quarry, setQuarry] = useState("");
   const [purchaseTaxable, setPurchaseTaxable] = useState("");
+  const [purchasePaid, setPurchasePaid] = useState("");
+  const [purchasePaymentMethod, setPurchasePaymentMethod] = useState("cash");
   const [purchaseCash, setPurchaseCash] = useState("");
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState("");
   const [suppliers, setSuppliers] = useState<
@@ -136,6 +138,8 @@ export default function InventoryPage() {
             : undefined,
           purchaseCashAmount: purchaseCash ? Number(purchaseCash) : undefined,
           supplierInvoiceNo: supplierInvoiceNo.trim() || undefined,
+          actualAmountPaid: purchasePaid ? Number(purchasePaid) : undefined,
+          purchasePaymentMethod: purchasePaid ? purchasePaymentMethod : undefined,
           clientOpId: receiveOp.current,
         }),
       });
@@ -159,6 +163,7 @@ export default function InventoryPage() {
       setWeightTons("");
       setPurchaseTaxable("");
       setPurchaseCash("");
+      setPurchasePaid("");
       setSupplierInvoiceNo("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Receive failed");
@@ -224,6 +229,14 @@ export default function InventoryPage() {
                 </option>
               ))}
             </select>
+          </label>
+          <label>
+            Paid against purchase bill
+            <input type="number" min="0" step="0.01" value={purchasePaid} onChange={e=>setPurchasePaid(e.target.value)} />
+          </label>
+          <label>
+            Purchase payment mode
+            <select value={purchasePaymentMethod} onChange={e=>setPurchasePaymentMethod(e.target.value)}><option value="cash">Cash</option><option value="UPI">UPI</option><option value="bank transfer">Bank transfer</option><option value="cheque">Cheque</option></select>
           </label>
           <label>
             Quarry

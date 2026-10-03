@@ -11,6 +11,7 @@ import { InventoryModule } from "./modules/inventory/inventory.module";
 import { ProductionModule } from "./modules/production/production.module";
 import { ReportsController } from "./modules/reports/reports.controller";
 import { ReportsService } from "./modules/reports/reports.service";
+import { PartyReportService } from "./modules/reports/party-report.service";
 import { DailyReportService } from "./modules/reports/daily-report.service";
 import { LotsController } from "./modules/lots/lots.controller";
 import { LotsService } from "./modules/lots/lots.service";
@@ -43,6 +44,7 @@ import { GstModule } from "./modules/gst/gst.module";
   controllers: [HealthController, ReportsController, LotsController],
   providers: [
     ReportsService,
+    PartyReportService,
     LotsService,
     DailyReportService,
     { provide: APP_GUARD, useClass: SessionGuard },

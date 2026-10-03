@@ -145,9 +145,10 @@ export class SalesController {
       charges?: Array<{ label: string; amount: number; taxable?: boolean }>;
       /** Statutory slab for this supply; defaults to 18% for finished slabs. */
       gstRatePct?: number;
+      invoiceDate?: string;
     },
   ) {
-    return this.service.invoice(user, id, body.clientOpId, body.charges ?? [], body.gstRatePct);
+    return this.service.invoice(user, id, body.clientOpId, body.charges ?? [], body.gstRatePct, body.invoiceDate);
   }
 
   /**

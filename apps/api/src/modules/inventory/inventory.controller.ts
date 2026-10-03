@@ -111,6 +111,7 @@ export class InventoryController {
       supplierInvoiceNo?: string;
       invoicedAmount?: number;
       actualAmountPaid?: number;
+      purchasePaymentMethod?: string;
       qualityNote?: string;
       locationCode?: string;
       clientOpId: string;

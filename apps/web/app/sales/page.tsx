@@ -9,7 +9,7 @@ import { CustomerForm, type EditableCustomer } from "../../components/CustomerFo
 import { EmptyState } from "../../components/EmptyState";
 import { apiFetch, isQueued, pendingRef, ref } from "../../lib/api";
 import { bodyOf, queuedAt, useOutbox } from "../../lib/useOutbox";
-import { slabLabel, slabSqft } from "../../lib/format";
+import { todayIst, slabLabel, slabSqft } from "../../lib/format";
 
 type Customer = {
   id: string;
@@ -46,6 +46,7 @@ type Order = {
     id: string;
     amount: string;
     invoiceNumber?: string;
+    invoiceDate?: string;
     payments?: Array<{ amount: string }>;
     creditNotes?: Array<{ amount: string }>;
   }>;
@@ -67,7 +68,7 @@ type OrderRow = {
   returnSlabIds?: string[];
   packed?: boolean;
   pending?: string;
-  invoice?: { id: string; amount: string; invoiceNumber?: string };
+  invoice?: { id: string; amount: string; invoiceNumber?: string; invoiceDate?: string };
 };
 
 export default function SalesPage() {
@@ -83,6 +84,7 @@ export default function SalesPage() {
   const [qty, setQty] = useState("32");
   const [rate, setRate] = useState("120");
   const [notice, setNotice] = useState("");
+  const [invoiceDate, setInvoiceDate] = useState(todayIst());
   const [error, setError] = useState("");
   const { items, refresh: refreshQueue } = useOutbox();
   const opIds = useRef<Record<string, string>>({});
@@ -270,6 +272,7 @@ export default function SalesPage() {
   return (
     <AppShell>
       <h1>Sell</h1>
+      <p><Link href="/sales/reports">Reports · customer and supplier statements, payments and dues →</Link></p>
       {/*
         This page is the older per-slab flow: it sells named pieces. The yard works
         by the lot now, and everything added since — the cash-and-billed split, the
@@ -439,6 +442,7 @@ export default function SalesPage() {
       </div>
       <div className="card">
         <h2>Orders</h2>
+        <label>Invoice date <input type="date" required max={todayIst()} value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></label>
         {rows.length === 0 ? (
           <EmptyState>
             No sales orders yet. Add a customer and confirm an order to populate
@@ -456,6 +460,7 @@ export default function SalesPage() {
               {row.invoice?.invoiceNumber ? (
                 <span className="muted"> · {row.invoice.invoiceNumber}</span>
               ) : null}
+              {row.invoice?.invoiceDate && <span className="muted"> · Date: {row.invoice.invoiceDate.slice(0,10)}</span>}
               {waiting.length ? (
                 <span className="muted"> · queued: {waiting.join(", ")}</span>
               ) : null}{" "}
@@ -513,7 +518,7 @@ export default function SalesPage() {
                         row,
                         "invoice",
                         "Invoice",
-                        {},
+                        { invoiceDate },
                         "Invoice raised",
                         `inv:${row.key}`,
                       )
@@ -523,31 +528,11 @@ export default function SalesPage() {
                   </button>
                 )}
               {canCollect && row.invoice && Number(row.invoice.amount) > 0 ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    run(async () => {
-                      const invoice = row.invoice!;
-                      const result = await apiFetch(
-                        `/api/v1/invoices/${invoice.id}/payments`,
-                        {
-                          method: "POST",
-                          label: `Payment ${invoice.invoiceNumber ?? ""} · ${row.customerName}`,
-                          body: JSON.stringify({
-                            amount: Number(invoice.amount),
-                            method: "cash",
-                            paidAt: new Date().toISOString().slice(0, 10),
-                            clientOpId: stableOp(`pay:${invoice.id}`),
-                          }),
-                        },
-                      );
-                      clearOp(`pay:${invoice.id}`);
-                      report(result, "Payment recorded");
-                    })
-                  }
-                >
-                  Record payment
-                </button>
+                <PaymentEntry amount={Number(row.invoice.amount)} onSave={(amount, method, paidAt)=>run(async()=>{
+                  const invoice=row.invoice!;
+                  const result=await apiFetch(`/api/v1/invoices/${invoice.id}/payments`,{method:"POST",label: `Payment · ${row.customerName}`,body:JSON.stringify({amount,method,paidAt,clientOpId:stableOp(`pay:${invoice.id}`)})});
+                  clearOp(`pay:${invoice.id}`);report(result,"Payment recorded");
+                })} />
               ) : row.pending ? (
                 <span className="muted">
                   {" "}
@@ -583,4 +568,14 @@ export default function SalesPage() {
       </div>
     </AppShell>
   );
+}
+
+function PaymentEntry({amount,onSave}:{amount:number;onSave:(amount:number,method:string,date:string)=>Promise<void>}){
+  const [paid,setPaid]=useState(String(amount));const [mode,setMode]=useState("cash");const [date,setDate]=useState(todayIst());
+  return <form onSubmit={e=>{e.preventDefault();void onSave(Number(paid),mode,date);}}>
+    <label>Payment amount<input type="number" min="0.01" step="0.01" max={amount} required value={paid} onChange={e=>setPaid(e.target.value)}/></label>
+    <label>Payment mode<select value={mode} onChange={e=>setMode(e.target.value)}><option value="cash">Cash</option><option value="UPI">UPI</option><option value="bank transfer">Bank transfer</option><option value="cheque">Cheque</option></select></label>
+    <label>Payment date<input type="date" required max={todayIst()} value={date} onChange={e=>setDate(e.target.value)}/></label>
+    <button type="submit">Record payment</button>
+  </form>;
 }

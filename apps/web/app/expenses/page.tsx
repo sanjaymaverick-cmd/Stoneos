@@ -99,6 +99,7 @@ export default function ExpensesPage() {
   return (
     <AppShell>
       <h1>Money</h1>
+      <p><Link href="/sales/reports">Customer and supplier statements, payments and dues →</Link></p>
       <div className="grid">
         <div className="metric ok">
           <span>Collected today</span>

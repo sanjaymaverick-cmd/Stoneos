@@ -420,6 +420,7 @@ model RawBlock {
   /// Total on the vendor bill, tax included. What is owed to the supplier.
   invoicedAmount     Decimal?           @map("invoiced_amount") @db.Decimal(14, 2)
   actualAmountPaid   Decimal?           @map("actual_amount_paid") @db.Decimal(14, 2)
+  purchasePaymentMethod String?        @map("purchase_payment_method")
   /// Value before tax. This, never the tax-inclusive total, is the block's cost basis:
   /// GST paid is recoverable as input credit and is not a cost of the stone.
   purchaseTaxable    Decimal?           @map("purchase_taxable") @db.Decimal(14, 2)
@@ -873,6 +874,7 @@ model Invoice {
   customerId     String     @map("customer_id")
   customer       Customer   @relation(fields: [customerId], references: [id])
   invoiceNumber  String     @map("invoice_number")
+  invoiceDate    DateTime?  @map("invoice_date") @db.Date
   /// Total payable: taxable value plus tax. AR and payments settle against this.
   amount         Decimal    @db.Decimal(14, 2)
   /// Value before tax: sum of quantity x rate, since rates are quoted ex-GST.
@@ -905,6 +907,7 @@ model Invoice {
   taxLines       InvoiceTaxLine[]
   eInvoice       EInvoice?
 
+  @@index([factoryId, invoiceDate], map: "invoice_factory_date_idx")
   @@unique([factoryId, invoiceNumber])
   @@unique([factoryId, idempotencyKey])
   @@map("invoice")

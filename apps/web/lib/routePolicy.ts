@@ -30,6 +30,7 @@ export const routes: Array<{
   { href: "/inventory", label: "Yard", roles: floor },
   { href: "/production", label: "Cut", roles: [...floor, "operator"] },
   { href: "/sales", label: "Sell", roles: floor },
+  { href: "/sales/reports", label: "Party reports", roles: [...floor, ...money], nav: false },
   { href: "/expenses", label: "Money", roles: money },
   ...[
     {

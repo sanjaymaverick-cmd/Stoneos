@@ -138,6 +138,7 @@ export class LotsController {
     body: {
       orderId: string;
       clientOpId: string;
+      invoiceDate?: string;
       shipTo?: { name?: string; address?: string; gstin?: string; stateCode?: string };
     },
   ) {

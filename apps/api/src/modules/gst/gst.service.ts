@@ -81,7 +81,7 @@ export class GstService {
     const payload = {
       Version: "1.1",
       Irn: irn,
-      DocDtls: { Typ: "INV", No: invoice.invoiceNumber, Dt: invoice.createdAt.toISOString().slice(0, 10) },
+      DocDtls: { Typ: "INV", No: invoice.invoiceNumber, Dt: (invoice.invoiceDate ?? invoice.createdAt).toISOString().slice(0, 10) },
       // Values are read off the invoice as charged, never recomputed: a later profile
       // edit must not be able to restate a document already reported to the IRP.
       ValDtls: {
@@ -266,8 +266,9 @@ export class GstService {
     const endMonth = Number(m[2]) === 12 ? 1 : Number(m[2]) + 1;
     const endYear = Number(m[2]) === 12 ? Number(m[1]) + 1 : Number(m[1]);
     const end = factoryMonthStart(new Date(`${endYear}-${String(endMonth).padStart(2, "0")}-15T12:00:00Z`));
+    const dateRange = calendarMonthUtcRange(month);
     const invoices = await this.prisma.invoice.findMany({
-      where: { factoryId, createdAt: { gte: start, lt: end } },
+      where: { factoryId, OR: [{ invoiceDate: { gte: dateRange.start, lt: dateRange.end } }, { invoiceDate: null, createdAt: { gte: start, lt: end } }] },
       include: { customer: true, eInvoice: true },
     });
     const notes = await this.prisma.creditNote.findMany({
