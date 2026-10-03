@@ -3159,6 +3159,37 @@ describe("postgres-backed workflows", () => {
     assert.equal(stored.gstin, null);
   });
 
+  it("counts lot stock on both dashboards, not just identified slabs", async () => {
+    const { factory, asOwner } = await staffFactory("dash");
+    await receiveBlock(factory.id, "VG-001", { taxable: 100_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 70, damagedAtSaw: 0, sqftPerSlab: 49.5,
+      clientOpId: "dash-cut",
+    });
+    // A cut creates no Slab rows at all, so a dashboard counting that table alone
+    // reported an empty yard for a factory holding seventy slabs.
+    assert.equal(await prisma.slab.count({ where: { factoryId: factory.id } }), 0);
+
+    // Both of them: /reports/today is served by ceoBrief and the shop screen by
+    // shopDashboard. They counted separately, so fixing one left the other wrong.
+    assert.equal((await reports.shopDashboard(factory.id)).slabsOnHand, 70);
+    assert.equal((await reports.ceoBrief(factory.id)).slabsOnHand, 70);
+
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Buyer", stateCode: "08" },
+    });
+    await lots.sellLots(asOwner, {
+      customerId: customer.id, clientOpId: "dash-sell",
+      lines: [{ blockSerial: "VG-001", slabCount: 50, rate: 30 }],
+    });
+    await lots.writeOffBroken(asOwner, {
+      blockSerial: "VG-001", slabCount: 3, stage: "yard", reason: "cracked",
+      clientOpId: "dash-off",
+    });
+    assert.equal((await reports.shopDashboard(factory.id)).slabsOnHand, 17, "70 less 50 sold less 3 broken");
+    assert.equal((await reports.ceoBrief(factory.id)).slabsOnHand, 17);
+  });
+
   it("posts breakage to the ledger and keeps the books balanced", async () => {
     const { factory, asOwner } = await staffFactory("lotbooks");
     await receiveBlock(factory.id, "VG-001", { taxable: 180_000, cash: 0 });
