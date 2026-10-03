@@ -5,9 +5,12 @@ import {
   checkCutCounts,
   checkSlabsAvailable,
   costPerSlab,
+  checkSlabsPolishable,
   goodFromCut,
   groupTaxLines,
+  lotLabel,
   lotSqft,
+  polishableSlabs,
   totalTax,
   uniformRatePct,
   HSN_FINISHED_SLAB,
@@ -145,4 +148,37 @@ test("a mixed-rate bill reports no single rate; a uniform one reports its rate",
   );
   assert.equal(uniformRatePct(uniform), 18);
   assert.equal(uniformRatePct([]), null);
+});
+
+test("a lot is labelled by its block and its live count", () => {
+  assert.equal(lotLabel("VG01", 70), "VG01-70");
+  // The same block after fifty go out. The label moves with the stock; it is not a
+  // name the block keeps.
+  assert.equal(lotLabel("VG01", 20), "VG01-20");
+  assert.equal(lotLabel("VG-001", 0), "VG-001-0");
+});
+
+test("polishing is capped by what is unfinished, not by what is unsold", () => {
+  // 90 cut, 4 broken, 30 already polished -> 56 left to polish.
+  const block = { serialNumber: "VG01", goodSlabCount: 90, brokenSlabCount: 4, soldSlabCount: 50, polishedSlabCount: 30 };
+  assert.equal(polishableSlabs(block), 56);
+  // Deliberately more than the 36 available: slabs already sold were polished too,
+  // and a lot is routinely finished before the lorry arrives.
+  assert.equal(availableSlabs(block), 36);
+  assert.equal(checkSlabsPolishable(block, 56), null);
+  assert.equal(
+    checkSlabsPolishable(block, 57)?.message,
+    "VG01 has 56 unpolished slabs, so 57 cannot go through",
+  );
+});
+
+test("polishing refuses nonsense counts and reads singular at one", () => {
+  const block = { serialNumber: "VG01", goodSlabCount: 10, brokenSlabCount: 0, soldSlabCount: 0, polishedSlabCount: 9 };
+  assert.equal(checkSlabsPolishable(block, 2)?.message, "VG01 has 1 unpolished slab, so 2 cannot go through");
+  assert.equal(checkSlabsPolishable(block, 0)?.message, "Slab count must be a whole number above zero, got 0");
+  assert.equal(checkSlabsPolishable(block, 1.5)?.message, "Slab count must be a whole number above zero, got 1.5");
+});
+
+test("a lot with no polishing recorded is entirely unpolished", () => {
+  assert.equal(polishableSlabs({ goodSlabCount: 70, brokenSlabCount: 0, soldSlabCount: 0 }), 70);
 });

@@ -121,6 +121,12 @@ export class InventoryService {
       purchaseTaxable?: number;
       /** Statutory slab. Defaults to 5% for rough blocks (HSN 2516). */
       gstRatePct?: number;
+      /**
+       * Paid in cash outside the bill. Cost of stone like the taxable leg, but it
+       * carries no GST and so no input credit — an unregistered quarry cannot charge
+       * tax. It sits beside purchaseTaxable in the cost basis, never inside it.
+       */
+      purchaseCashAmount?: number;
       supplierInvoiceNo?: string;
       invoicedAmount?: number;
       actualAmountPaid?: number;
@@ -135,6 +141,7 @@ export class InventoryService {
     assertBlockWeight(input.weightTons);
     for (const [field, value] of [
       ["purchaseTaxable", input.purchaseTaxable],
+      ["purchaseCashAmount", input.purchaseCashAmount],
       ["invoicedAmount", input.invoicedAmount],
       ["actualAmountPaid", input.actualAmountPaid],
     ] as const) {
@@ -166,6 +173,7 @@ export class InventoryService {
       // Rough blocks are 5% (HSN 2516), not the 18% a finished slab carries. The rate is
       // chosen per receipt because a yard buys more than stone.
       const taxable = input.purchaseTaxable ?? input.invoicedAmount ?? 0;
+      const cash = input.purchaseCashAmount ?? 0;
       const profile = await tx.gstProfile.findUnique({ where: { factoryId: user.factoryId } });
       const ourState = profile ? (stateCodeFromGstin(profile.gstin) ?? profile.stateCode) : null;
       const vendorState =
@@ -189,6 +197,7 @@ export class InventoryService {
           quarry: input.quarry,
           weightTons: input.weightTons,
           purchaseTaxable: taxable || undefined,
+          purchaseCashAmount: cash,
           purchaseCgst: minorToRupees(gst.cgstMinor),
           purchaseSgst: minorToRupees(gst.sgstMinor),
           purchaseIgst: minorToRupees(gst.igstMinor),
@@ -205,6 +214,15 @@ export class InventoryService {
           createdAt: receivedAt,
         },
       });
+      if (cash > 0) {
+        await this.books.postCashPurchase(tx, user, {
+          rawBlockId: block.id,
+          amountMinor: rupeesToMinor(cash),
+          clientOpId: `purchase-cash:${input.clientOpId}`,
+          memo: `Block ${block.serialNumber} — cash, no bill`,
+          purchaseDate: receivedAt,
+        });
+      }
       if (taxable > 0) {
         await this.books.postPurchase(tx, user, {
           rawBlockId: block.id,

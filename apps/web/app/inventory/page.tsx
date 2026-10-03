@@ -44,6 +44,7 @@ export default function InventoryPage() {
   const [supplierId, setSupplierId] = useState("");
   const [quarry, setQuarry] = useState("");
   const [purchaseTaxable, setPurchaseTaxable] = useState("");
+  const [purchaseCash, setPurchaseCash] = useState("");
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState("");
   const [suppliers, setSuppliers] = useState<
     Array<{ id: string; name: string }>
@@ -82,6 +83,7 @@ export default function InventoryPage() {
           purchaseTaxable: purchaseTaxable
             ? Number(purchaseTaxable)
             : undefined,
+          purchaseCashAmount: purchaseCash ? Number(purchaseCash) : undefined,
           supplierInvoiceNo: supplierInvoiceNo.trim() || undefined,
           clientOpId: receiveOp.current,
         }),
@@ -105,6 +107,7 @@ export default function InventoryPage() {
       setSerial("");
       setWeightTons("");
       setPurchaseTaxable("");
+      setPurchaseCash("");
       setSupplierInvoiceNo("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Receive failed");
@@ -190,10 +193,32 @@ export default function InventoryPage() {
               onChange={(e) => setPurchaseTaxable(e.target.value)}
             />
           </label>
-          {purchaseTaxable && weightTons ? (
-            <p className="muted">
-              {formatInr(Number(purchaseTaxable) / Number(weightTons))} per ton
-              · 5% GST on top
+          <label>
+            Paid in cash, no bill (₹)
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="1"
+              value={purchaseCash}
+              onChange={(e) => setPurchaseCash(e.target.value)}
+            />
+          </label>
+          <p className="muted">
+            Cash carries no GST, so there is no input credit to claim on it — but it
+            is still what the stone cost, so it counts towards the cost of every slab
+            off this block.
+          </p>
+          {purchaseTaxable || purchaseCash ? (
+            <p className="hint">
+              Cost basis {formatInr(Number(purchaseTaxable || 0) + Number(purchaseCash || 0))}
+              {weightTons
+                ? ` · ${formatInr(
+                    (Number(purchaseTaxable || 0) + Number(purchaseCash || 0)) /
+                      Number(weightTons),
+                  )} per ton`
+                : ""}
+              {purchaseTaxable ? " · 5% GST on the billed part" : ""}
             </p>
           ) : null}
           <label>
