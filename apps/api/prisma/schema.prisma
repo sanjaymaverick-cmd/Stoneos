@@ -458,6 +458,7 @@ model RawBlock {
   openingLines    OpeningInventoryLine[]
   writeOffs       StockWriteOff[]
   salesLines      SalesLineItem[]
+  deliveryLines   DeliveryLine[]
 
   @@unique([factoryId, serialNumber])
   @@map("raw_block")
@@ -773,6 +774,10 @@ model SalesLineItem {
   rawBlockId   String?    @map("raw_block_id")
   rawBlock     RawBlock?  @relation(fields: [rawBlockId], references: [id])
   slabCount    Int?       @map("slab_count")
+  /// How many of this line's slabs have actually left the gate. The sale already
+  /// deducted them from stock, so this tracks fulfilment, never availability —
+  /// which is why a dispatch must not touch the lot counts a second time.
+  dispatchedCount Int     @default(0) @map("dispatched_count")
   /// What the buyer sees on the bill, and the HSN it is classified under. Slabs are
   /// 6802, rough blocks 2516, and they attract different rates — so the code lives
   /// on the line, not the invoice, and one bill may carry both.
@@ -826,13 +831,20 @@ model Delivery {
 }
 
 model DeliveryLine {
-  id         String   @id @default(uuid())
-  deliveryId String   @map("delivery_id")
-  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
-  slabId     String   @map("slab_id")
-  slab       Slab     @relation(fields: [slabId], references: [id])
+  id         String    @id @default(uuid())
+  deliveryId String    @map("delivery_id")
+  delivery   Delivery  @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  /// A piece dispatch names the slab. A lot dispatch names the block and a count
+  /// instead, because the goods going out of the gate have no piece identities —
+  /// exactly one of the two is set.
+  slabId     String?   @map("slab_id")
+  slab       Slab?     @relation(fields: [slabId], references: [id])
+  rawBlockId String?   @map("raw_block_id")
+  rawBlock   RawBlock? @relation(fields: [rawBlockId], references: [id])
+  slabCount  Int?      @map("slab_count")
 
   @@unique([deliveryId, slabId])
+  @@unique([deliveryId, rawBlockId])
   @@map("delivery_line")
 }
 

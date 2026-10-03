@@ -275,6 +275,8 @@ export default function SalesPage() {
       <h1>Sell</h1>
       <p>
         <Link href="/lots/sell">Sell by lot — pick blocks and slab counts, bill them together →</Link>
+        {" · "}
+        <Link href="/lots/dispatch">To dispatch →</Link>
       </p>
       {notice ? (
         <p className="muted" role="status">
