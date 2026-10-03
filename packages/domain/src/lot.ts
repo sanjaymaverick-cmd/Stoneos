@@ -54,7 +54,10 @@ export function lotLabel(serialNumber: string, slabCount: number): string {
  * everything the block yielded, not what is unfinished and still unsold.
  */
 export function polishableSlabs(lot: LotCounts): number {
-  return lot.goodSlabCount - lot.brokenSlabCount - (lot.polishedSlabCount ?? 0);
+  // Never below zero. A lot polished in full and then broken into has more polished
+  // than it has left — the yard's "still to polish" is none, not minus three. Found
+  // by a year-long dry run, where seven lots of thirty-one read negative.
+  return Math.max(0, lot.goodSlabCount - lot.brokenSlabCount - (lot.polishedSlabCount ?? 0));
 }
 
 /** Whether this many slabs of the lot can go through the line. */

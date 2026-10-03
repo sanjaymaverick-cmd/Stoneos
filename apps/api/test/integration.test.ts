@@ -3058,6 +3058,96 @@ describe("postgres-backed workflows", () => {
     assert.equal(bill.billTo.address, "Vizag");
   });
 
+  it("adds a GSTIN to a buyer who never had one, and bills them IGST after", async () => {
+    const { factory, asOwner } = await staffFactory("custedit");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08ZZZZZ0000Z1ZX", stateCode: "08", legalName: "Test Granites",
+    });
+    await receiveBlock(factory.id, "VG-001", { taxable: 100_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 100, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "ce-cut",
+    });
+
+    // The way every buyer added before the form captured one looks.
+    const buyer = await sales.createCustomer(asOwner, "Vizag Stones");
+    assert.equal(buyer.gstin, null);
+    assert.equal(buyer.stateCode, null);
+
+    const fixed = await sales.updateCustomer(asOwner, buyer.id, {
+      gstin: "37aabcs1429b1zx",
+      billingAddress: "Beach Road, Vizag",
+    });
+    assert.equal(fixed.gstin, "37AABCS1429B1ZX");
+    assert.equal(fixed.stateCode, "37", "the state follows the GSTIN");
+    assert.equal(fixed.name, "Vizag Stones", "an unmentioned field is left alone");
+    assert.equal(fixed.billingAddress, "Beach Road, Vizag");
+
+    // And the next bill is IGST, which it would not have been before the edit.
+    const order = await lots.sellLots(asOwner, {
+      customerId: buyer.id, clientOpId: "ce-sell",
+      lines: [{ blockSerial: "VG-001", slabCount: 50, rate: 80 }],
+    });
+    const bill = await lots.invoiceOrder(asOwner, {
+      orderId: order.orderId, clientOpId: "ce-inv",
+    });
+    assert.equal(bill.interState, true);
+    assert.equal(bill.totals.igstAmount, 7_200);
+    assert.equal(bill.totals.cgstAmount, 0);
+
+    const logged = await prisma.auditEvent.findFirst({
+      where: { factoryId: factory.id, action: "sales.customer_updated" },
+    });
+    assert.ok(logged, "changing who a bill is made out to is audited");
+    assert.equal((logged.payload as { before: { gstin: null } }).before.gstin, null);
+  });
+
+  it("tells an unmentioned field from one being cleared, and still refuses nonsense", async () => {
+    const { asOwner } = await staffFactory("custedit2");
+    const buyer = await sales.createCustomer(asOwner, "Sharma Marbles", "9876543210", {
+      gstin: "08AABCS1429B1ZX", billingAddress: "MI Road", shippingAddress: "Sitapura",
+    });
+
+    // Not mentioning a field leaves it alone.
+    const renamed = await sales.updateCustomer(asOwner, buyer.id, { name: "Sharma Marbles & Co" });
+    assert.equal(renamed.name, "Sharma Marbles & Co");
+    assert.equal(renamed.gstin, "08AABCS1429B1ZX", "untouched");
+    assert.equal(renamed.billingAddress, "MI Road", "untouched");
+
+    // An explicit empty string clears it — a registration that lapsed is a real thing.
+    const cleared = await sales.updateCustomer(asOwner, buyer.id, { gstin: "" });
+    assert.equal(cleared.gstin, null);
+    // The state stays. A lapsed registration does not move the buyer to another
+    // state, and an unregistered buyer still needs a place of supply — dropping it
+    // would quietly turn an out-of-state B2C sale into a local one.
+    assert.equal(cleared.stateCode, "08");
+    assert.equal(cleared.billingAddress, "MI Road", "and nothing else moved");
+
+    await assert.rejects(
+      () => sales.updateCustomer(asOwner, buyer.id, { gstin: "08AABCS1429B1Z" }),
+      /must be 15 characters in the GST format/,
+    );
+    await assert.rejects(
+      () => sales.updateCustomer(asOwner, buyer.id, { name: "   " }),
+      /needs a name/,
+    );
+    await assert.rejects(
+      () =>
+        sales.updateCustomer(asOwner, buyer.id, { gstin: "08AABCS1429B1ZX", stateCode: "37" }),
+      /contradicts GSTIN/,
+    );
+    // Another factory's buyer is not reachable.
+    const other = await staffFactory("custedit3");
+    await assert.rejects(
+      () => sales.updateCustomer(other.asOwner, buyer.id, { name: "mine now" }),
+      /Customer not found/,
+    );
+    // After all those refusals the row is as the last good edit left it.
+    const stored = await prisma.customer.findUniqueOrThrow({ where: { id: buyer.id } });
+    assert.equal(stored.name, "Sharma Marbles & Co");
+    assert.equal(stored.gstin, null);
+  });
+
   it("posts breakage to the ledger and keeps the books balanced", async () => {
     const { factory, asOwner } = await staffFactory("lotbooks");
     await receiveBlock(factory.id, "VG-001", { taxable: 180_000, cash: 0 });

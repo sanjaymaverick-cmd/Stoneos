@@ -5,13 +5,21 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { Attachments } from "../../components/Attachments";
 import { VarietyChips } from "../../components/VarietyChips";
 import { AppShell } from "../../components/AppShell";
-import { CustomerForm } from "../../components/CustomerForm";
+import { CustomerForm, type EditableCustomer } from "../../components/CustomerForm";
 import { EmptyState } from "../../components/EmptyState";
 import { apiFetch, isQueued, pendingRef, ref } from "../../lib/api";
 import { bodyOf, queuedAt, useOutbox } from "../../lib/useOutbox";
 import { slabLabel, slabSqft } from "../../lib/format";
 
-type Customer = { id: string; name: string };
+type Customer = {
+  id: string;
+  name: string;
+  gstin?: string | null;
+  stateCode?: string | null;
+  billingAddress?: string | null;
+  shippingAddress?: string | null;
+  contactInfo?: string | null;
+};
 type Slab = {
   id: string;
   slabSerial: string;
@@ -67,6 +75,7 @@ export default function SalesPage() {
   const [variety, setVariety] = useState("");
   const [canCollect, setCanCollect] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [editing, setEditing] = useState<EditableCustomer | null>(null);
   const [slabs, setSlabs] = useState<Slab[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [customerId, setCustomerId] = useState("");
@@ -294,7 +303,72 @@ export default function SalesPage() {
           {error}
         </p>
       ) : null}
-      <CustomerForm onAdded={() => void refresh()} />
+      {/*
+        Keyed on purpose. Both branches render the same component at the same place in
+        the tree, so without a key React keeps the instance and its useState
+        initialisers never run again — the edit form opens blank, and its Save button
+        stays disabled because the name looks empty. Keying by the buyer's id also
+        reloads the fields when switching straight from one buyer to another.
+      */}
+      {editing ? (
+        <CustomerForm
+          key={editing.id}
+          editing={editing}
+          onCancel={() => setEditing(null)}
+          onAdded={(_result, message) => {
+            setEditing(null);
+            setNotice(message);
+            void refresh();
+          }}
+        />
+      ) : (
+        <CustomerForm key="new" onAdded={() => void refresh()} />
+      )}
+
+      <div className="card wide">
+        <h2>Customers</h2>
+        {customers.length === 0 ? (
+          <EmptyState>No customers yet. Add one above.</EmptyState>
+        ) : (
+          <>
+            {customers.some((c) => !c.gstin) ? (
+              <p className="hint">
+                {customers.filter((c) => !c.gstin).length} of {customers.length} have no
+                GSTIN. Their bills go out as unregistered local sales — an out-of-state
+                buyer is charged CGST + SGST where it should be IGST. Edit them to fix it.
+              </p>
+            ) : null}
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>GSTIN</th>
+                  <th>State</th>
+                  <th>Billing address</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {customers.map((c) => (
+                  <tr key={c.id}>
+                    <td>
+                      <strong>{c.name}</strong>
+                    </td>
+                    <td>{c.gstin ?? <span className="muted">none</span>}</td>
+                    <td>{c.stateCode ?? <span className="muted">—</span>}</td>
+                    <td className="muted">{c.billingAddress ?? "not on file"}</td>
+                    <td>
+                      <button type="button" onClick={() => setEditing(c)}>
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+      </div>
       <div className="card">
         <h2>Reserve / order</h2>
         <form onSubmit={createOrder}>

@@ -13,7 +13,8 @@
     "prisma:migrate": "prisma migrate dev --schema prisma/schema.prisma",
     "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
     "prisma:validate": "prisma validate --schema prisma/schema.prisma",
-    "bootstrap": "tsx src/bootstrap.ts"
+    "bootstrap": "tsx src/bootstrap.ts",
+    "dry-run:year": "tsx dry-run-year.ts"
   },
   "dependencies": {
     "@nestjs/common": "10.4.22",
