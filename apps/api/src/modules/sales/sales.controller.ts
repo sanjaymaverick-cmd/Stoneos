@@ -20,11 +20,23 @@ export class SalesController {
   @Roles(...SALES_DATA_ROLES)
   createCustomer(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: { name: string; contactInfo?: string; stateCode?: string; gstin?: string },
+    @Body()
+    body: {
+      name: string;
+      contactInfo?: string;
+      stateCode?: string;
+      gstin?: string;
+      /** Printed as "Bill to". Without it the invoice reads "no address on file". */
+      billingAddress?: string;
+      /** Where the lorry goes, when that is not the billing address. */
+      shippingAddress?: string;
+    },
   ) {
     return this.service.createCustomer(user, body.name, body.contactInfo, {
       stateCode: body.stateCode,
       gstin: body.gstin,
+      billingAddress: body.billingAddress,
+      shippingAddress: body.shippingAddress,
     });
   }
 

@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { InventoryKind } from "@prisma/client";
 import {
   INVENTORY_DATA_ROLES,
+  JOURNAL_POST_ROLES,
   SALES_READ_ROLES,
   PRODUCTION_INPUT_ROLES,
 } from "@stoneos/contracts";
@@ -67,6 +68,27 @@ export class InventoryController {
       stateCode: body.stateCode,
       gstin: body.gstin,
     });
+  }
+
+  /**
+   * Put a cash amount on a block received before the form asked for one.
+   *
+   * A books correction, not floor work: it changes a recorded cost basis and posts
+   * to the ledger, so it sits with the journal roles rather than the yard ones.
+   */
+  @Post("raw-blocks/correct-cash")
+  @Roles(...JOURNAL_POST_ROLES)
+  correctBlockCash(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body()
+    body: {
+      blockSerial: string;
+      purchaseCashAmount: number;
+      reason: string;
+      clientOpId: string;
+    },
+  ) {
+    return this.service.correctPurchaseCash(user, body);
   }
 
   @Post("raw-blocks")

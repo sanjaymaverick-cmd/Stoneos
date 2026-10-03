@@ -94,6 +94,32 @@ export function resolveGstRatePct(pct: number | null | undefined, fallback: numb
   return value;
 }
 
+/**
+ * The shape of a GSTIN: two state digits, a PAN, an entity code, a Z, a checksum.
+ *
+ * Format only — no check-digit arithmetic. Catching a typed-in 14 characters or a
+ * stray space is most of the value, and a wrong GSTIN on a tax invoice is the
+ * buyer's problem to spot, not something this can decide for them.
+ */
+export const GSTIN_PATTERN = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/;
+
+/**
+ * Normalise a typed GSTIN, or refuse it.
+ *
+ * Blank means "not registered", which is a legitimate answer for a counter buyer,
+ * so it comes back null rather than throwing.
+ */
+export function cleanGstin(value: string | null | undefined, label = "GSTIN"): string | null {
+  const gstin = (value ?? "").trim().toUpperCase();
+  if (!gstin) return null;
+  if (!GSTIN_PATTERN.test(gstin)) {
+    throw new BadRequestException(
+      `${label} must be 15 characters in the GST format, e.g. 08AAUFV3603N1ZH — got "${gstin}"`,
+    );
+  }
+  return gstin;
+}
+
 /** A GSTIN carries the supplying state in its first two characters. */
 export function stateCodeFromGstin(gstin: string): string | null {
   const m = gstin.trim().match(/^(\d{2})/);

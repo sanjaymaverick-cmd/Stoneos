@@ -32,9 +32,19 @@ export default function InventoryPage() {
       serialNumber: string;
       varietyName: string;
       currentStatus: string;
+      purchaseTaxable?: string | number | null;
+      purchaseCashAmount?: string | number | null;
     }>
   >([]);
   const [bill, setBill] = useState<File | null>(null);
+
+  // Correcting a block taken in before the form asked for a cash amount.
+  const [fixBlock, setFixBlock] = useState("");
+  const [fixCash, setFixCash] = useState("");
+  const [fixReason, setFixReason] = useState("");
+  const [fixNotice, setFixNotice] = useState("");
+  const [fixError, setFixError] = useState("");
+  const fixOp = useRef(crypto.randomUUID());
   const [search, setSearch] = useState("");
   const [varietyFilter, setVarietyFilter] = useState("");
   const [finishFilter, setFinishFilter] = useState("");
@@ -65,6 +75,47 @@ export default function InventoryPage() {
   useEffect(() => {
     refresh().catch(() => undefined);
   }, []);
+
+  const numeric = (v: unknown) => Number(v ?? 0) || 0;
+  const chosen = blocks.find((b) => b.serialNumber === fixBlock);
+
+  async function correctCash(event: FormEvent) {
+    event.preventDefault();
+    setFixNotice("");
+    setFixError("");
+    try {
+      const result = (await apiFetch("/api/v1/inventory/raw-blocks/correct-cash", {
+        method: "POST",
+        label: `Cash on ${fixBlock}`,
+        body: JSON.stringify({
+          blockSerial: fixBlock,
+          purchaseCashAmount: Number(fixCash),
+          reason: fixReason.trim(),
+          clientOpId: fixOp.current,
+        }),
+      })) as {
+        previousCashAmount?: number;
+        costBasis?: number;
+        costPerSlab?: number;
+        goodSlabCount?: number;
+      };
+      fixOp.current = crypto.randomUUID();
+      setFixNotice(
+        isQueued(result)
+          ? `Correction to ${fixBlock} saved on this device; it will sync.`
+          : `${fixBlock}: cash ${formatInr(result.previousCashAmount ?? 0)} → ` +
+            `${formatInr(Number(fixCash))}. Cost basis ${formatInr(result.costBasis ?? 0)}` +
+            (result.goodSlabCount
+              ? `, ${formatInr(result.costPerSlab ?? 0)} a slab.`
+              : " (no cut recorded yet)."),
+      );
+      setFixCash("");
+      setFixReason("");
+      await refresh().catch(() => undefined);
+    } catch (err) {
+      setFixError(err instanceof Error ? err.message : "Correction failed");
+    }
+  }
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -271,6 +322,79 @@ export default function InventoryPage() {
             Add supplier
           </button>
         </form>
+      </div>
+      <div className="card">
+        <h2>Cash on an older block</h2>
+        <p className="muted">
+          Blocks taken in before this screen asked for a cash amount carry none, so
+          what each of their slabs cost is understated. Put the real figure in here.
+          Only the cash part — changing the billed amount would mean amending the
+          vendor&apos;s bill and the GST credit claimed on it.
+        </p>
+        {fixNotice ? <p className="hint">{fixNotice}</p> : null}
+        {fixError ? <p className="error">{fixError}</p> : null}
+        <form onSubmit={correctCash}>
+          <label>
+            Block
+            <select value={fixBlock} onChange={(e) => setFixBlock(e.target.value)}>
+              <option value="">Choose a block</option>
+              {blocks.map((b) => (
+                <option key={b.id} value={b.serialNumber}>
+                  {b.serialNumber} · {b.varietyName} ·{" "}
+                  {numeric(b.purchaseCashAmount)
+                    ? `${formatInr(numeric(b.purchaseCashAmount))} cash on record`
+                    : "no cash recorded"}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Cash actually paid (₹)
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="1"
+              value={fixCash}
+              onChange={(e) => setFixCash(e.target.value)}
+            />
+          </label>
+          <label>
+            Why it is being changed
+            <input
+              value={fixReason}
+              onChange={(e) => setFixReason(e.target.value)}
+              placeholder="cash leg was never entered at receipt"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={!fixBlock || fixCash === "" || !fixReason.trim()}
+          >
+            Correct it
+          </button>
+        </form>
+        {chosen ? (
+          <p className="hint">
+            {chosen.serialNumber}: {formatInr(numeric(chosen.purchaseTaxable))} on the
+            bill, {formatInr(numeric(chosen.purchaseCashAmount))} cash on record
+            {fixCash !== "" ? (
+              <>
+                {" "}
+                → cost basis would become{" "}
+                <b>
+                  {formatInr(numeric(chosen.purchaseTaxable) + Number(fixCash || 0))}
+                </b>
+              </>
+            ) : null}
+            .
+          </p>
+        ) : null}
+        <p className="muted">
+          The difference is posted to the books against your name, with the reason.
+          Breakage already written off keeps the value it was written off at —
+          correcting it now would restate months that may already be filed.
+        </p>
       </div>
       <div className="card">
         <h2>Slabs by block</h2>
