@@ -289,6 +289,7 @@ export default function SellLotsPage() {
       <div className="page">
         <div className="dash-head">
           <h1>Sell by lot</h1>
+          <p><Link href="/parties">Add / edit buyers & suppliers →</Link></p>
           <p><Link href="/sales/reports">Customer / supplier reports and dues →</Link></p>
           <p className="muted">
             Choose a block and how many slabs go. Add as many lots as the load needs,

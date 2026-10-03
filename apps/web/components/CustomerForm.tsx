@@ -19,18 +19,152 @@ import { apiFetch, isQueued } from "../lib/api";
 /** Two state digits, a PAN, an entity code, a Z, a checksum. Format only. */
 const GSTIN_PATTERN = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/;
 
-/** The states a granite yard in Rajasthan actually bills. */
-const STATES: Array<{ code: string; name: string }> = [
-  { code: "08", name: "Rajasthan" },
-  { code: "07", name: "Delhi" },
-  { code: "06", name: "Haryana" },
-  { code: "09", name: "Uttar Pradesh" },
-  { code: "24", name: "Gujarat" },
-  { code: "27", name: "Maharashtra" },
-  { code: "29", name: "Karnataka" },
-  { code: "33", name: "Tamil Nadu" },
-  { code: "36", name: "Telangana" },
-  { code: "37", name: "Andhra Pradesh" },
+/** GST state codes used in customer and supplier details. */
+const STATES: Array<{code:string;name:string}> = [
+  {
+    "code": "01",
+    "name": "Jammu and Kashmir"
+  },
+  {
+    "code": "02",
+    "name": "Himachal Pradesh"
+  },
+  {
+    "code": "03",
+    "name": "Punjab"
+  },
+  {
+    "code": "04",
+    "name": "Chandigarh"
+  },
+  {
+    "code": "05",
+    "name": "Uttarakhand"
+  },
+  {
+    "code": "06",
+    "name": "Haryana"
+  },
+  {
+    "code": "07",
+    "name": "Delhi"
+  },
+  {
+    "code": "08",
+    "name": "Rajasthan"
+  },
+  {
+    "code": "09",
+    "name": "Uttar Pradesh"
+  },
+  {
+    "code": "10",
+    "name": "Bihar"
+  },
+  {
+    "code": "11",
+    "name": "Sikkim"
+  },
+  {
+    "code": "12",
+    "name": "Arunachal Pradesh"
+  },
+  {
+    "code": "13",
+    "name": "Nagaland"
+  },
+  {
+    "code": "14",
+    "name": "Manipur"
+  },
+  {
+    "code": "15",
+    "name": "Mizoram"
+  },
+  {
+    "code": "16",
+    "name": "Tripura"
+  },
+  {
+    "code": "17",
+    "name": "Meghalaya"
+  },
+  {
+    "code": "18",
+    "name": "Assam"
+  },
+  {
+    "code": "19",
+    "name": "West Bengal"
+  },
+  {
+    "code": "20",
+    "name": "Jharkhand"
+  },
+  {
+    "code": "21",
+    "name": "Odisha"
+  },
+  {
+    "code": "22",
+    "name": "Chhattisgarh"
+  },
+  {
+    "code": "23",
+    "name": "Madhya Pradesh"
+  },
+  {
+    "code": "24",
+    "name": "Gujarat"
+  },
+  {
+    "code": "26",
+    "name": "Dadra and Nagar Haveli and Daman and Diu"
+  },
+  {
+    "code": "27",
+    "name": "Maharashtra"
+  },
+  {
+    "code": "29",
+    "name": "Karnataka"
+  },
+  {
+    "code": "30",
+    "name": "Goa"
+  },
+  {
+    "code": "31",
+    "name": "Lakshadweep"
+  },
+  {
+    "code": "32",
+    "name": "Kerala"
+  },
+  {
+    "code": "33",
+    "name": "Tamil Nadu"
+  },
+  {
+    "code": "34",
+    "name": "Puducherry"
+  },
+  {
+    "code": "35",
+    "name": "Andaman and Nicobar Islands"
+  },
+  {
+    "code": "36",
+    "name": "Telangana"
+  },
+  {
+    "code": "37",
+    "name": "Andhra Pradesh"
+  },
+  {
+    "code": "38",
+    "name": "Ladakh"
+  }
 ];
 
 const stateName = (code: string) => STATES.find((s) => s.code === code)?.name ?? null;
@@ -50,6 +184,7 @@ export function CustomerForm({
   heading = "Add a customer",
   editing,
   onCancel,
+  kind = "customer",
 }: {
   /**
    * Called once the server has the buyer, so the caller can refresh its list. The
@@ -62,7 +197,9 @@ export function CustomerForm({
   /** When set, the form changes the buyer rather than making a new one. */
   editing?: EditableCustomer;
   onCancel?: () => void;
+  kind?: "customer" | "supplier";
 }) {
+  const basePath = kind === "supplier" ? "/api/v1/inventory/suppliers" : "/api/v1/customers";
   const [name, setName] = useState(editing?.name ?? "");
   const [gstin, setGstin] = useState(editing?.gstin ?? "");
   const [stateCode, setStateCode] = useState(editing?.stateCode ?? "");
@@ -82,7 +219,7 @@ export function CustomerForm({
     event.preventDefault();
     setNotice("");
     setError("");
-    if (!name.trim()) return setError("A customer needs a name");
+    if (!name.trim()) return setError(`A ${kind} needs a name`);
     if (!gstinLooksRight) {
       return setError(
         `"${typed}" is not a GSTIN. It is 15 characters, like 08AAUFV3603N1ZH — ` +
@@ -111,14 +248,14 @@ export function CustomerForm({
             contactInfo: contactInfo.trim() || undefined,
           };
       const result = await apiFetch(
-        editing ? `/api/v1/customers/${editing.id}` : "/api/v1/customers",
+        editing ? `${basePath}/${editing.id}` : basePath,
         {
           method: editing ? "PATCH" : "POST",
           label: editing ? `Update ${name.trim()}` : `New customer ${name.trim()}`,
           body: JSON.stringify(body),
         },
       );
-      const message = (
+      const message = kind === "supplier" ? `${name.trim()} ${isQueued(result) ? "saved on this device; it will sync" : editing ? "updated" : "added"}.` : (
         isQueued(result)
           ? `${name.trim()} saved on this device; they will sync.`
           : editing
@@ -149,7 +286,7 @@ export function CustomerForm({
   return (
     <div className="card">
       <h2>{editing ? `Edit ${editing.name}` : heading}</h2>
-      {editing && !editing.gstin ? (
+      {kind === "customer" && editing && !editing.gstin ? (
         <p className="muted">
           This buyer has no GSTIN, so every bill to them so far has gone out as an
           unregistered local sale. Adding it fixes bills from now on; invoices already
@@ -183,8 +320,7 @@ export function CustomerForm({
           <p className="hint">
             State {gstinState}
             {stateName(gstinState) ? ` · ${stateName(gstinState)}` : ""} — read from the
-            GSTIN. Bills to them are{" "}
-            {gstinState === "08" ? "CGST + SGST" : "IGST, since the goods leave Rajasthan"}.
+            GSTIN.
           </p>
         ) : null}
         {!typed ? (
@@ -201,8 +337,7 @@ export function CustomerForm({
               </select>
             </label>
             <p className="muted">
-              No GSTIN means an unregistered buyer: no input credit for them, and the
-              bill is a plain one. Enter it later if they produce one.
+              {kind === "supplier" ? "Leave GSTIN blank for an unregistered supplier. No GST input credit can be claimed without their GSTIN." : "Leave GSTIN blank for an unregistered buyer or counter sale. Add it later if they provide one."}
             </p>
           </>
         ) : null}
@@ -211,15 +346,15 @@ export function CustomerForm({
           <input
             value={billingAddress}
             onChange={(e) => setBillingAddress(e.target.value)}
-            placeholder="printed on the bill"
+            placeholder={kind === "supplier" ? "supplier billing address" : "printed on the bill"}
           />
         </label>
         <label>
-          Site address, if different
+          {kind === "supplier" ? "Pickup / dispatch address, if different" : "Site address, if different"}
           <input
             value={shippingAddress}
             onChange={(e) => setShippingAddress(e.target.value)}
-            placeholder="where the lorry goes"
+            placeholder={kind === "supplier" ? "where the stone is collected" : "where the lorry goes"}
           />
         </label>
         <label>
@@ -231,7 +366,7 @@ export function CustomerForm({
           />
         </label>
         <button type="submit" disabled={busy || !name.trim() || !gstinLooksRight}>
-          {busy ? "Saving…" : editing ? "Save changes" : "Add customer"}
+          {busy ? "Saving…" : editing ? "Save changes" : kind === "supplier" ? "Add supplier" : "Add customer"}
         </button>
         {editing && onCancel ? (
           <>

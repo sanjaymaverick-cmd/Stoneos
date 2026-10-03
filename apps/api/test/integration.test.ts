@@ -3764,4 +3764,17 @@ describe("postgres-backed workflows", () => {
     assert.equal(r.summary[0]?.due,750);assert.equal(r.totals.paid,350);assert.equal(r.rows.filter(e=>e.type==="Purchase").length,1);
     assert.ok(r.rows.some(e=>e.mode==="bank transfer"));
   });
+  it("keeps complete supplier details, validates GST and isolates edits by factory",async()=>{
+    const {factory,asOwner}=await staffFactory("supplier-details");
+    const supplier=await inventory.createSupplier(asOwner,"  Quarry  "," 9876543210 ",{gstin:"08zzzzz0000z1zx",stateCode:"08",billingAddress:" Jaipur ",shippingAddress:" Quarry gate "});
+    assert.equal(supplier.name,"Quarry");assert.equal(supplier.gstin,"08ZZZZZ0000Z1ZX");assert.equal(supplier.billingAddress,"Jaipur");
+    const updated=await inventory.updateSupplier(asOwner,supplier.id,{contactInfo:"1234567890",shippingAddress:"",billingAddress:"New address"});
+    assert.equal(updated.shippingAddress,null);assert.equal(updated.billingAddress,"New address");assert.equal(updated.gstin,supplier.gstin);
+    assert.equal((await inventory.suppliers(factory.id))[0]?.contactInfo,"1234567890");
+    const other=await staffFactory("other-supplier");
+    await assert.rejects(()=>inventory.updateSupplier(other.asOwner,supplier.id,{name:"Foreign"}),/Supplier not found/);
+    await assert.rejects(()=>inventory.createSupplier(asOwner,"Bad",undefined,{gstin:"123"}),/GSTIN/);
+    await assert.rejects(()=>inventory.createSupplier(asOwner,"Bad",undefined,{gstin:"08ZZZZZ0000Z1ZX",stateCode:"27"}),/contradicts/);
+    await assert.rejects(()=>inventory.updateSupplier(asOwner,supplier.id,{name:" "}),/needs a name/);
+  });
 });

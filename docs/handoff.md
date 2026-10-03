@@ -1,5 +1,7 @@
 # Handoff for Grok
 
+Latest session update: [3 October 2026 — invoices, reports, complete party details and Oracle migration fix](handoff-2026-10-03.md). Read it before the historical notes below.
+
 Continue this StoneOS session from `origin/main`. Repo: https://github.com/sanjaymaverick-cmd/Stoneos — workspace `D:\\work Dir\\stoneOS`.
 
 ## Deployed (read first if you are deploying)

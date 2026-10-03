@@ -339,6 +339,8 @@ model InventoryLocation {
 }
 
 model Supplier {
+  billingAddress String? @map("billing_address")
+  shippingAddress String? @map("shipping_address")
   id          String     @id @default(uuid())
   factoryId   String     @map("factory_id")
   factory     Factory    @relation(fields: [factoryId], references: [id])

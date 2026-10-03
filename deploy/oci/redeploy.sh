@@ -62,7 +62,7 @@ sudo -n docker compose --env-file .env up -d --build
 status=$?
 echo "== build exit $status"
 if [ "$status" -eq 0 ]; then
-  sudo -n docker compose --env-file .env --profile tasks run --rm migrate
+  sudo -n docker compose --env-file .env --profile tasks run --rm --build migrate
   status=$?
   echo "== migrate exit $status"
 fi

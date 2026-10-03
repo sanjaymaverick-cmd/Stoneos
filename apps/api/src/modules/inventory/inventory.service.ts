@@ -91,14 +91,17 @@ export class InventoryService {
     user: AuthenticatedUser,
     name: string,
     contactInfo?: string,
-    gst?: { stateCode?: string | null; gstin?: string | null },
+    gst?: { stateCode?: string | null; gstin?: string | null; billingAddress?: string | null; shippingAddress?: string | null },
   ) {
-    const gstin = gst?.gstin?.trim().toUpperCase() || null;
-    // A vendor's GSTIN states their place of supply; trust it over a typed code.
-    const stateCode =
-      (gstin ? stateCodeFromGstin(gstin) : null) ?? normaliseStateCode(gst?.stateCode);
+    const trimmed = name?.trim();
+    if (!trimmed) throw new BadRequestException("A supplier needs a name");
+    const gstin = supplierGstin(gst?.gstin);
+    const claimed = normaliseStateCode(gst?.stateCode);
+    const fromGstin = gstin ? stateCodeFromGstin(gstin) : null;
+    if (claimed && fromGstin && claimed !== fromGstin) throw new BadRequestException("State code contradicts supplier GSTIN");
+    const stateCode = fromGstin ?? claimed;
     const supplier = await this.prisma.supplier.create({
-      data: { factoryId: user.factoryId, name, contactInfo, stateCode, gstin },
+      data: { factoryId: user.factoryId, name: trimmed, contactInfo: contactInfo?.trim() || null, stateCode, gstin, billingAddress: gst?.billingAddress?.trim() || null, shippingAddress: gst?.shippingAddress?.trim() || null },
     });
     await this.audit.record({
       factoryId: user.factoryId,
@@ -108,6 +111,24 @@ export class InventoryService {
       entityId: supplier.id,
     });
     return supplier;
+  }
+
+  async updateSupplier(user: AuthenticatedUser, id: string, input: {name?: string;contactInfo?: string | null;gstin?: string | null;stateCode?: string | null;billingAddress?: string | null;shippingAddress?: string | null}) {
+    const existing = await this.prisma.supplier.findFirst({where:{id,factoryId:user.factoryId}});
+    if (!existing) throw new NotFoundException("Supplier not found");
+    const data: Prisma.SupplierUpdateInput = {version:{increment:1}};
+    if(input.name !== undefined){if(!input.name.trim())throw new BadRequestException("A supplier needs a name");data.name=input.name.trim();}
+    for(const field of ["contactInfo","billingAddress","shippingAddress"] as const) if(input[field] !== undefined)data[field]=input[field]?.trim() || null;
+    if(input.gstin !== undefined || input.stateCode !== undefined){
+      const gstin=input.gstin === undefined ? existing.gstin : supplierGstin(input.gstin);
+      const claimed=normaliseStateCode(input.stateCode === undefined ? existing.stateCode : input.stateCode);
+      const fromGstin=gstin ? stateCodeFromGstin(gstin) : null;
+      if(claimed && fromGstin && claimed !== fromGstin)throw new BadRequestException("State code contradicts supplier GSTIN");
+      data.gstin=gstin;data.stateCode=fromGstin ?? claimed;
+    }
+    const updated=await this.prisma.supplier.update({where:{id:existing.id},data});
+    await this.audit.record({factoryId:user.factoryId,actorId:user.id,action:"supplier.update",entityType:"supplier",entityId:existing.id});
+    return updated;
   }
 
   /**
@@ -737,4 +758,10 @@ export function assertBlockWeight(weightTons: unknown): asserts weightTons is nu
   if (weightTons > MAX_BLOCK_TONS) {
     throw new BadRequestException(`weightTons over ${MAX_BLOCK_TONS} is not a block; check kg vs tons`);
   }
+}
+
+function supplierGstin(value?: string | null): string | null {
+ const gstin=value?.trim().toUpperCase() || null;
+ if(gstin && (!/^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/.test(gstin) || !stateCodeFromGstin(gstin)))throw new BadRequestException("Supplier GSTIN must be a valid 15-character GSTIN");
+ return gstin;
 }
