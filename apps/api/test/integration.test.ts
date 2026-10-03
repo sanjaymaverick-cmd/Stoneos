@@ -3148,6 +3148,184 @@ describe("postgres-backed workflows", () => {
     assert.equal(stored.gstin, null);
   });
 
+  it("files a bill by the date on it, not the day it was typed in", async () => {
+    const { factory, asOwner } = await staffFactory("invdate");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08ZZZZZ0000Z1ZX", stateCode: "08", legalName: "Test Granites",
+    });
+    await receiveBlock(factory.id, "VG-001", { taxable: 100_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 100, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "id-cut",
+    });
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Late Entry Traders", stateCode: "08" },
+    });
+    const order = await lots.sellLots(asOwner, {
+      customerId: customer.id, orderDate: "2026-08-31", clientOpId: "id-sell",
+      lines: [{ blockSerial: "VG-001", slabCount: 20, rate: 100 }],
+    });
+
+    // The sale was on 31 August; the bill is entered in September. Before this field
+    // existed GSTR-1 read createdAt and filed it in the wrong month.
+    const bill = await lots.invoiceOrder(asOwner, {
+      orderId: order.orderId, clientOpId: "id-inv", invoiceDate: "2026-08-31",
+    });
+    const stored = await prisma.invoice.findFirstOrThrow({
+      where: { factoryId: factory.id, invoiceNumber: bill.invoiceNumber },
+    });
+    assert.equal(stored.invoiceDate.toISOString().slice(0, 10), "2026-08-31");
+    assert.notEqual(
+      stored.createdAt.toISOString().slice(0, 10),
+      "2026-08-31",
+      "the row really was written on another day, which is the whole point",
+    );
+
+    const august = await gst.gstr1(factory.id, "2026-08");
+    assert.equal(august.totals.taxable, 20_000, "filed in August, where the supply was");
+    const september = await gst.gstr1(factory.id, "2026-09");
+    assert.equal(september.totals.taxable, 0, "and not in the month it was typed");
+  });
+
+  it("opens a statement with a balance, names how each entry settled, and totals it", async () => {
+    const { factory, asOwner } = await staffFactory("stmt");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08ZZZZZ0000Z1ZX", stateCode: "08", legalName: "Test Granites",
+    });
+    await receiveBlock(factory.id, "VG-001", { taxable: 200_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 100, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "st-cut",
+    });
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Sharma Marbles", stateCode: "08" },
+    });
+    const order = await lots.sellLots(asOwner, {
+      customerId: customer.id, clientOpId: "st-sell",
+      lines: [{ blockSerial: "VG-001", slabCount: 20, rate: 100 }],
+    });
+    const bill = await lots.invoiceOrder(asOwner, {
+      orderId: order.orderId, clientOpId: "st-inv",
+    });
+    const invoiceRow = await prisma.invoice.findFirstOrThrow({
+      where: { factoryId: factory.id, invoiceNumber: bill.invoiceNumber },
+    });
+    await sales.pay(asOwner, invoiceRow.id, {
+      amount: 10_000,
+      method: "icici",
+      paidAt: new Date().toISOString().slice(0, 10),
+      clientOpId: "st-pay",
+    });
+
+    const party = (await books.parties(factory.id)).find((p) => p.name === "Sharma Marbles")!;
+    const statement = await books.partyStatement(factory.id, party.id);
+    assert.ok(statement.rows.length >= 2, "the bill and the payment both appear");
+
+    // The payment names the bank it came through, the way the khata does.
+    const payment = statement.rows.find((r) => r.credit > 0)!;
+    assert.equal(payment.credit, 10_000);
+    assert.equal(payment.mode, "ICICI", "how it settled is read off the ledger that moved");
+
+    // A sale puts them in debit; the part payment leaves the rest owing.
+    assert.equal(statement.totalDebit, 23_600, "20,000 + 18% GST");
+    assert.equal(statement.totalCredit, 10_000);
+    assert.equal(statement.closingBalance, 13_600);
+    assert.equal(statement.youllGet, 13_600);
+    assert.equal(statement.youllGive, 0);
+
+    // A window that ends before anything happened is empty but still balances.
+    const earlier = await books.partyStatement(factory.id, party.id, {
+      from: new Date("2020-01-01T00:00:00Z"), to: new Date("2020-12-31T00:00:00Z"),
+    });
+    assert.equal(earlier.rows.length, 0);
+    assert.equal(earlier.openingBalance, 0);
+
+    // And one that starts after it carries the whole balance forward as opening,
+    // rather than starting from zero and reporting every balance wrong.
+    const later = await books.partyStatement(factory.id, party.id, {
+      from: new Date("2099-01-01T00:00:00Z"),
+    });
+    assert.equal(later.rows.length, 0);
+    assert.equal(later.openingBalance, 13_600);
+    assert.equal(later.closingBalance, 13_600);
+  });
+
+  it("splits what we are owed from what we owe", async () => {
+    const { factory, asOwner } = await staffFactory("dues");
+    await gst.upsertProfile(asOwner, {
+      gstin: "08ZZZZZ0000Z1ZX", stateCode: "08", legalName: "Test Granites",
+    });
+    const supplier = await inventory.createSupplier(asOwner, "Jalore Quarry", undefined, {
+      stateCode: "08",
+    });
+    await inventory.receiveBlock(asOwner, {
+      serialNumber: "VG-100", varietyName: "Imperial Red", weightTons: 20,
+      purchaseTaxable: 200_000, supplierId: supplier.id, clientOpId: "du-recv",
+    });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-100", totalSlabsCut: 100, damagedAtSaw: 0, sqftPerSlab: 10,
+      clientOpId: "du-cut",
+    });
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Sharma Marbles", stateCode: "08" },
+    });
+    const order = await lots.sellLots(asOwner, {
+      customerId: customer.id, clientOpId: "du-sell",
+      lines: [{ blockSerial: "VG-100", slabCount: 20, rate: 100 }],
+    });
+    await lots.invoiceOrder(asOwner, { orderId: order.orderId, clientOpId: "du-inv" });
+
+    const dues = await books.dues(factory.id);
+    const owesUs = dues.receivable.find((r) => r.name === "Sharma Marbles");
+    const weOwe = dues.payable.find((r) => r.name === "Jalore Quarry");
+    assert.ok(owesUs, "the buyer with an unpaid bill is in the collect list");
+    assert.equal(owesUs.due, 23_600);
+    assert.ok(weOwe, "the quarry we have not paid is in the pay list");
+    assert.equal(weOwe.due, 210_000, "2,00,000 plus 5% on a rough block");
+    assert.equal(dues.totalReceivable, 23_600);
+    assert.equal(dues.totalPayable, 210_000);
+    // Nobody appears in both lists on the same balance.
+    for (const r of dues.receivable) {
+      assert.equal(dues.payable.some((p) => p.id === r.id), false, `${r.name} is in one list`);
+    }
+  });
+
+  it("counts lot stock on the dashboard, not just identified slabs", async () => {
+    const { factory, asOwner } = await staffFactory("dash");
+    await receiveBlock(factory.id, "VG-001", { taxable: 100_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 70, damagedAtSaw: 0, sqftPerSlab: 49.5,
+      clientOpId: "dash-cut",
+    });
+    // A cut creates no Slab rows at all, so a dashboard counting that table alone
+    // reported an empty yard for a factory holding seventy slabs.
+    assert.equal(await prisma.slab.count({ where: { factoryId: factory.id } }), 0);
+
+    // Both of them: /reports/today is served by ceoBrief, the shop screen by
+    // shopDashboard, and they counted stock separately — fixing one left the other
+    // reporting an empty yard.
+    assert.equal((await reports.shopDashboard(factory.id)).slabsOnHand, 70);
+    assert.equal(
+      (await reports.ceoBrief(factory.id)).slabsOnHand,
+      70,
+      "the owner's own screen says so too",
+    );
+
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Buyer", stateCode: "08" },
+    });
+    await lots.sellLots(asOwner, {
+      customerId: customer.id, clientOpId: "dash-sell",
+      lines: [{ blockSerial: "VG-001", slabCount: 50, rate: 30 }],
+    });
+    await lots.writeOffBroken(asOwner, {
+      blockSerial: "VG-001", slabCount: 3, stage: "yard", reason: "cracked",
+      clientOpId: "dash-off",
+    });
+    assert.equal((await reports.shopDashboard(factory.id)).slabsOnHand, 17, "70 less 50 sold less 3 broken");
+    assert.equal((await reports.ceoBrief(factory.id)).slabsOnHand, 17);
+  });
+
   it("posts breakage to the ledger and keeps the books balanced", async () => {
     const { factory, asOwner } = await staffFactory("lotbooks");
     await receiveBlock(factory.id, "VG-001", { taxable: 180_000, cash: 0 });
@@ -3476,6 +3654,7 @@ describe("postgres-backed workflows", () => {
         sgstAmount: "540",
         gstRatePct: "18",
         idempotencyKey: `dpr-inv-${day}`,
+        invoiceDate: new Date(`${day}T00:00:00Z`),
         createdAt: at(16),
       },
     });

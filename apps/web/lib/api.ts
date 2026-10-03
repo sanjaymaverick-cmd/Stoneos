@@ -163,6 +163,41 @@ function runFlush() {
   );
 }
 
+/**
+ * Fetch a file and hand it to the browser to save.
+ *
+ * Not apiFetch: that parses JSON, caches reads per user and queues writes offline,
+ * none of which applies to a workbook. A download needs the auth header and nothing
+ * else — and it must fail loudly, because a report that silently returns an error
+ * page named .xlsx is worse than one that does not download.
+ */
+export async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(`${apiUrl}${path}`, { headers });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ message: response.statusText }));
+    throw new Error(
+      (Array.isArray(body.message) ? body.message.join(", ") : body.message) ??
+        `Download failed (${response.status})`,
+    );
+  }
+  // The server names the file; fall back only if it did not.
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const named = /filename="([^"]+)"/.exec(disposition);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = named?.[1] ?? fallbackName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoked on the next tick: Safari has not finished reading it when click returns.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 function readKey(path: string): string {
   const actor = getActor();
   return `${actor?.factoryId ?? "-"}:${actor?.userId ?? "-"}:${path}`;

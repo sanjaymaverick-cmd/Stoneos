@@ -897,6 +897,13 @@ model Invoice {
   sellerLegalName String?   @map("seller_legal_name")
   sellerGstin     String?   @map("seller_gstin")
   idempotencyKey String     @map("idempotency_key")
+  /// The date ON the document, which is what the return is filed by.
+  ///
+  /// Separate from createdAt on purpose: a bill written on the 31st and entered on
+  /// the 1st belongs in the earlier month, and before this field existed GSTR-1 read
+  /// createdAt and filed it in the wrong one. Backfilled from createdAt, so existing
+  /// invoices keep the date they were always reported under.
+  invoiceDate    DateTime   @default(now()) @map("invoice_date") @db.Date
   createdAt      DateTime   @default(now()) @map("created_at")
   version        Int        @default(0)
   payments       Payment[]
@@ -907,6 +914,7 @@ model Invoice {
 
   @@unique([factoryId, invoiceNumber])
   @@unique([factoryId, idempotencyKey])
+  @@index([factoryId, invoiceDate])
   @@map("invoice")
 }
 

@@ -116,6 +116,10 @@ export default function SellLotsPage() {
   const [cashAmount, setCashAmount] = useState("");
   const [cashNote, setCashNote] = useState("");
 
+  // The date that goes ON the bill. The GST return is filed by it, so a bill
+  // written yesterday and entered this morning must still say yesterday.
+  const [invoiceDate, setInvoiceDate] = useState(todayIst());
+
   // Consignee
   const [shipName, setShipName] = useState("");
   const [shipAddress, setShipAddress] = useState("");
@@ -256,6 +260,7 @@ export default function SellLotsPage() {
         body: JSON.stringify({
           orderId: order.orderId,
           clientOpId: stableOp(`inv:${order.orderId}`),
+          invoiceDate,
           shipTo:
             shipName || shipAddress || shipGstin || shipState
               ? {
@@ -333,6 +338,21 @@ export default function SellLotsPage() {
                 void makeInvoice();
               }}
             >
+              <label>
+                Invoice date
+                <input
+                  type="date"
+                  max={todayIst()}
+                  value={invoiceDate}
+                  onChange={(e) => setInvoiceDate(e.target.value)}
+                />
+              </label>
+              {invoiceDate !== todayIst() ? (
+                <p className="hint">
+                  This bill will be dated {invoiceDate} and filed in that month&apos;s
+                  GST return, not this one.
+                </p>
+              ) : null}
               <label>
                 Consignee name
                 <input value={shipName} onChange={(e) => setShipName(e.target.value)} />

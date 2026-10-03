@@ -93,7 +93,8 @@ export class DailyReportService {
         select: { lines: { select: { quantitySqft: true, rate: true } } },
       }),
       this.prisma.invoice.findMany({
-        where: { factoryId, createdAt: { gte: start, lt: end } },
+        // By the date on the bill, so a day's figures match what was billed that day.
+        where: { factoryId, invoiceDate: date },
         select: {
           invoiceNumber: true,
           taxableAmount: true,

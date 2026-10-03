@@ -139,6 +139,8 @@ export class LotsController {
       orderId: string;
       clientOpId: string;
       shipTo?: { name?: string; address?: string; gstin?: string; stateCode?: string };
+      /** The date on the bill; defaults to today. The GST return is filed by it. */
+      invoiceDate?: string;
     },
   ) {
     return this.lots.invoiceOrder(user, body);

@@ -45,6 +45,7 @@ export const routes: Array<{
     { href: "/admin/users", label: "Team", roles: owners },
     { href: "/admin/audit", label: "Audit", roles: money },
     { href: "/books", label: "Archive", roles: money },
+    { href: "/books/reports", label: "Statements & dues", roles: money },
     { href: "/books/import", label: "Import", roles: owners },
     { href: "/muster/payroll", label: "Payroll", roles: owners },
     { href: "/tally", label: "Tally archive", roles: owners },

@@ -1,6 +1,7 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
   answerCeoQuestion,
+  availableSlabs,
   calendarMonthUtcRange,
   ceoExceptions,
   ceoNarrative,
@@ -18,15 +19,26 @@ export class ReportsService {
   async shopDashboard(factoryId: string) {
     const soon = new Date();
     soon.setDate(soon.getDate() + 7);
-    const [blocksOnHand, slabsOnHand, openCutting, openOrders, maintenanceDue] = await Promise.all([
+    const [blocksOnHand, loosePieces, lotBlocks, openCutting, openOrders, maintenanceDue] =
+      await Promise.all([
       this.prisma.rawBlock.count({ where: { factoryId, currentStatus: "in_stock" } }),
+      // The older per-piece path still stocks identified slabs.
       this.prisma.slab.count({ where: { factoryId, salesStatus: "in_stock" } }),
+      // And the lot path stocks counts against the block, creating no Slab rows at
+      // all — so counting only the table above reported an empty yard for a factory
+      // holding thousands of slabs. This is the first screen anyone opens.
+      this.prisma.rawBlock.findMany({
+        where: { factoryId },
+        select: { goodSlabCount: true, brokenSlabCount: true, soldSlabCount: true },
+      }),
       this.prisma.cuttingSession.count({ where: { factoryId, status: "IN_PROGRESS" } }),
       this.prisma.salesOrder.count({ where: { factoryId, status: "CONFIRMED" } }),
       this.prisma.maintenanceJob.count({
         where: { factoryId, completedAt: null, dueOn: { lte: soon } },
       }),
     ]);
+    const slabsOnHand =
+      loosePieces + lotBlocks.reduce((sum, lot) => sum + Math.max(0, availableSlabs(lot)), 0);
     return { blocksOnHand, slabsOnHand, openCutting, openOrders, maintenanceDue };
   }
 
@@ -51,7 +63,8 @@ export class ReportsService {
 
     const [
       blocksOnHand,
-      slabsOnHand,
+      loosePieces,
+      lotBlocks,
       openCutting,
       openPolishing,
       openOrders,
@@ -69,7 +82,13 @@ export class ReportsService {
       this.prisma.rawBlock.count({
         where: { factoryId, currentStatus: "in_stock" },
       }),
+      // Per-piece stock and lot stock, added below. A cut creates no Slab rows, so
+      // counting that table alone showed an empty yard on the owner's own screen.
       this.prisma.slab.count({ where: { factoryId, salesStatus: "in_stock" } }),
+      this.prisma.rawBlock.findMany({
+        where: { factoryId },
+        select: { goodSlabCount: true, brokenSlabCount: true, soldSlabCount: true },
+      }),
       this.prisma.cuttingSession.count({
         where: { factoryId, status: "IN_PROGRESS" },
       }),
@@ -157,6 +176,10 @@ export class ReportsService {
     const invoicedTotal = Number(invoicedAll._sum.amount ?? 0);
     const collectedTotal = Number(collectedAll._sum.amount ?? 0);
     const creditedTotal = Number(creditedAll._sum.amount ?? 0);
+    // Loose identified slabs plus what the lots still hold.
+    const slabsOnHand =
+      loosePieces + lotBlocks.reduce((sum, lot) => sum + Math.max(0, availableSlabs(lot)), 0);
+
     const snap: CeoSnapshot = {
       factoryName: factory.name,
       operatingStatus: factory.operatingStatus,

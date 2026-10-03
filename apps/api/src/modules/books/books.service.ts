@@ -548,7 +548,23 @@ export class BooksService {
     return [...rows, ...missing.values()];
   }
 
-  async partyStatement(factoryId: string, partyId: string) {
+  /**
+   * How a voucher was settled, named the way the khata names it.
+   *
+   * The party's own line says what they owe; the cash or bank line on the other side
+   * says how it moved. "Icici Ac", "Cash", "Nema" — the same words the paper book
+   * uses, because this report is read beside it.
+   */
+  private static modeOf(lines: Array<{ ledger: { kind: string; name: string } }>): string {
+    const settled = lines.find((l) => l.ledger.kind === "cash" || l.ledger.kind === "bank");
+    return settled ? settled.ledger.name : "";
+  }
+
+  async partyStatement(
+    factoryId: string,
+    partyId: string,
+    range?: { from?: Date; to?: Date },
+  ) {
     const party = await this.prisma.party.findFirst({ where: { id: partyId, factoryId } });
     if (!party) throw new NotFoundException("Party not found");
     const vouchers = await this.prisma.voucher.findMany({
@@ -563,6 +579,8 @@ export class BooksService {
     type Row = {
       date: string;
       details: string;
+      /** How it was settled: "Cash", "ICICI", "Nema". Blank when nothing moved. */
+      mode: string;
       debit: number;
       credit: number;
       balance: number;
@@ -576,6 +594,7 @@ export class BooksService {
       unsorted.push({
         date: v.operationalDate.toISOString().slice(0, 10),
         details: v.memo ?? v.type,
+        mode: BooksService.modeOf(v.lines),
         debit: minorToRupees(debit),
         credit: minorToRupees(credit),
         balance: 0,
@@ -587,6 +606,9 @@ export class BooksService {
       unsorted.push({
         date: line.lineDate ? line.lineDate.toISOString().slice(0, 10) : "",
         details: line.details,
+        // An imported khata line is free text; the mode is inside the details, where
+        // the person who wrote it put it.
+        mode: "",
         debit: minorToRupees(line.debitMinor),
         credit: minorToRupees(line.creditMinor),
         balance: 0,
@@ -595,12 +617,50 @@ export class BooksService {
       });
     }
     unsorted.sort((a, b) => a.date.localeCompare(b.date) || a.sort - b.sort);
+
+    // Everything before the window collapses into one opening figure, exactly as a
+    // khata statement opens — otherwise a one-month statement of a five-year account
+    // starts from zero and every balance in it is wrong.
+    const from = range?.from ? range.from.toISOString().slice(0, 10) : null;
+    const to = range?.to ? range.to.toISOString().slice(0, 10) : null;
+    let opening = 0;
     let balance = 0;
-    const rows = unsorted.map((row) => {
-      balance += rupeesToMinor(row.debit) - rupeesToMinor(row.credit);
-      return { date: row.date, details: row.details, debit: row.debit, credit: row.credit, balance: minorToRupees(balance), source: row.source };
-    });
-    return { party, rows, youllGet: minorToRupees(Math.max(0, balance)), youllGive: minorToRupees(Math.max(0, -balance)) };
+    const rows: Array<Omit<Row, "sort"> & { balance: number }> = [];
+    let periodDebit = 0;
+    let periodCredit = 0;
+    for (const row of unsorted) {
+      const movement = rupeesToMinor(row.debit) - rupeesToMinor(row.credit);
+      if (from && row.date && row.date < from) {
+        opening += movement;
+        balance += movement;
+        continue;
+      }
+      if (to && row.date && row.date > to) continue;
+      balance += movement;
+      periodDebit += rupeesToMinor(row.debit);
+      periodCredit += rupeesToMinor(row.credit);
+      rows.push({
+        date: row.date,
+        details: row.details,
+        mode: row.mode,
+        debit: row.debit,
+        credit: row.credit,
+        balance: minorToRupees(balance),
+        source: row.source,
+      });
+    }
+    return {
+      party,
+      from,
+      to,
+      rows,
+      openingBalance: minorToRupees(opening),
+      totalDebit: minorToRupees(periodDebit),
+      totalCredit: minorToRupees(periodCredit),
+      closingBalance: minorToRupees(balance),
+      youllGet: minorToRupees(Math.max(0, balance)),
+      youllGive: minorToRupees(Math.max(0, -balance)),
+    };
   }
 
   async trialBalance(factoryId: string) {
@@ -629,6 +689,51 @@ export class BooksService {
     const youllGet = rows.reduce((s, r) => s + r.youllGet, 0);
     const youllGive = rows.reduce((s, r) => s + r.youllGive, 0);
     return { youllGet, youllGive, net: youllGet - youllGive, parties: rows };
+  }
+
+  /**
+   * Who owes us, and who we owe, in two lists.
+   *
+   * `outstanding()` returns every party mixed together with a net figure, which is
+   * the right shape for a dashboard tile and the wrong one for chasing money. A yard
+   * chases receivables and schedules payables; they are different jobs on different
+   * days, so they are different lists.
+   *
+   * A party can legitimately appear in both — a quarry that also buys slabs — so this
+   * splits on the balances rather than on Party.kind, which is only a label.
+   */
+  async dues(factoryId: string) {
+    const rows = await this.parties(factoryId);
+    const receivable = rows
+      .filter((r) => r.youllGet > 0)
+      .map((r) => ({ id: r.id, name: r.name, kind: r.kind, due: r.youllGet }))
+      .sort((a, b) => b.due - a.due);
+    const payable = rows
+      .filter((r) => r.youllGive > 0)
+      .map((r) => ({ id: r.id, name: r.name, kind: r.kind, due: r.youllGive }))
+      .sort((a, b) => b.due - a.due);
+    const settled = rows.filter((r) => r.youllGet === 0 && r.youllGive === 0).length;
+    return {
+      receivable,
+      payable,
+      totalReceivable: receivable.reduce((n, r) => n + r.due, 0),
+      totalPayable: payable.reduce((n, r) => n + r.due, 0),
+      settledParties: settled,
+    };
+  }
+
+  /** Every party's statement over one window, for the whole-year workbook. */
+  async allStatements(factoryId: string, range?: { from?: Date; to?: Date }) {
+    const parties = await this.prisma.party.findMany({
+      where: { factoryId },
+      orderBy: { name: "asc" },
+      select: { id: true },
+    });
+    const out = [];
+    // One at a time on purpose: a yard with hundreds of parties on a two-core box is
+    // still serving the shop floor while this runs.
+    for (const p of parties) out.push(await this.partyStatement(factoryId, p.id, range));
+    return out;
   }
 
   async rokad(factoryId: string, date: Date) {

@@ -32,6 +32,32 @@ const FY_START = { year: 2025, month: 4 }; // 1 April 2025
 const MONTHS = 12;
 
 /*
+ * Scale, set from the factory's own figures.
+ *
+ * Three of the four given reconcile: 4-5k sqft a day over ~26 working days is
+ * ~100-130k sqft a month, 1.2-1.5M a year, and ₹4 crore across that is ~₹33 a sqft.
+ * The fourth does not: 2,000 tons of block a month at 20-25 t a block is 80-100
+ * blocks, which at 70 slabs each is 10-13k sqft a DAY, about three times the stated
+ * production. The three that agree are the ones the reports are built on, so they are
+ * what this holds; tonnage follows from the blocks actually cut and comes to ~750 a
+ * month. Flagged rather than fudged.
+ */
+const TARGET = {
+  /** Slabs off one block — the yard's VG-001-70. */
+  slabsPerBlock: [66, 76] as const,
+  sqftPerSlab: 49.5,
+  /** Working days a month, for the daily-production figure. */
+  workingDays: 26,
+  sqftPerDay: [4_000, 5_000] as const,
+  /** Average realised rate per sqft, so a year lands near ₹4 crore. */
+  ratePerSqft: [23, 33] as const,
+  tonsPerBlock: [20, 25] as const,
+  /** What a block costs on the vendor's bill, before the cash leg. */
+  blockTaxable: [44_000, 58_000] as const,
+  blockCash: [8_000, 16_000] as const,
+};
+
+/*
  * A controllable clock.
  *
  * The services refuse an occurredAt more than 14 days old ("enter it as a correction
@@ -156,9 +182,10 @@ async function main() {
 
   type MonthRow = {
     label: string; month: string;
-    blocksIn: number; purchaseBilled: number; purchaseCash: number;
+    blocksIn: number; tons: number; purchaseBilled: number; purchaseCash: number;
     slabsCut: number; slabsPolished: number; slabsSold: number; slabsBroken: number;
-    billedSales: number; cashSales: number; cgst: number; sgst: number; igst: number;
+    billedSales: number; cashSales: number; collected: number;
+    cgst: number; sgst: number; igst: number;
     invoices: number; cashOnlyOrders: number;
   };
   const rows: MonthRow[] = [];
@@ -172,25 +199,31 @@ async function main() {
     standAt(year, month, 10);
     const row: MonthRow = {
       label, month: `${year}-${String(month).padStart(2, "0")}`,
-      blocksIn: 0, purchaseBilled: 0, purchaseCash: 0,
+      blocksIn: 0, tons: 0, purchaseBilled: 0, purchaseCash: 0,
       slabsCut: 0, slabsPolished: 0, slabsSold: 0, slabsBroken: 0,
-      billedSales: 0, cashSales: 0, cgst: 0, sgst: 0, igst: 0,
+      billedSales: 0, cashSales: 0, collected: 0, cgst: 0, sgst: 0, igst: 0,
       invoices: 0, cashOnlyOrders: 0,
     };
 
     // ---- blocks in, cut and polished ----
-    const blocksThisMonth = between(2, 3);
+    // Enough blocks to make the month's sqft, not an arbitrary count.
+    const sqftThisMonth = between(...TARGET.sqftPerDay) * TARGET.workingDays;
+    const blocksThisMonth = Math.max(
+      1,
+      Math.round(sqftThisMonth / (70 * TARGET.sqftPerSlab)),
+    );
     const serialsThisMonth: string[] = [];
     for (let b = 0; b < blocksThisMonth; b++) {
       blockNo += 1;
       const serial = `VG-${String(blockNo).padStart(3, "0")}`;
-      const taxable = between(170_000, 240_000);
+      const tons = between(...TARGET.tonsPerBlock);
+      const taxable = between(...TARGET.blockTaxable);
       // Most quarry loads carry a cash leg; some are wholly on the bill.
-      const cash = rnd() < 0.25 ? 0 : between(30_000, 70_000);
+      const cash = rnd() < 0.25 ? 0 : between(...TARGET.blockCash);
       await inventory.receiveBlock(owner, {
         serialNumber: serial,
         varietyName: pick(VARIETIES),
-        weightTons: between(18, 26),
+        weightTons: tons,
         purchaseTaxable: taxable,
         purchaseCashAmount: cash,
         supplierId: supplier?.id,
@@ -198,15 +231,16 @@ async function main() {
         occurredAt: `${iso(year, month, between(2, 8))}T06:00:00.000Z`,
       });
       row.blocksIn += 1;
+      row.tons += tons;
       row.purchaseBilled += taxable;
       row.purchaseCash += cash;
 
       // "VG-001-70": seventy slabs off the block is the house figure.
-      const total = between(68, 76);
+      const total = between(...TARGET.slabsPerBlock);
       const damaged = between(0, 4);
       await lots.recordCut(owner, {
         blockSerial: serial, totalSlabsCut: total, damagedAtSaw: damaged,
-        sqftPerSlab: 49.5, clientOpId: `dr-cut-${serial}`,
+        sqftPerSlab: TARGET.sqftPerSlab, clientOpId: `dr-cut-${serial}`,
       });
       row.slabsCut += total - damaged;
       serialsThisMonth.push(serial);
@@ -237,25 +271,28 @@ async function main() {
     }
 
     // ---- sales ----
-    const orders = between(3, 5);
-    for (let o = 0; o < orders; o++) {
+    // Sell towards the month's sqft rather than a fixed number of orders, so the
+    // year lands on the turnover the factory actually does.
+    const sqftToSell = Math.round(sqftThisMonth * (0.82 + rnd() * 0.22));
+    let slabsLeftToSell = Math.round(sqftToSell / TARGET.sqftPerSlab);
+    for (let o = 0; o < 40 && slabsLeftToSell > 0; o++) {
       const stock = await lots.availability(factory.id);
       if (!stock.lots.length) break;
       const lot = pick(stock.lots);
-      const want = Math.min(lot.availableSlabs, between(18, 45));
+      const want = Math.min(lot.availableSlabs, slabsLeftToSell, between(40, 180));
       if (want <= 0) continue;
       const buyer = pick(buyers);
       const day = between(5, 27);
 
       // Three shapes of deal, as the yard actually does them.
       const shape = rnd();
-      const rate = between(78, 105);
+      const rate = between(...TARGET.ratePerSqft);
       const wholly_cash = shape < 0.18;
       const split = !wholly_cash && shape < 0.5;
       const cashLeg = wholly_cash
         ? Math.round(want * 49.5 * rate)
         : split
-          ? between(20_000, 60_000)
+          ? between(16_000, 48_000)
           : 0;
 
       let order;
@@ -273,6 +310,7 @@ async function main() {
           }],
         });
       } catch { continue; }
+      slabsLeftToSell -= want;
       row.slabsSold += want;
       row.cashSales += cashLeg;
 
@@ -296,6 +334,32 @@ async function main() {
       row.igst += bill.totals.igstAmount;
     }
 
+    // ---- collections ----
+    // A yard that never collects is not a yard. Most of what was billed comes back
+    // within a month or two, through the banks and hands the khata actually names.
+    const open = await prisma.invoice.findMany({
+      where: { factoryId: factory.id },
+      include: { payments: true },
+      orderBy: { invoiceDate: "asc" },
+    });
+    for (const inv of open) {
+      const due =
+        Number(inv.amount) - inv.payments.reduce((n, p) => n + Number(p.amount), 0);
+      if (due <= 1) continue;
+      if (rnd() > 0.72) continue;                       // some invoices simply wait
+      const part = rnd() < 0.3 ? Math.round(due * (0.4 + rnd() * 0.4)) : Math.round(due);
+      if (part <= 0) continue;
+      try {
+        await sales.pay(owner, inv.id, {
+          amount: part,
+          method: pick(["icici", "cash", "axis", "nema", "shreechand"]),
+          paidAt: iso(year, month, between(8, 27)),
+          clientOpId: `dr-pay-${inv.id}-${i}`,
+        });
+        row.collected += part;
+      } catch { /* dated outside the window; skip */ }
+    }
+
     rows.push(row);
     process.stderr.write(`  ${label} done\n`);
   }
@@ -311,14 +375,16 @@ async function main() {
   p();
   p("## Month by month");
   p();
-  p("| Month | Blocks | Cut | Polished | Sold | Broken | Billed sales | Cash sales | CGST | SGST | IGST | Invoices |");
-  p("|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|");
+  p("| Month | Blocks | Tons | Cut | Sqft made | Sold | Sqft sold | Billed sales | Cash sales | GST | Invoices |");
+  p("|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|");
   for (const r of rows) {
-    p(`| ${r.label} | ${r.blocksIn} | ${r.slabsCut} | ${r.slabsPolished} | ${r.slabsSold} | ${r.slabsBroken} | ${inr(r.billedSales)} | ${inr(r.cashSales)} | ${inr(r.cgst)} | ${inr(r.sgst)} | ${inr(r.igst)} | ${r.invoices} |`);
+    const sqftMade = Math.round(r.slabsCut * TARGET.sqftPerSlab);
+    const sqftSold = Math.round(r.slabsSold * TARGET.sqftPerSlab);
+    p(`| ${r.label} | ${r.blocksIn} | ${r.tons.toLocaleString("en-IN")} | ${r.slabsCut} | ${sqftMade.toLocaleString("en-IN")} | ${r.slabsSold} | ${sqftSold.toLocaleString("en-IN")} | ${inr(r.billedSales)} | ${inr(r.cashSales)} | ${inr(r.cgst + r.sgst + r.igst)} | ${r.invoices} |`);
   }
   const tot = <K extends keyof MonthRow>(k: K) =>
     rows.reduce((n, r) => n + (r[k] as number), 0);
-  p(`| **Year** | **${tot("blocksIn")}** | **${tot("slabsCut")}** | **${tot("slabsPolished")}** | **${tot("slabsSold")}** | **${tot("slabsBroken")}** | **${inr(tot("billedSales"))}** | **${inr(tot("cashSales"))}** | **${inr(tot("cgst"))}** | **${inr(tot("sgst"))}** | **${inr(tot("igst"))}** | **${tot("invoices")}** |`);
+  p(`| **Year** | **${tot("blocksIn")}** | **${tot("tons").toLocaleString("en-IN")}** | **${tot("slabsCut")}** | **${Math.round(tot("slabsCut") * TARGET.sqftPerSlab).toLocaleString("en-IN")}** | **${tot("slabsSold")}** | **${Math.round(tot("slabsSold") * TARGET.sqftPerSlab).toLocaleString("en-IN")}** | **${inr(tot("billedSales"))}** | **${inr(tot("cashSales"))}** | **${inr(tot("cgst") + tot("sgst") + tot("igst"))}** | **${tot("invoices")}** |`);
   p();
 
   const billed = tot("billedSales");
@@ -329,6 +395,7 @@ async function main() {
   p(`- **Cash, no bill:** ${inr(cash)} — ${((cash / (billed + cash)) * 100).toFixed(1)}% of turnover.`);
   p(`- **Purchases:** ${inr(tot("purchaseBilled"))} on vendor bills, ${inr(tot("purchaseCash"))} in cash.`);
   p(`- ${tot("cashOnlyOrders")} orders were wholly in cash and raised no invoice at all.`);
+  p(`- **Collected against bills:** ${inr(tot("collected"))}.`);
   p();
 
   p("## GSTR-1, month by month");

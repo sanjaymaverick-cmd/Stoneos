@@ -606,7 +606,10 @@ export class SalesService {
     charges: Array<{ label: string; amount: number; taxable?: boolean }> = [],
     /** Statutory slab for this supply. Defaults to 18% for finished slabs (HSN 6802). */
     gstRatePct?: number,
+    /** The date ON the bill; defaults to today. The return is filed by this. */
+    invoiceDateInput?: string,
   ) {
+    const invoiceDate = parseBusinessDate(invoiceDateInput ?? new Date(), "invoiceDate");
     const order = await this.requireOrder(user.factoryId, salesOrderId);
     if (order.billingMode === "cash_unbilled") {
       throw new BadRequestException(
@@ -680,6 +683,7 @@ export class SalesService {
               salesOrderId: order.id,
               customerId: order.customerId,
               invoiceNumber,
+              invoiceDate,
               amount,
               taxableAmount: minorToRupees(gst.taxableMinor),
               cgstAmount: minorToRupees(gst.cgstMinor),

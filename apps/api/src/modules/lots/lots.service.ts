@@ -888,8 +888,15 @@ export class LotsService {
       orderId: string;
       clientOpId: string;
       shipTo?: { name?: string; address?: string; gstin?: string; stateCode?: string };
+      /**
+       * The date to put ON the bill. Defaults to today. This is what the return is
+       * filed by, so a bill written yesterday and entered this morning is still
+       * yesterday's — which is the whole reason the field exists.
+       */
+      invoiceDate?: string;
     },
   ) {
+    const invoiceDate = parseBusinessDate(input.invoiceDate ?? new Date(), "invoiceDate");
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.invoice.findUnique({
         where: {
@@ -953,6 +960,7 @@ export class LotsService {
           salesOrderId: order.id,
           customerId: order.customer.id,
           invoiceNumber: number,
+          invoiceDate,
           amount: new Prisma.Decimal(minorToRupees(totals.totalMinor)),
           taxableAmount: new Prisma.Decimal(minorToRupees(totals.taxableMinor)),
           cgstAmount: new Prisma.Decimal(minorToRupees(totals.cgstMinor)),
