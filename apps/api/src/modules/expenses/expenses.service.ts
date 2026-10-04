@@ -70,6 +70,10 @@ export class ExpensesService {
       /** Value before tax. Defaults to the whole amount when no GST was charged. */
       taxableAmount?: number;
       supplierGstin?: string;
+      blockCost?: {
+        rawBlockId: string;
+        costComponent: "other" | "royalty" | "block_transport";
+      };
     },
   ) {
     // Backstop, not the primary gate — see the same note in SalesService.pay.
@@ -105,7 +109,56 @@ export class ExpensesService {
             },
           },
         });
-        if (existing) return existing;
+        if (existing) {
+          if (input.blockCost) {
+            const assigned = await tx.expenseAllocation.findFirst({
+              where: {
+                expenseId: existing.id,
+                allocationBatchKey: "initial:" + input.clientOpId,
+              },
+            });
+            if (
+              !assigned ||
+              assigned.rawBlockId !== input.blockCost.rawBlockId ||
+              assigned.costComponent !== input.blockCost.costComponent ||
+              Number(existing.amount) !== input.amount ||
+              existing.category !== input.category ||
+              existing.expenseDate.toISOString().slice(0, 10) !==
+                input.expenseDate ||
+              existing.toWhom !== (input.toWhom ?? null)
+            )
+              throw new BadRequestException(
+                "This operation was already recorded with different expense details",
+              );
+          }
+          return existing;
+        }
+      }
+      if (
+        !Number.isFinite(input.amount) ||
+        input.amount <= 0 ||
+        Math.round(input.amount * 100) / 100 !== input.amount
+      )
+        throw new BadRequestException(
+          "Expense amount must be positive with at most two decimals",
+        );
+      if (input.blockCost) {
+        if (
+          !input.clientOpId ||
+          !["other", "royalty", "block_transport"].includes(
+            input.blockCost.costComponent,
+          )
+        )
+          throw new BadRequestException(
+            "Block cost needs a valid component and operation ID",
+          );
+        const block = await tx.rawBlock.findFirst({
+          where: { id: input.blockCost.rawBlockId, factoryId: user.factoryId },
+        });
+        if (!block)
+          throw new BadRequestException(
+            "Block does not belong to this factory",
+          );
       }
       const expenseDate = parseBusinessDate(input.expenseDate, "expenseDate");
       // Only a spend that actually carried GST yields a credit. Diesel from a
@@ -157,6 +210,21 @@ export class ExpensesService {
         method: "cash",
         date: expenseDate,
       });
+      if (input.blockCost) {
+        await tx.expenseAllocation.create({
+          data: {
+            expenseId: created.id,
+            rawBlockId: input.blockCost.rawBlockId,
+            costComponent: input.blockCost.costComponent,
+            allocatedAmount: created.taxableAmount ?? created.amount,
+            allocationBatchKey: "initial:" + input.clientOpId,
+          },
+        });
+        await tx.rawBlock.update({
+          where: { id: input.blockCost.rawBlockId },
+          data: { costsConfirmedAt: null },
+        });
+      }
       return created;
     });
   }

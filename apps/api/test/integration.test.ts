@@ -3814,6 +3814,25 @@ describe("postgres-backed workflows", () => {
     const line=[{rawBlockId:block.id,allocatedAmount:1000}];await expenses.allocate(asOwner,expense.id,'one',line);await expenses.allocate(asOwner,expense.id,'one',line);
     assert.equal(await prisma.expenseAllocation.count({where:{expenseId:expense.id}}),1);
   });
+  it("records a reviewed block expense atomically, replays once and refuses changed details",async()=>{
+    const {factory,asOwner}=await staffFactory("yard-expense");
+    const block=(await inventory.receiveBlock(asOwner,{serialNumber:"YARD-COST",varietyName:"White",weightTons:10,purchaseTaxable:10000,clientOpId:"yard-receipt"})).block;
+    await prisma.rawBlock.update({where:{id:block.id},data:{costsConfirmedAt:new Date()}});
+    const input={category:"transport",amount:500.25,expenseDate:currentFactoryDate(),toWhom:"Transporter",clientOpId:"yard-cost-once",blockCost:{rawBlockId:block.id,costComponent:"block_transport" as const}};
+    const result=await expenses.create(asOwner,input);
+    assert.equal((await expenses.create(asOwner,input)).id,result.id);
+    assert.equal(await prisma.expense.count({where:{factoryId:factory.id}}),1);
+    const lines=await prisma.expenseAllocation.findMany({where:{expenseId:result.id}});
+    assert.equal(lines.length,1);assert.equal(Number(lines[0]!.allocatedAmount),500.25);assert.equal(lines[0]!.rawBlockId,block.id);assert.equal(lines[0]!.costComponent,"block_transport");
+    assert.equal(await prisma.voucher.count({where:{factoryId:factory.id,sourceId:result.id}}),1);
+    assert.equal((await prisma.rawBlock.findUniqueOrThrow({where:{id:block.id}})).costsConfirmedAt,null);
+    await assert.rejects(()=>expenses.create(asOwner,{...input,amount:600}),/different expense/);
+    await assert.rejects(()=>expenses.create(asOwner,{...input,clientOpId:"foreign-cost",blockCost:{...input.blockCost,rawBlockId:"foreign-block"}}),/factory/);
+    await assert.rejects(()=>expenses.create(asOwner,{...input,clientOpId:"invalid-amount",amount:0}),/positive/);
+    const failing=new ExpensesService(prisma as never,{postExpense:async()=>{throw new Error("posting interrupted");}} as never);
+    await assert.rejects(()=>failing.create(asOwner,{...input,clientOpId:"rollback-cost"}),/posting interrupted/);
+    assert.equal(await prisma.expense.count({where:{factoryId:factory.id}}),1);assert.equal(await prisma.expenseAllocation.count({where:{expenseId:result.id}}),1);
+  });
   it("reconciles per-ton stone, royalty and transport without double counting, and clears cost confirmation",async()=>{
     const {factory,asOwner}=await staffFactory("per-ton");const service=new AnalyticsService(prisma as never,new AuditService(prisma as never));
     const input={serialNumber:"TON-COST",varietyName:"White",weightTons:20,blockPricePerTon:1000,royaltyPerTon:100,transportPerTon:200,clientOpId:"ton-cost-proof"};

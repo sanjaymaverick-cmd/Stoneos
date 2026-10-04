@@ -11,6 +11,12 @@ type Expense = {
   id: string;
   category: string;
   amount: string;
+  taxableAmount: string | number | null;
+  allocations: Array<{
+    rawBlockId: string;
+    allocatedAmount: string | number;
+    costComponent: string;
+  }>;
   expenseDate: string;
   toWhom: string | null;
   vehicle?: { name: string } | null;
@@ -36,6 +42,7 @@ export default function ExpensesPage() {
   const [blocks, setBlocks] = useState<
     Array<{ id: string; serialNumber: string }>
   >([]);
+  const [search, setSearch] = useState("");
   const [items, setItems] = useState<Expense[]>([]);
   const [category, setCategory] = useState("diesel");
   const [amount, setAmount] = useState("1000");
@@ -108,6 +115,18 @@ export default function ExpensesPage() {
           Customer and supplier statements, payments and dues →
         </Link>
       </p>
+      {!readOnly && (
+        <section className="card">
+          <h2>Block costs belong with the block</h2>
+          <p>
+            Review purchase, royalty, transport and linked expenses together in
+            Yard.
+          </p>
+          <Link className="button secondary" href="/inventory?view=costs">
+            Open Yard block costs →
+          </Link>
+        </section>
+      )}
       <div className="grid">
         <div className="metric ok">
           <span>Collected today</span>
@@ -191,6 +210,11 @@ export default function ExpensesPage() {
       ) : null}
       {!readOnly && (
         <div className="card">
+          <h2>Record a general expense</h2>
+          <p>
+            For a block cost, use Yard so the expense and block link are
+            recorded together.
+          </p>
           <form onSubmit={onSubmit}>
             <label>
               Category
@@ -277,112 +301,107 @@ export default function ExpensesPage() {
           </form>
         </div>
       )}
+      <h2>Expense register</h2>
+      <label>
+        Find an expense
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Paid to, date, category or block"
+        />
+      </label>
       {items.length === 0 ? (
         <EmptyState>
           No expenses yet. Record diesel, wages, or other costs above.
         </EmptyState>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Category</th>
-              <th>Paid to</th>
-              <th className="num">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.slice(0, 10).map((i) => (
-              <tr key={i.id}>
-                <td>{i.expenseDate?.slice(0, 10)}</td>
-                <td>
-                  {i.category}
-                  {i.vehicle ? ` · ${i.vehicle.name}` : ""}
-                </td>
-                <td>{i.toWhom ?? ""}</td>
-                <td className="num">{formatInr(Number(i.amount))}</td>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Category</th>
+                <th>Paid to</th>
+                <th className="num">Amount paid</th>
+                <th>Block / cost link</th>
+                <th>Unallocated before GST</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {!readOnly && (
-        <section className="card">
-          <h2>Allocate an expense to a block</h2>
-          <p>
-            Allocate the amount before GST. Royalty and block transport
-            allocations fulfil the per-ton costs in Business insights; they are
-            counted once.
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              const f = new FormData(event.currentTarget);
-              setError("");
-              apiFetch("/api/v1/expenses/" + f.get("expense") + "/allocate", {
-                method: "POST",
-                body: JSON.stringify({
-                  batchKey: crypto.randomUUID(),
-                  allocations: [
-                    {
-                      rawBlockId: f.get("block"),
-                      allocatedAmount: Number(f.get("amount")),
-                      costComponent: f.get("component"),
-                    },
-                  ],
-                }),
-              })
-                .then(() => {
-                  setNotice("Expense allocated.");
-                  refresh();
-                })
-                .catch((e) => setError(e.message));
-            }}
-          >
-            <label>
-              Expense
-              <select name="expense" required>
-                <option value="">Choose expense</option>
-                {items.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.expenseDate.slice(0, 10)} · {e.category} ·{" "}
-                    {formatInr(Number(e.amount))} · {e.toWhom}
-                  </option>
+            </thead>
+            <tbody>
+              {items
+                .filter((i) =>
+                  [
+                    i.toWhom,
+                    i.category,
+                    i.expenseDate,
+                    ...(i.allocations ?? []).map(
+                      (a) =>
+                        blocks.find((b) => b.id === a.rawBlockId)?.serialNumber,
+                    ),
+                  ]
+                    .join(" ")
+                    .toLowerCase()
+                    .includes(search.toLowerCase()),
+                )
+                .map((i) => (
+                  <tr id={"expense-" + i.id} key={i.id}>
+                    <td>{i.expenseDate?.slice(0, 10)}</td>
+                    <td>
+                      {i.category}
+                      {i.vehicle ? ` · ${i.vehicle.name}` : ""}
+                    </td>
+                    <td>{i.toWhom ?? ""}</td>
+                    <td className="num">{formatInr(Number(i.amount))}</td>
+                    <td>
+                      {i.allocations?.map((a, j) => (
+                        <div key={j}>
+                          <Link
+                            href={"/inventory?view=costs&block=" + a.rawBlockId}
+                          >
+                            {blocks.find((b) => b.id === a.rawBlockId)
+                              ?.serialNumber ?? "Block"}{" "}
+                            ·{" "}
+                            {a.costComponent === "royalty"
+                              ? "Royalty"
+                              : a.costComponent === "block_transport"
+                                ? "Transport"
+                                : "Other"}{" "}
+                            · {formatInr(Number(a.allocatedAmount))} →
+                          </Link>
+                        </div>
+                      ))}
+                    </td>
+                    <td>
+                      {formatInr(
+                        Math.max(
+                          0,
+                          Math.round(
+                            Number(i.taxableAmount ?? i.amount) * 100,
+                          ) -
+                            (i.allocations ?? []).reduce(
+                              (n, a) =>
+                                n + Math.round(Number(a.allocatedAmount) * 100),
+                              0,
+                            ),
+                        ) / 100,
+                      )}{" "}
+                      {!readOnly &&
+                        Number(i.taxableAmount ?? i.amount) -
+                          (i.allocations ?? []).reduce(
+                            (n, a) => n + Number(a.allocatedAmount),
+                            0,
+                          ) >
+                          0.005 && (
+                          <Link href={"/inventory?view=costs&expense=" + i.id}>
+                            Review in Yard →
+                          </Link>
+                        )}
+                    </td>
+                  </tr>
                 ))}
-              </select>
-            </label>
-            <label>
-              Block
-              <select name="block" required>
-                <option value="">Choose block</option>
-                {blocks.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.serialNumber}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Cost component
-              <select name="component">
-                <option value="other">Other block expense</option>
-                <option value="royalty">Block royalty</option>
-                <option value="block_transport">Block transport rent</option>
-              </select>
-            </label>
-            <label>
-              Amount before GST (₹)
-              <input
-                type="number"
-                name="amount"
-                min="0.01"
-                step="0.01"
-                required
-              />
-            </label>
-            <button>Allocate expense</button>
-          </form>
-        </section>
+            </tbody>
+          </table>
+        </div>
       )}
     </AppShell>
   );
