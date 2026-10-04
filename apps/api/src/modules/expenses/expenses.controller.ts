@@ -1,7 +1,11 @@
 import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { EXPENSE_DATA_ROLES, COMMERCIAL_READ_ROLES } from "@stoneos/contracts";
-import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
+import {
+  CurrentUser,
+  Roles,
+  type AuthenticatedUser,
+} from "../../common/current-user";
 import { ExpensesService } from "./expenses.service";
 
 @ApiTags("expenses")
@@ -54,6 +58,10 @@ export class ExpensesController {
       /** Value before tax; defaults to the whole amount when no GST was charged. */
       taxableAmount?: number;
       supplierGstin?: string;
+      blockCost?: {
+        rawBlockId: string;
+        costComponent: "other" | "royalty" | "block_transport";
+      };
     },
   ) {
     return this.service.create(user, body);
@@ -64,7 +72,15 @@ export class ExpensesController {
   allocate(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: { batchKey: string; allocations: Array<{ rawBlockId: string; allocatedAmount: number; costComponent?: "other"|"royalty"|"block_transport" }> },
+    @Body()
+    body: {
+      batchKey: string;
+      allocations: Array<{
+        rawBlockId: string;
+        allocatedAmount: number;
+        costComponent?: "other" | "royalty" | "block_transport";
+      }>;
+    },
   ) {
     return this.service.allocate(user, id, body.batchKey, body.allocations);
   }

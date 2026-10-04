@@ -1,5 +1,6 @@
 "use client";
 
+import { BlockCostsWorkspace } from "../../components/BlockCostsWorkspace";
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { attachFile, Attachments } from "../../components/Attachments";
@@ -37,6 +38,9 @@ export default function InventoryPage() {
       purchaseCashAmount?: string | number | null;
     }>
   >([]);
+  const [owner, setOwner] = useState(false);
+  const [view, setView] = useState("stock");
+  const [costBlockId, setCostBlockId] = useState<string>();
   const [bill, setBill] = useState<File | null>(null);
 
   // Correcting a block taken in before the form asked for a cash amount.
@@ -79,6 +83,11 @@ export default function InventoryPage() {
   }
   useEffect(() => {
     refresh().catch(() => undefined);
+    apiFetch<{ role: string }>("/api/v1/auth/me")
+      .then((u) => setOwner(u.role === "owner"))
+      .catch(() => undefined);
+    if (new URLSearchParams(location.search).get("view") === "costs")
+      setView("costs");
   }, []);
 
   const numeric = (v: unknown) => Number(v ?? 0) || 0;
@@ -199,427 +208,468 @@ export default function InventoryPage() {
   return (
     <AppShell>
       <h1>Yard</h1>
-      <p>
-        <Link href="/lots">
-          Lots — stock by block, record a cut, write off breakage →
-        </Link>
-      </p>
-      <div className="card">
-        <h2>Receive raw block</h2>
-        <form onSubmit={onSubmit}>
-          <label>
-            Serial
-            <input
-              value={serialNumber}
-              onChange={(e) => setSerial(e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Variety
-            <input
-              value={varietyName}
-              onChange={(e) => setVariety(e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Weight (tons)
-            <input
-              type="number"
-              inputMode="decimal"
-              step="0.01"
-              min="0.01"
-              max="60"
-              value={weightTons}
-              onChange={(e) => setWeightTons(e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Supplier
-            <select
-              value={supplierId}
-              onChange={(e) => setSupplierId(e.target.value)}
-            >
-              <option value="">Not recorded</option>
-              {suppliers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Paid against purchase bill
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={purchasePaid}
-              onChange={(e) => setPurchasePaid(e.target.value)}
-            />
-          </label>
-          <label>
-            Purchase payment mode
-            <select
-              value={purchasePaymentMethod}
-              onChange={(e) => setPurchasePaymentMethod(e.target.value)}
-            >
-              <option value="cash">Cash</option>
-              <option value="UPI">UPI</option>
-              <option value="bank transfer">Bank transfer</option>
-              <option value="cheque">Cheque</option>
-            </select>
-          </label>
-          <label>
-            Quarry
-            <input
-              value={quarry}
-              onChange={(e) => setQuarry(e.target.value)}
-              placeholder="Pit or location"
-            />
-          </label>
-          <fieldset>
-            <legend>Block costs per ton</legend>
-            <label>
-              Block price (₹/ton)
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={blockPricePerTon}
-                onChange={(e) => setBlockPricePerTon(e.target.value)}
-              />
-            </label>
-            <label>
-              Block royalty (₹/ton)
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={royaltyPerTon}
-                onChange={(e) => setRoyaltyPerTon(e.target.value)}
-              />
-            </label>
-            <label>
-              Block transport rent (₹/ton)
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={transportPerTon}
-                onChange={(e) => setTransportPerTon(e.target.value)}
-              />
-            </label>
-            <p>
-              Rates × recorded tonnage. Leave rates blank when unknown. Royalty
-              and transport are cost estimates until their expenses are entered
-              and allocated.
-            </p>
-            {blockPricePerTon && weightTons && (
-              <p>
-                Stone price:{" "}
-                {formatInr(Number(blockPricePerTon) * Number(weightTons))} ·
-                Royalty:{" "}
-                {formatInr(Number(royaltyPerTon || 0) * Number(weightTons))} ·
-                Transport:{" "}
-                {formatInr(Number(transportPerTon || 0) * Number(weightTons))}
-              </p>
-            )}
-          </fieldset>
-          <label>
-            Value before GST (₹)
-            <input
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="1"
-              value={purchaseTaxable}
-              onChange={(e) => setPurchaseTaxable(e.target.value)}
-            />
-          </label>
-          <label>
-            Paid in cash, no bill (₹)
-            <input
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="1"
-              value={purchaseCash}
-              onChange={(e) => setPurchaseCash(e.target.value)}
-            />
-          </label>
-          <p className="muted">
-            Cash carries no GST, so there is no input credit to claim on it —
-            but it is still what the stone cost, so it counts towards the cost
-            of every slab off this block.
-          </p>
-          {purchaseTaxable || purchaseCash ? (
-            <p className="hint">
-              Cost basis{" "}
-              {formatInr(
-                Number(purchaseTaxable || 0) + Number(purchaseCash || 0),
-              )}
-              {weightTons
-                ? ` · ${formatInr(
-                    (Number(purchaseTaxable || 0) + Number(purchaseCash || 0)) /
-                      Number(weightTons),
-                  )} per ton`
-                : ""}
-              {purchaseTaxable ? " · 5% GST on the billed part" : ""}
-            </p>
-          ) : null}
-          <label>
-            Supplier bill no.
-            <input
-              value={supplierInvoiceNo}
-              onChange={(e) => setSupplierInvoiceNo(e.target.value)}
-            />
-          </label>
-          <label>
-            Optional bill photo
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp,application/pdf"
-              onChange={(e) => setBill(e.target.files?.[0] ?? null)}
-            />
-          </label>
-          {error ? (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          ) : null}
-          {notice ? (
-            <p className="muted" role="status">
-              {notice}
-            </p>
-          ) : null}
-          <button type="submit">Receive</button>
-        </form>
-        <CustomerForm
-          kind="supplier"
-          heading="Add a supplier"
-          onAdded={(_result, message) => {
-            setNotice(message);
-            void refresh().catch(() => undefined);
-          }}
-        />
-        <p>
-          <Link href="/parties">Manage buyers & suppliers →</Link>
-        </p>
-      </div>
-      <div className="card">
-        <h2>Cash on an older block</h2>
-        <p className="muted">
-          Blocks taken in before this screen asked for a cash amount carry none,
-          so what each of their slabs cost is understated. Put the real figure
-          in here. Only the cash part — changing the billed amount would mean
-          amending the vendor&apos;s bill and the GST credit claimed on it.
-        </p>
-        {fixNotice ? <p className="hint">{fixNotice}</p> : null}
-        {fixError ? <p className="error">{fixError}</p> : null}
-        <form onSubmit={correctCash}>
-          <label>
-            Block
-            <select
-              value={fixBlock}
-              onChange={(e) => setFixBlock(e.target.value)}
-            >
-              <option value="">Choose a block</option>
-              {blocks.map((b) => (
-                <option key={b.id} value={b.serialNumber}>
-                  {b.serialNumber} · {b.varietyName} ·{" "}
-                  {numeric(b.purchaseCashAmount)
-                    ? `${formatInr(numeric(b.purchaseCashAmount))} cash on record`
-                    : "no cash recorded"}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Cash actually paid (₹)
-            <input
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="1"
-              value={fixCash}
-              onChange={(e) => setFixCash(e.target.value)}
-            />
-          </label>
-          <label>
-            Why it is being changed
-            <input
-              value={fixReason}
-              onChange={(e) => setFixReason(e.target.value)}
-              placeholder="cash leg was never entered at receipt"
-            />
-          </label>
+      {owner && (
+        <div className="yard-tabs" role="group" aria-label="Yard workspace">
           <button
-            type="submit"
-            disabled={!fixBlock || fixCash === "" || !fixReason.trim()}
+            aria-pressed={view === "stock"}
+            className={view === "stock" ? "" : "secondary"}
+            onClick={() => setView("stock")}
           >
-            Correct it
+            Stock & receipts
           </button>
-        </form>
-        {chosen ? (
-          <p className="hint">
-            {chosen.serialNumber}: {formatInr(numeric(chosen.purchaseTaxable))}{" "}
-            on the bill, {formatInr(numeric(chosen.purchaseCashAmount))} cash on
-            record
-            {fixCash !== "" ? (
-              <>
-                {" "}
-                → cost basis would become{" "}
-                <b>
-                  {formatInr(
-                    numeric(chosen.purchaseTaxable) + Number(fixCash || 0),
-                  )}
-                </b>
-              </>
-            ) : null}
-            .
-          </p>
-        ) : null}
-        <p className="muted">
-          The difference is posted to the books against your name, with the
-          reason. Breakage already written off keeps the value it was written
-          off at — correcting it now would restate months that may already be
-          filed.
-        </p>
-      </div>
-      <div className="card">
-        <h2>Slabs by block</h2>
-        <div className="yard-search">
-          <label>
-            Search
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Block, slab or variety"
-            />
-          </label>
-          <VarietyChips value={varietyFilter} onChange={setVarietyFilter} />
-          <label>
-            Finish
-            <select
-              value={finishFilter}
-              onChange={(e) => setFinishFilter(e.target.value)}
-            >
-              <option value="">All finishes</option>
-              {Array.from(
-                new Set(slabs.map((s) => s.finish).filter(Boolean)),
-              ).map((f) => (
-                <option key={f}>{f}</option>
-              ))}
-            </select>
-          </label>
+          <button
+            aria-pressed={view === "costs"}
+            className={view === "costs" ? "" : "secondary"}
+            onClick={() => setView("costs")}
+          >
+            Block costs
+          </button>
         </div>
-        {yardSlabs.length === 0 ? (
-          <EmptyState>
-            No slabs in the yard. Complete a cutting session to stock unpolished
-            pieces.
-          </EmptyState>
-        ) : (
-          <>
-            {Array.from(
-              new Set(yardSlabs.map((s) => s.parentBlockId ?? "loose")),
-            ).map((id) => (
-              <section key={id}>
-                <h3>
-                  {yardSlabs.find((s) => s.parentBlockId === id)?.parentBlock
-                    ?.serialNumber ?? "Loose slabs"}
-                </h3>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Slab</th>
-                      <th>Size</th>
-                      <th>Sqft</th>
-                      <th>Thickness</th>
-                      <th>Finish</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {yardSlabs
-                      .filter((s) => (s.parentBlockId ?? "loose") === id)
-                      .map((s, i) => (
-                        <tr key={s.id}>
-                          <td>
-                            {i + 1} · {slabLabel(s).split(" · ")[0]}
-                          </td>
-                          <td>
-                            {s.lengthFt ?? "—"} × {s.widthFt ?? "—"} ft
-                          </td>
-                          <td>{slabSqft(s) ?? "—"}</td>
-                          <td>{s.thicknessMm} mm</td>
-                          <td>{s.finish ?? "unpolished"}</td>
-                          <td>
-                            {s.salesStatus === "in_stock"
-                              ? "in yard"
-                              : s.salesStatus.replaceAll("_", " ")}
-                          </td>
+      )}
+      {owner && view === "costs" ? (
+        <BlockCostsWorkspace initialBlockId={costBlockId} />
+      ) : (
+        <>
+          <p>
+            <Link href="/lots">
+              Lots — stock by block, record a cut, write off breakage →
+            </Link>
+          </p>
+          <div className="card">
+            <h2>Receive raw block</h2>
+            <form onSubmit={onSubmit}>
+              <label>
+                Serial
+                <input
+                  value={serialNumber}
+                  onChange={(e) => setSerial(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Variety
+                <input
+                  value={varietyName}
+                  onChange={(e) => setVariety(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Weight (tons)
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  min="0.01"
+                  max="60"
+                  value={weightTons}
+                  onChange={(e) => setWeightTons(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Supplier
+                <select
+                  value={supplierId}
+                  onChange={(e) => setSupplierId(e.target.value)}
+                >
+                  <option value="">Not recorded</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Paid against purchase bill
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={purchasePaid}
+                  onChange={(e) => setPurchasePaid(e.target.value)}
+                />
+              </label>
+              <label>
+                Purchase payment mode
+                <select
+                  value={purchasePaymentMethod}
+                  onChange={(e) => setPurchasePaymentMethod(e.target.value)}
+                >
+                  <option value="cash">Cash</option>
+                  <option value="UPI">UPI</option>
+                  <option value="bank transfer">Bank transfer</option>
+                  <option value="cheque">Cheque</option>
+                </select>
+              </label>
+              <label>
+                Quarry
+                <input
+                  value={quarry}
+                  onChange={(e) => setQuarry(e.target.value)}
+                  placeholder="Pit or location"
+                />
+              </label>
+              <fieldset>
+                <legend>Block costs per ton</legend>
+                <label>
+                  Block price (₹/ton)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={blockPricePerTon}
+                    onChange={(e) => setBlockPricePerTon(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Block royalty (₹/ton)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={royaltyPerTon}
+                    onChange={(e) => setRoyaltyPerTon(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Block transport rent (₹/ton)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={transportPerTon}
+                    onChange={(e) => setTransportPerTon(e.target.value)}
+                  />
+                </label>
+                <p>
+                  Rates × recorded tonnage. Leave rates blank when unknown.
+                  Royalty and transport are cost estimates until their expenses
+                  are entered and allocated.
+                </p>
+                {blockPricePerTon && weightTons && (
+                  <p>
+                    Stone price:{" "}
+                    {formatInr(Number(blockPricePerTon) * Number(weightTons))} ·
+                    Royalty:{" "}
+                    {formatInr(Number(royaltyPerTon || 0) * Number(weightTons))}{" "}
+                    · Transport:{" "}
+                    {formatInr(
+                      Number(transportPerTon || 0) * Number(weightTons),
+                    )}
+                  </p>
+                )}
+              </fieldset>
+              <label>
+                Value before GST (₹)
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="1"
+                  value={purchaseTaxable}
+                  onChange={(e) => setPurchaseTaxable(e.target.value)}
+                />
+              </label>
+              <label>
+                Paid in cash, no bill (₹)
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="1"
+                  value={purchaseCash}
+                  onChange={(e) => setPurchaseCash(e.target.value)}
+                />
+              </label>
+              <p className="muted">
+                Cash carries no GST, so there is no input credit to claim on it
+                — but it is still what the stone cost, so it counts towards the
+                cost of every slab off this block.
+              </p>
+              {purchaseTaxable || purchaseCash ? (
+                <p className="hint">
+                  Cost basis{" "}
+                  {formatInr(
+                    Number(purchaseTaxable || 0) + Number(purchaseCash || 0),
+                  )}
+                  {weightTons
+                    ? ` · ${formatInr(
+                        (Number(purchaseTaxable || 0) +
+                          Number(purchaseCash || 0)) /
+                          Number(weightTons),
+                      )} per ton`
+                    : ""}
+                  {purchaseTaxable ? " · 5% GST on the billed part" : ""}
+                </p>
+              ) : null}
+              <label>
+                Supplier bill no.
+                <input
+                  value={supplierInvoiceNo}
+                  onChange={(e) => setSupplierInvoiceNo(e.target.value)}
+                />
+              </label>
+              <label>
+                Optional bill photo
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,application/pdf"
+                  onChange={(e) => setBill(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              {error ? (
+                <p className="error" role="alert">
+                  {error}
+                </p>
+              ) : null}
+              {notice ? (
+                <p className="muted" role="status">
+                  {notice}
+                </p>
+              ) : null}
+              <button type="submit">Receive</button>
+            </form>
+            <CustomerForm
+              kind="supplier"
+              heading="Add a supplier"
+              onAdded={(_result, message) => {
+                setNotice(message);
+                void refresh().catch(() => undefined);
+              }}
+            />
+            <p>
+              <Link href="/parties">Manage buyers & suppliers →</Link>
+            </p>
+          </div>
+          <div className="card">
+            <h2>Cash on an older block</h2>
+            <p className="muted">
+              Blocks taken in before this screen asked for a cash amount carry
+              none, so what each of their slabs cost is understated. Put the
+              real figure in here. Only the cash part — changing the billed
+              amount would mean amending the vendor&apos;s bill and the GST
+              credit claimed on it.
+            </p>
+            {fixNotice ? <p className="hint">{fixNotice}</p> : null}
+            {fixError ? <p className="error">{fixError}</p> : null}
+            <form onSubmit={correctCash}>
+              <label>
+                Block
+                <select
+                  value={fixBlock}
+                  onChange={(e) => setFixBlock(e.target.value)}
+                >
+                  <option value="">Choose a block</option>
+                  {blocks.map((b) => (
+                    <option key={b.id} value={b.serialNumber}>
+                      {b.serialNumber} · {b.varietyName} ·{" "}
+                      {numeric(b.purchaseCashAmount)
+                        ? `${formatInr(numeric(b.purchaseCashAmount))} cash on record`
+                        : "no cash recorded"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Cash actually paid (₹)
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="1"
+                  value={fixCash}
+                  onChange={(e) => setFixCash(e.target.value)}
+                />
+              </label>
+              <label>
+                Why it is being changed
+                <input
+                  value={fixReason}
+                  onChange={(e) => setFixReason(e.target.value)}
+                  placeholder="cash leg was never entered at receipt"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={!fixBlock || fixCash === "" || !fixReason.trim()}
+              >
+                Correct it
+              </button>
+            </form>
+            {chosen ? (
+              <p className="hint">
+                {chosen.serialNumber}:{" "}
+                {formatInr(numeric(chosen.purchaseTaxable))} on the bill,{" "}
+                {formatInr(numeric(chosen.purchaseCashAmount))} cash on record
+                {fixCash !== "" ? (
+                  <>
+                    {" "}
+                    → cost basis would become{" "}
+                    <b>
+                      {formatInr(
+                        numeric(chosen.purchaseTaxable) + Number(fixCash || 0),
+                      )}
+                    </b>
+                  </>
+                ) : null}
+                .
+              </p>
+            ) : null}
+            <p className="muted">
+              The difference is posted to the books against your name, with the
+              reason. Breakage already written off keeps the value it was
+              written off at — correcting it now would restate months that may
+              already be filed.
+            </p>
+          </div>
+          <div className="card">
+            <h2>Slabs by block</h2>
+            <div className="yard-search">
+              <label>
+                Search
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Block, slab or variety"
+                />
+              </label>
+              <VarietyChips value={varietyFilter} onChange={setVarietyFilter} />
+              <label>
+                Finish
+                <select
+                  value={finishFilter}
+                  onChange={(e) => setFinishFilter(e.target.value)}
+                >
+                  <option value="">All finishes</option>
+                  {Array.from(
+                    new Set(slabs.map((s) => s.finish).filter(Boolean)),
+                  ).map((f) => (
+                    <option key={f}>{f}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {yardSlabs.length === 0 ? (
+              <EmptyState>
+                No slabs in the yard. Complete a cutting session to stock
+                unpolished pieces.
+              </EmptyState>
+            ) : (
+              <>
+                {Array.from(
+                  new Set(yardSlabs.map((s) => s.parentBlockId ?? "loose")),
+                ).map((id) => (
+                  <section key={id}>
+                    <h3>
+                      {yardSlabs.find((s) => s.parentBlockId === id)
+                        ?.parentBlock?.serialNumber ?? "Loose slabs"}
+                    </h3>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Slab</th>
+                          <th>Size</th>
+                          <th>Sqft</th>
+                          <th>Thickness</th>
+                          <th>Finish</th>
+                          <th>Status</th>
                         </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </section>
-            ))}
-          </>
-        )}
-      </div>
-      <div className="card">
-        {blocks.length === 0 && queuedBlocks.length === 0 ? (
-          <EmptyState>
-            No raw blocks on hand. Receive a block above to start the yard.
-          </EmptyState>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Serial</th>
-                <th>Variety</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {queuedBlocks.map((q) => {
-                const body = bodyOf<{
-                  serialNumber: string;
-                  varietyName: string;
-                }>(q);
-                return (
-                  <tr key={q.clientOpId}>
-                    <td>{body.serialNumber}</td>
-                    <td>{body.varietyName}</td>
-                    <td>
-                      <span className="pending-tag">not synced</span>
-                    </td>
-                  </tr>
-                );
-              })}
-              {blocks
-                .filter((b) => !/^BAD-(ZERO|NEG)$/.test(b.serialNumber))
-                .map((b) => (
-                  <tr key={b.id}>
-                    <td>{b.serialNumber}</td>
-                    <td>{b.varietyName}</td>
-                    <td>
-                      {b.currentStatus === "under_cutting"
-                        ? "on saw"
-                        : b.currentStatus === "in_stock"
-                          ? "in yard"
-                          : b.currentStatus.replaceAll("_", " ")}
-                      <Attachments type="block" id={b.id} />
-                    </td>
-                  </tr>
+                      </thead>
+                      <tbody>
+                        {yardSlabs
+                          .filter((s) => (s.parentBlockId ?? "loose") === id)
+                          .map((s, i) => (
+                            <tr key={s.id}>
+                              <td>
+                                {i + 1} · {slabLabel(s).split(" · ")[0]}
+                              </td>
+                              <td>
+                                {s.lengthFt ?? "—"} × {s.widthFt ?? "—"} ft
+                              </td>
+                              <td>{slabSqft(s) ?? "—"}</td>
+                              <td>{s.thicknessMm} mm</td>
+                              <td>{s.finish ?? "unpolished"}</td>
+                              <td>
+                                {s.salesStatus === "in_stock"
+                                  ? "in yard"
+                                  : s.salesStatus.replaceAll("_", " ")}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </section>
                 ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+              </>
+            )}
+          </div>
+          <div className="card">
+            {blocks.length === 0 && queuedBlocks.length === 0 ? (
+              <EmptyState>
+                No raw blocks on hand. Receive a block above to start the yard.
+              </EmptyState>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Serial</th>
+                    <th>Variety</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {queuedBlocks.map((q) => {
+                    const body = bodyOf<{
+                      serialNumber: string;
+                      varietyName: string;
+                    }>(q);
+                    return (
+                      <tr key={q.clientOpId}>
+                        <td>{body.serialNumber}</td>
+                        <td>{body.varietyName}</td>
+                        <td>
+                          <span className="pending-tag">not synced</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {blocks
+                    .filter((b) => !/^BAD-(ZERO|NEG)$/.test(b.serialNumber))
+                    .map((b) => (
+                      <tr key={b.id}>
+                        <td>
+                          {b.serialNumber}
+                          {owner && (
+                            <button
+                              className="secondary"
+                              onClick={() => {
+                                setCostBlockId(b.id);
+                                setView("costs");
+                              }}
+                            >
+                              Review costs →
+                            </button>
+                          )}
+                        </td>
+                        <td>{b.varietyName}</td>
+                        <td>
+                          {b.currentStatus === "under_cutting"
+                            ? "on saw"
+                            : b.currentStatus === "in_stock"
+                              ? "in yard"
+                              : b.currentStatus.replaceAll("_", " ")}
+                          <Attachments type="block" id={b.id} />
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
     </AppShell>
   );
 }
