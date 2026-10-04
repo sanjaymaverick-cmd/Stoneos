@@ -21,10 +21,6 @@ function mockIrn(seed: string) {
   return `MOCK-IRN-${hex}`;
 }
 
-function hasLiveSecrets() {
-  return Boolean(process.env.STONEOS_GST_IRP_USER && process.env.STONEOS_GST_IRP_SECRET);
-}
-
 @Injectable()
 export class GstService {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
@@ -37,6 +33,7 @@ export class GstService {
     user: AuthenticatedUser,
     input: { gstin: string; legalName: string; stateCode: string; irpSandbox?: boolean },
   ) {
+    if (input.irpSandbox === false) throw new BadRequestException("Live statutory integration is not configured; use test mode");
     const gstin = input.gstin.trim().toUpperCase();
     if (!gstin) throw new BadRequestException("GSTIN is required");
     if (!/^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/.test(gstin)) {
@@ -76,8 +73,8 @@ export class GstService {
     });
     if (!invoice) throw new NotFoundException("Invoice not found");
     const customer = await this.prisma.customer.findUnique({ where: { id: invoice.customerId } });
-    const source = hasLiveSecrets() ? "live" : "mock";
-    const irn = source === "mock" ? mockIrn(invoice.invoiceNumber) : mockIrn(`live:${invoice.invoiceNumber}`);
+    const source = "mock";
+    const irn = mockIrn(invoice.invoiceNumber);
     const payload = {
       Version: "1.1",
       Irn: irn,
@@ -101,7 +98,7 @@ export class GstService {
         irn,
         ackNo: `ACK-${invoice.invoiceNumber}`,
         signedQr: irn,
-        status: source === "mock" ? "mock" : "live",
+        status: "mock",
         source,
         payload,
       },
@@ -162,8 +159,8 @@ export class GstService {
       where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId } },
     });
     if (existing) return existing;
-    const source = process.env.STONEOS_GST_EWY_USER && process.env.STONEOS_GST_EWY_SECRET ? "live" : "mock";
-    const ewbNo = source === "mock" ? `MOCK-EWB-${input.clientOpId.slice(0, 8).toUpperCase()}` : `EWB-${Date.now()}`;
+    const source = "mock";
+    const ewbNo = `MOCK-EWB-${input.clientOpId.slice(0, 8).toUpperCase()}`;
     return this.prisma.eWayBill.create({
       data: {
         factoryId: user.factoryId,

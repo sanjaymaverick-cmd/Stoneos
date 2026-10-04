@@ -98,7 +98,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </Link>
       ) : null}
       <nav className="nav">
-        <span className="brand">Vedam ≡</span>
+        <span className="brand">StoneOS</span>
         {links.map((link) => (
           <Link
             key={link.href}
@@ -117,6 +117,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               .filter(
                 (r) =>
                   [
+                    "/analytics",
                     "/muster",
                     "/maintenance",
                     "/admin/users",

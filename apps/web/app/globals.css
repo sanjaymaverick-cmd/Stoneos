@@ -538,3 +538,7 @@ th {
     grid-template-columns: 1fr;
   }
 }
+
+.table-wrap {overflow-x:auto; max-width:100%;} .table-wrap table {min-width:620px;} .table-wrap td {vertical-align:top;} .table-wrap form {min-width:190px;} .table-wrap input {max-width:240px;}
+
+#stock > summary h2, #costs > summary h2, #machines > summary h2, .card > summary h2 {display:inline; font-size:1.2rem;} .card > summary {cursor:pointer; min-height:44px;} tr:target {outline:2px solid var(--accent); background:#fff;}

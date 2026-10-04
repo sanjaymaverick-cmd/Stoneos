@@ -50,6 +50,7 @@ export const routes: Array<{
     { href: "/books/import", label: "Import", roles: owners },
     { href: "/muster/payroll", label: "Payroll", roles: owners },
     { href: "/tally", label: "Tally archive", roles: owners },
+    { href: "/analytics", label: "Business insights", roles: ["owner"] as Role[] },
     { href: "/intake", label: "Drafts", roles: owners },
     { href: "/files", label: "Attachments", roles: floor },
     { href: "/setup/opening-inventory", label: "Opening count", roles: owners },

@@ -43,7 +43,7 @@ export default function GstPage() {
     <AppShell>
       <p><Link href="/books">← Books</Link></p>
       <h1>GST documents</h1>
-      <p>E-invoice and e-way run in mock mode unless IRP/EWB secrets are set. GSTR-1 is an export; portal upload is owner-gated on live creds.</p>
+      <p>Statutory integrations are in test mode. Mock IRNs and e-way numbers are demonstrations, not filings. GSTR-1 is a download for review; live filing will require configured provider access.</p>
       {error ? <p className="error">{error}</p> : null}
       <div className="card">
         <form onSubmit={saveProfile}>

@@ -1,6 +1,8 @@
 # Handoff for Grok
 
-Latest session update: [3 October 2026 — invoices, reports, complete party details and Oracle migration fix](handoff-2026-10-03.md). Read it before the historical notes below.
+Latest session update: [4 October 2026 — owner KPIs, OpenAI, per-ton costs and workflow reliability](handoff-2026-10-04.md). This supersedes earlier AI deferral for the owner analytics/document endpoints.
+
+Previous session update: [3 October 2026 — invoices, reports, complete party details and Oracle migration fix](handoff-2026-10-03.md). Read it before the historical notes below.
 
 Continue this StoneOS session from `origin/main`. Repo: https://github.com/sanjaymaverick-cmd/Stoneos — workspace `D:\\work Dir\\stoneOS`.
 
@@ -10,7 +12,7 @@ The app is live on an Oracle Cloud Ampere box at https://stoneos.duckdns.org, ru
 
 ## Intent
 
-Local-first granite factory platform. Build and test on this workstation. Host later on **AWS, OCI, or similar** — **do not `terraform apply`** until the user names a platform. Copilot/grounded AI is deferred (ADR 0009). The CEO dashboard is **rule-based ledger math** (ADR 0010), not a model.
+Local-first granite factory platform. Build and test on this workstation. Host later on **AWS, OCI, or similar** — **do not `terraform apply`** until the user names a platform. Owner analytics/document AI is now authorised with OpenAI (ADR 0019); other historical deferrals remain scoped to their original features. The CEO dashboard is **rule-based ledger math** (ADR 0010), not a model.
 
 Reference repos (`ston3gpt`, `stoneos3`) were audited and **not merged**. Reimplement rules; do not copy blindly.
 

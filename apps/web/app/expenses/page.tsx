@@ -33,6 +33,9 @@ export default function ExpensesPage() {
   } | null>(null);
   const [collected, setCollected] = useState<number | null>(null);
   const [readOnly, setReadOnly] = useState(true);
+  const [blocks, setBlocks] = useState<
+    Array<{ id: string; serialNumber: string }>
+  >([]);
   const [items, setItems] = useState<Expense[]>([]);
   const [category, setCategory] = useState("diesel");
   const [amount, setAmount] = useState("1000");
@@ -55,6 +58,7 @@ export default function ExpensesPage() {
     );
     setCollected(today.collected);
     setItems(await apiFetch("/api/v1/expenses"));
+    setBlocks(await apiFetch("/api/v1/inventory/raw-blocks"));
     const v = await apiFetch<Array<{ id: string; name: string }>>(
       "/api/v1/expenses/vehicles",
     ).catch(() => []);
@@ -99,7 +103,11 @@ export default function ExpensesPage() {
   return (
     <AppShell>
       <h1>Money</h1>
-      <p><Link href="/sales/reports">Customer and supplier statements, payments and dues →</Link></p>
+      <p>
+        <Link href="/sales/reports">
+          Customer and supplier statements, payments and dues →
+        </Link>
+      </p>
       <div className="grid">
         <div className="metric ok">
           <span>Collected today</span>
@@ -297,6 +305,84 @@ export default function ExpensesPage() {
             ))}
           </tbody>
         </table>
+      )}
+      {!readOnly && (
+        <section className="card">
+          <h2>Allocate an expense to a block</h2>
+          <p>
+            Allocate the amount before GST. Royalty and block transport
+            allocations fulfil the per-ton costs in Business insights; they are
+            counted once.
+          </p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const f = new FormData(event.currentTarget);
+              setError("");
+              apiFetch("/api/v1/expenses/" + f.get("expense") + "/allocate", {
+                method: "POST",
+                body: JSON.stringify({
+                  batchKey: crypto.randomUUID(),
+                  allocations: [
+                    {
+                      rawBlockId: f.get("block"),
+                      allocatedAmount: Number(f.get("amount")),
+                      costComponent: f.get("component"),
+                    },
+                  ],
+                }),
+              })
+                .then(() => {
+                  setNotice("Expense allocated.");
+                  refresh();
+                })
+                .catch((e) => setError(e.message));
+            }}
+          >
+            <label>
+              Expense
+              <select name="expense" required>
+                <option value="">Choose expense</option>
+                {items.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.expenseDate.slice(0, 10)} · {e.category} ·{" "}
+                    {formatInr(Number(e.amount))} · {e.toWhom}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Block
+              <select name="block" required>
+                <option value="">Choose block</option>
+                {blocks.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.serialNumber}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Cost component
+              <select name="component">
+                <option value="other">Other block expense</option>
+                <option value="royalty">Block royalty</option>
+                <option value="block_transport">Block transport rent</option>
+              </select>
+            </label>
+            <label>
+              Amount before GST (₹)
+              <input
+                type="number"
+                name="amount"
+                min="0.01"
+                step="0.01"
+                required
+              />
+            </label>
+            <button>Allocate expense</button>
+          </form>
+        </section>
       )}
     </AppShell>
   );

@@ -1,3 +1,6 @@
+import {AnalyticsController} from "./modules/reports/analytics.controller";
+import {AnalyticsService} from "./modules/reports/analytics.service";
+import {OpenaiService} from "./modules/reports/openai.service";
 import { Module } from "@nestjs/common";
 import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { IdempotencyInterceptor } from "./common/idempotency";
@@ -41,8 +44,10 @@ import { GstModule } from "./modules/gst/gst.module";
     MusterModule,
     GstModule,
   ],
-  controllers: [HealthController, ReportsController, LotsController],
+  controllers: [HealthController, ReportsController, LotsController, AnalyticsController],
   providers: [
+    AnalyticsService,
+    OpenaiService,
     ReportsService,
     PartyReportService,
     LotsService,

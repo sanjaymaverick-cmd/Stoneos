@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Patch,
+  Post,
+} from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { InventoryKind } from "@prisma/client";
 import {
@@ -7,7 +15,11 @@ import {
   SALES_READ_ROLES,
   PRODUCTION_INPUT_ROLES,
 } from "@stoneos/contracts";
-import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
+import {
+  CurrentUser,
+  Roles,
+  type AuthenticatedUser,
+} from "../../common/current-user";
 import { InventoryService } from "./inventory.service";
 
 @ApiTags("inventory")
@@ -76,9 +88,20 @@ export class InventoryController {
 
   @Patch("suppliers/:id")
   @Roles(...INVENTORY_DATA_ROLES)
-  updateSupplier(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string,
-    @Body() body: {name?:string;contactInfo?:string|null;gstin?:string|null;stateCode?:string|null;billingAddress?:string|null;shippingAddress?:string|null}) {
-    return this.service.updateSupplier(user,id,body);
+  updateSupplier(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body()
+    body: {
+      name?: string;
+      contactInfo?: string | null;
+      gstin?: string | null;
+      stateCode?: string | null;
+      billingAddress?: string | null;
+      shippingAddress?: string | null;
+    },
+  ) {
+    return this.service.updateSupplier(user, id, body);
   }
 
   /**
@@ -113,6 +136,9 @@ export class InventoryController {
       supplierId?: string;
       quarry?: string;
       weightTons?: number;
+      blockPricePerTon?: number;
+      royaltyPerTon?: number;
+      transportPerTon?: number;
       /** Value before tax. Rough blocks are quoted ex-GST like everything else. */
       purchaseTaxable?: number;
       /** Statutory slab; defaults to 5% for rough blocks (HSN 2516). */

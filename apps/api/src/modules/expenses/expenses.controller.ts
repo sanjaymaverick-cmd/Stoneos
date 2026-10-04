@@ -64,7 +64,7 @@ export class ExpensesController {
   allocate(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: { batchKey: string; allocations: Array<{ rawBlockId: string; allocatedAmount: number }> },
+    @Body() body: { batchKey: string; allocations: Array<{ rawBlockId: string; allocatedAmount: number; costComponent?: "other"|"royalty"|"block_transport" }> },
   ) {
     return this.service.allocate(user, id, body.batchKey, body.allocations);
   }

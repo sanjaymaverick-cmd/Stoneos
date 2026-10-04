@@ -54,6 +54,9 @@ export default function InventoryPage() {
   const [weightTons, setWeightTons] = useState("");
   const [supplierId, setSupplierId] = useState("");
   const [quarry, setQuarry] = useState("");
+  const [blockPricePerTon, setBlockPricePerTon] = useState("");
+  const [royaltyPerTon, setRoyaltyPerTon] = useState("");
+  const [transportPerTon, setTransportPerTon] = useState("");
   const [purchaseTaxable, setPurchaseTaxable] = useState("");
   const [purchasePaid, setPurchasePaid] = useState("");
   const [purchasePaymentMethod, setPurchasePaymentMethod] = useState("cash");
@@ -86,16 +89,19 @@ export default function InventoryPage() {
     setFixNotice("");
     setFixError("");
     try {
-      const result = (await apiFetch("/api/v1/inventory/raw-blocks/correct-cash", {
-        method: "POST",
-        label: `Cash on ${fixBlock}`,
-        body: JSON.stringify({
-          blockSerial: fixBlock,
-          purchaseCashAmount: Number(fixCash),
-          reason: fixReason.trim(),
-          clientOpId: fixOp.current,
-        }),
-      })) as {
+      const result = (await apiFetch(
+        "/api/v1/inventory/raw-blocks/correct-cash",
+        {
+          method: "POST",
+          label: `Cash on ${fixBlock}`,
+          body: JSON.stringify({
+            blockSerial: fixBlock,
+            purchaseCashAmount: Number(fixCash),
+            reason: fixReason.trim(),
+            clientOpId: fixOp.current,
+          }),
+        },
+      )) as {
         previousCashAmount?: number;
         costBasis?: number;
         costPerSlab?: number;
@@ -106,10 +112,10 @@ export default function InventoryPage() {
         isQueued(result)
           ? `Correction to ${fixBlock} saved on this device; it will sync.`
           : `${fixBlock}: cash ${formatInr(result.previousCashAmount ?? 0)} → ` +
-            `${formatInr(Number(fixCash))}. Cost basis ${formatInr(result.costBasis ?? 0)}` +
-            (result.goodSlabCount
-              ? `, ${formatInr(result.costPerSlab ?? 0)} a slab.`
-              : " (no cut recorded yet)."),
+              `${formatInr(Number(fixCash))}. Cost basis ${formatInr(result.costBasis ?? 0)}` +
+              (result.goodSlabCount
+                ? `, ${formatInr(result.costPerSlab ?? 0)} a slab.`
+                : " (no cut recorded yet)."),
       );
       setFixCash("");
       setFixReason("");
@@ -131,6 +137,13 @@ export default function InventoryPage() {
           serialNumber,
           varietyName,
           weightTons: Number(weightTons),
+          blockPricePerTon: blockPricePerTon
+            ? Number(blockPricePerTon)
+            : undefined,
+          royaltyPerTon: royaltyPerTon ? Number(royaltyPerTon) : undefined,
+          transportPerTon: transportPerTon
+            ? Number(transportPerTon)
+            : undefined,
           supplierId: supplierId || undefined,
           quarry: quarry.trim() || undefined,
           purchaseTaxable: purchaseTaxable
@@ -139,7 +152,9 @@ export default function InventoryPage() {
           purchaseCashAmount: purchaseCash ? Number(purchaseCash) : undefined,
           supplierInvoiceNo: supplierInvoiceNo.trim() || undefined,
           actualAmountPaid: purchasePaid ? Number(purchasePaid) : undefined,
-          purchasePaymentMethod: purchasePaid ? purchasePaymentMethod : undefined,
+          purchasePaymentMethod: purchasePaid
+            ? purchasePaymentMethod
+            : undefined,
           clientOpId: receiveOp.current,
         }),
       });
@@ -162,6 +177,9 @@ export default function InventoryPage() {
       setSerial("");
       setWeightTons("");
       setPurchaseTaxable("");
+      setBlockPricePerTon("");
+      setRoyaltyPerTon("");
+      setTransportPerTon("");
       setPurchaseCash("");
       setPurchasePaid("");
       setSupplierInvoiceNo("");
@@ -182,7 +200,9 @@ export default function InventoryPage() {
     <AppShell>
       <h1>Yard</h1>
       <p>
-        <Link href="/lots">Lots — stock by block, record a cut, write off breakage →</Link>
+        <Link href="/lots">
+          Lots — stock by block, record a cut, write off breakage →
+        </Link>
       </p>
       <div className="card">
         <h2>Receive raw block</h2>
@@ -232,11 +252,25 @@ export default function InventoryPage() {
           </label>
           <label>
             Paid against purchase bill
-            <input type="number" min="0" step="0.01" value={purchasePaid} onChange={e=>setPurchasePaid(e.target.value)} />
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={purchasePaid}
+              onChange={(e) => setPurchasePaid(e.target.value)}
+            />
           </label>
           <label>
             Purchase payment mode
-            <select value={purchasePaymentMethod} onChange={e=>setPurchasePaymentMethod(e.target.value)}><option value="cash">Cash</option><option value="UPI">UPI</option><option value="bank transfer">Bank transfer</option><option value="cheque">Cheque</option></select>
+            <select
+              value={purchasePaymentMethod}
+              onChange={(e) => setPurchasePaymentMethod(e.target.value)}
+            >
+              <option value="cash">Cash</option>
+              <option value="UPI">UPI</option>
+              <option value="bank transfer">Bank transfer</option>
+              <option value="cheque">Cheque</option>
+            </select>
           </label>
           <label>
             Quarry
@@ -246,6 +280,54 @@ export default function InventoryPage() {
               placeholder="Pit or location"
             />
           </label>
+          <fieldset>
+            <legend>Block costs per ton</legend>
+            <label>
+              Block price (₹/ton)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={blockPricePerTon}
+                onChange={(e) => setBlockPricePerTon(e.target.value)}
+              />
+            </label>
+            <label>
+              Block royalty (₹/ton)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={royaltyPerTon}
+                onChange={(e) => setRoyaltyPerTon(e.target.value)}
+              />
+            </label>
+            <label>
+              Block transport rent (₹/ton)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={transportPerTon}
+                onChange={(e) => setTransportPerTon(e.target.value)}
+              />
+            </label>
+            <p>
+              Rates × recorded tonnage. Leave rates blank when unknown. Royalty
+              and transport are cost estimates until their expenses are entered
+              and allocated.
+            </p>
+            {blockPricePerTon && weightTons && (
+              <p>
+                Stone price:{" "}
+                {formatInr(Number(blockPricePerTon) * Number(weightTons))} ·
+                Royalty:{" "}
+                {formatInr(Number(royaltyPerTon || 0) * Number(weightTons))} ·
+                Transport:{" "}
+                {formatInr(Number(transportPerTon || 0) * Number(weightTons))}
+              </p>
+            )}
+          </fieldset>
           <label>
             Value before GST (₹)
             <input
@@ -269,13 +351,16 @@ export default function InventoryPage() {
             />
           </label>
           <p className="muted">
-            Cash carries no GST, so there is no input credit to claim on it — but it
-            is still what the stone cost, so it counts towards the cost of every slab
-            off this block.
+            Cash carries no GST, so there is no input credit to claim on it —
+            but it is still what the stone cost, so it counts towards the cost
+            of every slab off this block.
           </p>
           {purchaseTaxable || purchaseCash ? (
             <p className="hint">
-              Cost basis {formatInr(Number(purchaseTaxable || 0) + Number(purchaseCash || 0))}
+              Cost basis{" "}
+              {formatInr(
+                Number(purchaseTaxable || 0) + Number(purchaseCash || 0),
+              )}
               {weightTons
                 ? ` · ${formatInr(
                     (Number(purchaseTaxable || 0) + Number(purchaseCash || 0)) /
@@ -312,24 +397,35 @@ export default function InventoryPage() {
           ) : null}
           <button type="submit">Receive</button>
         </form>
-        <CustomerForm kind="supplier" heading="Add a supplier" onAdded={(_result,message)=>{setNotice(message);void refresh().catch(()=>undefined);}} />
-        <p><Link href="/parties">Manage buyers & suppliers →</Link></p>
-
+        <CustomerForm
+          kind="supplier"
+          heading="Add a supplier"
+          onAdded={(_result, message) => {
+            setNotice(message);
+            void refresh().catch(() => undefined);
+          }}
+        />
+        <p>
+          <Link href="/parties">Manage buyers & suppliers →</Link>
+        </p>
       </div>
       <div className="card">
         <h2>Cash on an older block</h2>
         <p className="muted">
-          Blocks taken in before this screen asked for a cash amount carry none, so
-          what each of their slabs cost is understated. Put the real figure in here.
-          Only the cash part — changing the billed amount would mean amending the
-          vendor&apos;s bill and the GST credit claimed on it.
+          Blocks taken in before this screen asked for a cash amount carry none,
+          so what each of their slabs cost is understated. Put the real figure
+          in here. Only the cash part — changing the billed amount would mean
+          amending the vendor&apos;s bill and the GST credit claimed on it.
         </p>
         {fixNotice ? <p className="hint">{fixNotice}</p> : null}
         {fixError ? <p className="error">{fixError}</p> : null}
         <form onSubmit={correctCash}>
           <label>
             Block
-            <select value={fixBlock} onChange={(e) => setFixBlock(e.target.value)}>
+            <select
+              value={fixBlock}
+              onChange={(e) => setFixBlock(e.target.value)}
+            >
               <option value="">Choose a block</option>
               {blocks.map((b) => (
                 <option key={b.id} value={b.serialNumber}>
@@ -369,14 +465,17 @@ export default function InventoryPage() {
         </form>
         {chosen ? (
           <p className="hint">
-            {chosen.serialNumber}: {formatInr(numeric(chosen.purchaseTaxable))} on the
-            bill, {formatInr(numeric(chosen.purchaseCashAmount))} cash on record
+            {chosen.serialNumber}: {formatInr(numeric(chosen.purchaseTaxable))}{" "}
+            on the bill, {formatInr(numeric(chosen.purchaseCashAmount))} cash on
+            record
             {fixCash !== "" ? (
               <>
                 {" "}
                 → cost basis would become{" "}
                 <b>
-                  {formatInr(numeric(chosen.purchaseTaxable) + Number(fixCash || 0))}
+                  {formatInr(
+                    numeric(chosen.purchaseTaxable) + Number(fixCash || 0),
+                  )}
                 </b>
               </>
             ) : null}
@@ -384,9 +483,10 @@ export default function InventoryPage() {
           </p>
         ) : null}
         <p className="muted">
-          The difference is posted to the books against your name, with the reason.
-          Breakage already written off keeps the value it was written off at —
-          correcting it now would restate months that may already be filed.
+          The difference is posted to the books against your name, with the
+          reason. Breakage already written off keeps the value it was written
+          off at — correcting it now would restate months that may already be
+          filed.
         </p>
       </div>
       <div className="card">

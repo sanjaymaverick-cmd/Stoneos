@@ -187,6 +187,8 @@ enum IntakeKind {
   rokad
   dpr
   journal
+  supplier_bill
+  delivery_note
 }
 
 enum IntakeStatus {
@@ -194,6 +196,7 @@ enum IntakeStatus {
   confirmed
   rejected
   unreadable
+  reviewed
 }
 
 model Factory {
@@ -205,6 +208,8 @@ model Factory {
   createdAt       DateTime                @default(now()) @map("created_at")
   version         Int                     @default(0)
 
+  analyticsSettings  AnalyticsSettings?
+  consumableMovements ConsumableMovement[]
   users              AppUser[]
   sessions           AuthSession[]
   auditEvents        AuditEvent[]
@@ -388,6 +393,8 @@ model Machine {
   factory          Factory     @relation(fields: [factoryId], references: [id])
   name             String
   machineType      MachineType @map("machine_type")
+  plannedHoursPerDay Decimal? @map("planned_hours_per_day") @db.Decimal(4,2)
+  idealSqftPerHour Decimal? @map("ideal_sqft_per_hour") @db.Decimal(12,3)
   bladeCount       Int?        @map("blade_count")
   headCount        Int?        @map("head_count")
   abrasivesPerHead Int?        @map("abrasives_per_head")
@@ -418,6 +425,10 @@ model RawBlock {
   heightFt           Decimal?           @map("height_ft") @db.Decimal(8, 2)
   volumeCft          Decimal?           @map("volume_cft") @db.Decimal(10, 3)
   qualityNote        String?            @map("quality_note")
+  blockPricePerTon Decimal? @map("block_price_per_ton") @db.Decimal(14,2)
+  royaltyPerTon Decimal? @map("royalty_per_ton") @db.Decimal(14,2)
+  transportPerTon Decimal? @map("transport_per_ton") @db.Decimal(14,2)
+  costsConfirmedAt   DateTime?          @map("costs_confirmed_at")
   purchaseDate       DateTime?          @map("purchase_date") @db.Date
   /// Total on the vendor bill, tax included. What is owed to the supplier.
   invoicedAmount     Decimal?           @map("invoiced_amount") @db.Decimal(14, 2)
@@ -715,6 +726,7 @@ model MaintenanceJob {
 }
 
 model Consumable {
+  movements ConsumableMovement[]
   id        String   @id @default(uuid())
   factoryId String   @map("factory_id")
   factory   Factory  @relation(fields: [factoryId], references: [id])
@@ -766,6 +778,7 @@ model SalesOrder {
   status      SalesOrderStatus @default(DRAFT)
   /// gst_invoice raises a tax invoice; cash_unbilled settles in cash with no invoice.
   billingMode BillingMode      @default(gst_invoice) @map("billing_mode")
+  promisedDeliveryDate DateTime? @map("promised_delivery_date") @db.Date
   orderDate   DateTime         @map("order_date") @db.Date
   createdAt   DateTime         @default(now()) @map("created_at")
   version     Int              @default(0)
@@ -876,6 +889,9 @@ model Invoice {
   customerId     String     @map("customer_id")
   customer       Customer   @relation(fields: [customerId], references: [id])
   invoiceNumber  String     @map("invoice_number")
+  dueDate        DateTime?  @map("due_date") @db.Date
+  promisedPaymentDate DateTime? @map("promised_payment_date") @db.Date
+  collectionNote String? @map("collection_note")
   invoiceDate    DateTime?  @map("invoice_date") @db.Date
   /// Total payable: taxable value plus tax. AR and payments settle against this.
   amount         Decimal    @db.Decimal(14, 2)
@@ -1057,6 +1073,7 @@ model Expense {
 }
 
 model ExpenseAllocation {
+  costComponent String @default("other") @map("cost_component")
   id               String  @id @default(uuid())
   expenseId        String  @map("expense_id")
   expense          Expense @relation(fields: [expenseId], references: [id])
@@ -1452,4 +1469,30 @@ model CashSale {
   @@unique([factoryId, clientOpId])
   @@index([factoryId, saleDate])
   @@map("cash_sale")
+}
+
+model ConsumableMovement {
+  id String @id @default(uuid())
+  factoryId String @map("factory_id")
+  factory Factory @relation(fields: [factoryId], references: [id])
+  consumableId String @map("consumable_id")
+  consumable Consumable @relation(fields: [consumableId], references: [id])
+  direction String
+  quantity Decimal @db.Decimal(12,3)
+  reason String
+  occurredOn DateTime @map("occurred_on") @db.Date
+  actorId String @map("actor_id")
+  clientOpId String @map("client_op_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  @@unique([factoryId,clientOpId])
+  @@index([factoryId,occurredOn])
+  @@map("consumable_movement")
+}
+model AnalyticsSettings {
+  factoryId String @id @map("factory_id")
+  factory Factory @relation(fields: [factoryId], references: [id])
+  targets Json?
+  openaiKeyEncrypted String? @map("openai_key_encrypted")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@map("analytics_settings")
 }

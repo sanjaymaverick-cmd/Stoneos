@@ -32,7 +32,7 @@
  * cached page would then be served to the next person on a shared device.
  */
 
-const CACHE = "stoneos-shell-v3";
+const CACHE = "stoneos-shell-v4";
 const OFFLINE_URL = "/offline.html";
 const NAVIGATION_TIMEOUT_MS = 4000;
 
@@ -112,21 +112,24 @@ function withTimeout(promise, ms) {
 
 async function networkFirst(request) {
   const cache = await caches.open(CACHE);
+  // Let a slow first visit finish. A different route's HTML is not an app shell
+  // in Next.js: it renders that route, even when the address bar says otherwise.
+  const pending = fetch(request).then(async (response) => {
+    if (isCacheable(response)) await cache.put(request, response.clone()).catch(()=>undefined);
+    return response;
+  });
   try {
-    const pending = fetch(request);
     const response = await (request.mode === "navigate" ? withTimeout(pending, NAVIGATION_TIMEOUT_MS) : pending);
-    if (isCacheable(response)) cache.put(request, response.clone());
     return response;
   } catch (networkError) {
     const hit = await cache.match(request);
     if (hit) return hit;
 
-    // A navigation to a page never opened online: give them a shell that is
-    // cached rather than a browser error, so the app starts and the queue is
-    // reachable.
+    if (networkError.message === "network timeout") {
+      try { return await pending; } catch { /* The slow request also lost its network. */ }
+    }
+    // Unknown offline routes get an honest notice, never another screen's HTML.
     if (request.mode === "navigate") {
-      const shell = (await cache.match("/dashboard")) || (await cache.match("/login"));
-      if (shell) return shell;
       const offline = await cache.match(OFFLINE_URL);
       if (offline) return offline;
     }
@@ -149,17 +152,20 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("message", (event) => {
   const data = event.data || {};
   if (data.type === "warm" && Array.isArray(data.urls)) {
-    event.waitUntil(warm(data.urls));
+    event.waitUntil(warm(data.urls).then((complete) => {
+      event.ports?.[0]?.postMessage({ type: "warmed", complete });
+    }));
   }
 });
 
 async function warm(urls) {
   const cache = await caches.open(CACHE);
   const seen = new Set();
+  let complete = true;
   for (const url of urls) {
     try {
       const response = await fetch(new Request(url, { cache: "reload" }));
-      if (!isCacheable(response)) continue;
+      if (!isCacheable(response)) { complete = false; continue; }
       await cache.put(url, response.clone());
       const html = await response.text();
       for (const match of html.matchAll(/(?:src|href)="(\/_next\/static\/[^"]+)"/g)) {
@@ -168,9 +174,12 @@ async function warm(urls) {
         seen.add(asset);
         const file = await fetch(asset).catch(() => null);
         if (isCacheable(file)) await cache.put(asset, file);
+        else complete = false;
       }
     } catch {
+      complete = false;
       // One screen failing to warm must not stop the rest.
     }
   }
+  return complete;
 }

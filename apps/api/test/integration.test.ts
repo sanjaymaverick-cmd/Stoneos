@@ -23,6 +23,8 @@ import { MusterService } from "../src/modules/muster/muster.service";
 import { GstService } from "../src/modules/gst/gst.service";
 import { CopilotService } from "../src/modules/books/copilot.service";
 import { MaintenanceService } from "../src/modules/maintenance/maintenance.service";
+import {AnalyticsService} from "../src/modules/reports/analytics.service";
+import {OpenaiService} from "../src/modules/reports/openai.service";
 import { ReportsService } from "../src/modules/reports/reports.service";
 import { PartyReportService } from "../src/modules/reports/party-report.service";
 import { DailyReportService } from "../src/modules/reports/daily-report.service";
@@ -3777,4 +3779,81 @@ describe("postgres-backed workflows", () => {
     await assert.rejects(()=>inventory.createSupplier(asOwner,"Bad",undefined,{gstin:"08ZZZZZ0000Z1ZX",stateCode:"27"}),/contradicts/);
     await assert.rejects(()=>inventory.updateSupplier(asOwner,supplier.id,{name:" "}),/needs a name/);
   });
+
+  it("validates, reschedules and idempotently completes maintenance within a factory",async()=>{
+    const {factory,asOwner}=await staffFactory('maintenance-proof');
+    const machine=await prisma.machine.findFirstOrThrow({where:{factoryId:factory.id}});
+    const service=new MaintenanceService(prisma as never,new AuditService(prisma as never));
+    await assert.rejects(()=>service.create(asOwner,{machineId:machine.id,title:'',dueOn:'2026-10-04'}),/title/);
+    await assert.rejects(()=>service.create(asOwner,{machineId:machine.id,title:'Test',dueOn:'2026-02-30'}),/real/);
+    const job=await service.create(asOwner,{machineId:machine.id,title:'Blade',dueOn:currentFactoryDate()});
+    await service.reschedule(asOwner,job.id,currentFactoryDate(),'Correct date');
+    await assert.rejects(()=>service.complete({...asOwner,factoryId:'other'},job.id),/not found/);
+    const done=await service.complete(asOwner,job.id);const retry=await service.complete(asOwner,job.id);
+    assert.equal(done.completedAt?.toISOString(),retry.completedAt?.toISOString());
+    await assert.rejects(()=>service.reschedule(asOwner,job.id,currentFactoryDate(),'Again'),/Completed/);
+  });
+  it("records consumable receipts and usage without negative stock or duplicate replay",async()=>{
+    const {factory,asOwner}=await staffFactory('consumable-proof');const c=new ConsumablesController(prisma as never);
+    const item=await c.create(asOwner,{name:'Resin',unit:'litre',onHand:10});
+    const input={direction:'usage' as const,quantity:3,reason:'Polishing',occurredOn:currentFactoryDate(),clientOpId:'usage-1'};
+    const used=await c.move(asOwner,item.id,input);assert.equal((await c.move(asOwner,item.id,input)).id,used.id);
+    await assert.rejects(()=>c.move(asOwner,item.id,{...input,quantity:20,clientOpId:'too-much'}),/exceeds/);
+    await assert.rejects(()=>c.move({...asOwner,factoryId:'other'},item.id,{...input,clientOpId:'cross-factory'}),/factory/);
+    await c.move(asOwner,item.id,{...input,direction:'receipt',quantity:5,clientOpId:'receipt-1'});
+    assert.equal(Number((await prisma.consumable.findUniqueOrThrow({where:{id:item.id}})).onHand),12);
+    assert.equal((await c.movements(asOwner)).length,2);
+    assert.equal((await c.movements({...asOwner,factoryId:'other'})).length,0);
+  });
+  it("allocates only net costs, rejects negative amounts, and safely replays allocations",async()=>{
+    const {asOwner}=await staffFactory('cost-proof');const block=(await inventory.receiveBlock(asOwner,{serialNumber:'COST-PROOF',varietyName:'White',weightTons:18,purchaseTaxable:10000,clientOpId:'cost-receipt'})).block;
+    const expense=await expenses.create(asOwner,{category:'consumables',expenseDate:currentFactoryDate(),amount:1180,taxableAmount:1000,gstRatePct:18});
+    await prisma.expense.update({where:{id:expense.id},data:{taxableAmount:1000}});
+    await assert.rejects(()=>expenses.allocate(asOwner,expense.id,'negative',[{rawBlockId:block.id,allocatedAmount:-1}]),/positive/);
+    await assert.rejects(()=>expenses.allocate(asOwner,expense.id,'tax',[{rawBlockId:block.id,allocatedAmount:1180}]),/before GST/);
+    const line=[{rawBlockId:block.id,allocatedAmount:1000}];await expenses.allocate(asOwner,expense.id,'one',line);await expenses.allocate(asOwner,expense.id,'one',line);
+    assert.equal(await prisma.expenseAllocation.count({where:{expenseId:expense.id}}),1);
+  });
+  it("reconciles per-ton stone, royalty and transport without double counting, and clears cost confirmation",async()=>{
+    const {factory,asOwner}=await staffFactory("per-ton");const service=new AnalyticsService(prisma as never,new AuditService(prisma as never));
+    const input={serialNumber:"TON-COST",varietyName:"White",weightTons:20,blockPricePerTon:1000,royaltyPerTon:100,transportPerTon:200,clientOpId:"ton-cost-proof"};
+    const receipt=await inventory.receiveBlock(asOwner,input);assert.equal(Number(receipt.block.purchaseTaxable),20000);
+    let snap=await service.snapshot(factory.id);let row=snap.blockCosts[0]!;assert.equal(row.totalRecordedCost,20000);assert.equal(row.estimatedLandedCost,26000);assert.equal(row.pendingPerTonCost,6000);
+    await assert.rejects(()=>service.confirmCosts(asOwner,receipt.block.id,true),/Allocate/);
+    const royalty=await expenses.create(asOwner,{category:"other",amount:2000,expenseDate:currentFactoryDate()});
+    const transport=await expenses.create(asOwner,{category:"transport",amount:4000,expenseDate:currentFactoryDate()});
+    await expenses.allocate(asOwner,royalty.id,"royalty",[{rawBlockId:receipt.block.id,allocatedAmount:2000,costComponent:"royalty"}]);
+    await expenses.allocate(asOwner,transport.id,"transport",[{rawBlockId:receipt.block.id,allocatedAmount:4000,costComponent:"block_transport"}]);
+    row=(await service.snapshot(factory.id)).blockCosts[0]!;assert.equal(row.totalRecordedCost,26000);assert.equal(row.estimatedLandedCost,26000);assert.equal(row.pendingPerTonCost,0);
+    await service.confirmCosts(asOwner,receipt.block.id,true);assert.ok((await prisma.rawBlock.findUniqueOrThrow({where:{id:receipt.block.id}})).costsConfirmedAt);
+    const cutting=await expenses.create(asOwner,{category:"electricity",amount:500,expenseDate:currentFactoryDate()});
+    await expenses.allocate(asOwner,cutting.id,"cut",[{rawBlockId:receipt.block.id,allocatedAmount:500}]);assert.equal((await prisma.rawBlock.findUniqueOrThrow({where:{id:receipt.block.id}})).costsConfirmedAt,null);
+    await assert.rejects(()=>service.rates({...asOwner,factoryId:"other"},receipt.block.id,{blockPricePerTon:1000,royaltyPerTon:100,transportPerTon:200}),/not found/);
+    await assert.rejects(()=>inventory.receiveBlock(asOwner,{...input,serialNumber:"BAD",clientOpId:"bad-cost",purchaseTaxable:123}),/must equal/);
+    await assert.rejects(()=>inventory.receiveBlock(asOwner,{...input,serialNumber:"NO-WEIGHT",clientOpId:"no-weight",weightTons:undefined}),/weightTons|tonnage/);
+  });
+  it("keeps empty and foreign analytics isolated and rejects invalid operational inputs",async()=>{
+    const {factory,asOwner}=await staffFactory("analytics-empty");const service=new AnalyticsService(prisma as never,new AuditService(prisma as never));
+    const snap=await service.snapshot(factory.id);assert.equal(snap.current.netSales,0);assert.equal(snap.stock.length,0);assert.equal(snap.forecast.ready,false);assert.ok(snap.machines.every(m=>m.oee===null));assert.equal(snap.collections.overdue,0);
+    await assert.rejects(()=>service.snapshot(factory.id,"2026-02-30",currentFactoryDate()),/real/);
+    await assert.rejects(()=>service.snapshot(factory.id,currentFactoryDate(),"2099-01-01"),/past/);
+    const machine=snap.machines[0]!;await assert.rejects(()=>service.standard(asOwner,machine.id,{plannedHoursPerDay:25,idealSqftPerHour:100}),/Planned/);
+    await assert.rejects(()=>service.standard({...asOwner,factoryId:"other"},machine.id,{plannedHoursPerDay:8,idealSqftPerHour:100}),/not found/);
+  });
+  it("saves encrypted provider settings and document reviews without financial posting",async()=>{
+    const {factory,asOwner}=await staffFactory("ai-settings");const audit=new AuditService(prisma as never);const ai=new OpenaiService(prisma as never,new AnalyticsService(prisma as never,audit),audit,new FilesService(prisma as never,audit));
+    const oldSecret=process.env.SESSION_SECRET;process.env.SESSION_SECRET="local-test-encryption-secret";
+    try{const settings=await ai.saveSettings(asOwner,{apiKey:"sk-test-only-not-a-real-secret-123456",targets:{salesTarget:10000}});assert.equal(settings.aiConfigured,true);assert.ok(!JSON.stringify(settings).includes("sk-"));
+    const stored=await prisma.analyticsSettings.findUniqueOrThrow({where:{factoryId:factory.id}});assert.ok(stored.openaiKeyEncrypted&&!stored.openaiKeyEncrypted.includes("sk-"));
+    const foreign=await staffFactory("foreign-ai");assert.equal((await ai.settings(foreign.factory.id)).aiConfigured,false);
+    await assert.rejects(()=>ai.saveSettings(asOwner,{targets:{damagePctTarget:101}}),/100/);
+    const parsed={kind:"supplier_bill" as const,partyName:"Quarry",invoiceNumber:"DOC-1",invoiceDate:currentFactoryDate(),subtotal:100,taxAmount:5,total:105,lines:[{description:"Stone",quantity:1,unit:"ton",amount:100}],uncertainFields:[]};
+    const d=await prisma.intakeDraft.create({data:{factoryId:factory.id,kind:"supplier_bill",status:"proposed",operationalDate:new Date(),clientOpId:"ai-review-draft",proposedBy:asOwner.id,parsed}});
+    const journals=await prisma.voucher.count({where:{factoryId:factory.id}});const reviewed=await ai.review(asOwner,d.id,parsed);assert.equal(reviewed.status,"reviewed");assert.equal(await prisma.voucher.count({where:{factoryId:factory.id}}),journals);
+    await assert.rejects(()=>ai.review(foreign.asOwner,d.id,parsed),/not found/);
+    await assert.rejects(()=>ai.review(asOwner,d.id,{...parsed,total:999}),/add up/);
+    await ai.saveSettings(asOwner,{clearKey:true});assert.equal((await ai.settings(factory.id)).aiConfigured,false);
+    }finally{if(oldSecret===undefined)delete process.env.SESSION_SECRET;else process.env.SESSION_SECRET=oldSecret;}
+  });
+
 });

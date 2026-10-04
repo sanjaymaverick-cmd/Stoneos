@@ -1,19 +1,31 @@
 import { INestApplication, ValidationPipe } from "@nestjs/common";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { NestFactory } from "@nestjs/core";
+import type { NestExpressApplication } from "@nestjs/platform-express";
 import { AppModule } from "./app.module";
 import { rateLimit, securityHeaders } from "./common/http-security";
 
 export async function createApp(): Promise<INestApplication> {
-  const app = await NestFactory.create(AppModule, { logger: ["error", "warn", "log"] });
-  app.setGlobalPrefix("api/v1", { exclude: ["health", "health/live", "health/ready"] });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    logger: ["error", "warn", "log"],
+  });
+  app.useBodyParser("json", { limit: "6mb" });
+  app.setGlobalPrefix("api/v1", {
+    exclude: ["health", "health/live", "health/ready"],
+  });
   app.use(securityHeaders);
   app.use(rateLimit);
   app.enableCors({
     origin: (process.env.FRONTEND_URL ?? "http://localhost:3000").split(","),
     credentials: true,
   });
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
 
   const document = SwaggerModule.createDocument(
     app,
