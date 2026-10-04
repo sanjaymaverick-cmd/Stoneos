@@ -172,10 +172,7 @@ export default function MaintenancePage() {
                 <tr key={q.clientOpId}>
                   <td>{machineName(body.machineId)}</td>
                   <td>
-                    {body.title}{" "}
-                    <span className="pending-tag">
-                      not synced
-                    </span>
+                    {body.title} <span className="pending-tag">not synced</span>
                   </td>
                   <td>{body.dueOn}</td>
                   <td>
@@ -203,6 +200,47 @@ export default function MaintenancePage() {
                 <td>{j.title}</td>
                 <td>{j.dueOn.slice(0, 10)}</td>
                 <td>
+                  {canWrite && !j.completedAt && (
+                    <details>
+                      <summary>Reschedule</summary>
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const f = new FormData(e.currentTarget);
+                          void run(async () => {
+                            const r = await apiFetch(
+                              `/api/v1/maintenance/${j.id}/reschedule`,
+                              {
+                                method: "POST",
+                                body: JSON.stringify({
+                                  dueOn: f.get("dueOn"),
+                                  reason: f.get("reason"),
+                                }),
+                              },
+                            );
+                            return isQueued(r)
+                              ? "Reschedule saved; waiting to sync."
+                              : "Maintenance rescheduled.";
+                          });
+                        }}
+                      >
+                        <label>
+                          New due date
+                          <input
+                            type="date"
+                            name="dueOn"
+                            defaultValue={j.dueOn.slice(0, 10)}
+                            required
+                          />
+                        </label>
+                        <label>
+                          Reason
+                          <input name="reason" required />
+                        </label>
+                        <button type="submit">Save date</button>
+                      </form>
+                    </details>
+                  )}
                   {j.completedAt ? (
                     "done"
                   ) : queuedDone.has(j.id) ? (

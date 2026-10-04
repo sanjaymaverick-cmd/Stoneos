@@ -11,15 +11,10 @@ const OWNER_USER = process.env.STONEOS_OWNER_USER ?? "owner";
 const OWNER_PASS_IN = process.env.STONEOS_OWNER_PASSWORD ?? "ChangeMeNow!12";
 const OWNER_PASS_STABLE = "YearRunOwner!12";
 const STAFF = [
-  { username: "yrunmgr", role: "manager", name: "Year Manager", password: "YearRunMgr!12" },
-  { username: "yrunadm", role: "admin", name: "Year Admin", password: "YearRunAdm!12" },
-  { username: "yrunsup", role: "supervisor", name: "Year Supervisor", password: "YearRunSup!12" },
-  { username: "yrunopr", role: "operator", name: "Year Operator", password: "YearRunOpr!12" },
-  { username: "yruninv", role: "inventory", name: "Year Inventory", password: "YearRunInv!12" },
-  { username: "yrunsls", role: "sales", name: "Year Sales", password: "YearRunSls!12" },
-  { username: "yrunacc", role: "accountant", name: "Year Accountant", password: "YearRunAcc!12" },
-  { username: "yrunaud", role: "auditor", name: "Year Auditor", password: "YearRunAud!12" },
+ {username:'yrunsup',role:'supervisor',name:'Demo Supervisor',password:'YearRunSup!12'},
+ {username:'yrunopr',role:'operator',name:'Demo Operator',password:'YearRunOpr!12'},
 ];
+if(!['localhost','127.0.0.1','[::1]'].includes(new URL(API).hostname)||process.env.STONEOS_ALLOW_DEMO_WRITES!=='yes')throw new Error('Dry run requires an isolated loopback API and STONEOS_ALLOW_DEMO_WRITES=yes');
 
 const report = { api: API, startedAt: new Date().toISOString(), events: [], failures: [], months: [] };
 let ownerPassword = OWNER_PASS_IN;
@@ -42,8 +37,8 @@ async function req(method, pathName, { token, body, expected } = {}) {
   }
   const event = { method, path: pathName, status: res.status, ok: res.ok };
   report.events.push(event);
-  if (expected !== undefined && res.status !== expected) {
-    report.failures.push({ ...event, expected, body: json });
+  if ((expected !== undefined && res.status !== expected) || (expected === undefined && !res.ok)) {
+    report.failures.push({ ...event, expected, message: json?.message });
   }
   return { status: res.status, ok: res.ok, body: json };
 }
@@ -88,7 +83,7 @@ async function main() {
     const updated = await ensurePassword(owner.token, ownerPassword, OWNER_PASS_STABLE);
     owner = { ...owner, token: updated.token };
     ownerPassword = updated.password;
-    report.ownerPasswordResetTo = OWNER_PASS_STABLE;
+    report.ownerPasswordChanged = true;
   }
 
   const tokens = { owner: owner.token };
@@ -124,15 +119,11 @@ async function main() {
   });
   report.operatorCannotProvision = deny.status === 403;
 
-  const managerOwner = await req("POST", "/api/v1/admin/users", {
-    token: tokens.manager,
-    body: { username: "shouldfailowner", name: "Nope", role: "owner" },
-    expected: 403,
-  });
-  report.managerCannotGrantOwner = managerOwner.status === 403;
+  tokens.manager=tokens.owner;tokens.admin=tokens.owner;tokens.inventory=tokens.supervisor;tokens.sales=tokens.supervisor;tokens.accountant=tokens.owner;tokens.auditor=tokens.owner;
+  report.roleNote="Current supervisor/operator accounts; owner records financial writes";
 
   const auditorExpense = await req("POST", "/api/v1/expenses", {
-    token: tokens.auditor,
+    token: tokens.operator,
     body: {
       category: "other",
       amount: 1,
@@ -141,8 +132,10 @@ async function main() {
     },
     expected: 403,
   });
-  report.auditorCannotWriteExpense = auditorExpense.status === 403;
+  report.operatorCannotWriteExpense = auditorExpense.status === 403;
 
+  const locations = await req("GET","/api/v1/inventory/locations",{token:tokens.owner});
+  if(!locations.body?.some(l=>l.code==='RAW_YARD'))throw new Error("Bootstrap the isolated demo locations before running");
   const machines = await req("GET", "/api/v1/machines", { token: tokens.operator ?? tokens.owner });
   const machineList = Array.isArray(machines.body) ? machines.body : [];
   const cutting = machineList.find((m) => m.machineType === "CUTTING");
@@ -166,7 +159,7 @@ async function main() {
   start.setUTCDate(1);
 
   for (let month = 0; month < 12; month += 1) {
-    const when = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + month, 12));
+    const when = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + month, month===11?Math.min(12,new Date().getUTCDate()):12));
     const stamp = when.toISOString().slice(0, 7);
     const serial = `YR${stamp.replace("-", "")}-${String(month + 1).padStart(2, "0")}-${runId}`;
     const monthReport = { month: stamp, serial, steps: [] };
@@ -236,8 +229,8 @@ async function main() {
                 body: { slabIds: [slabIds[0]] },
               });
               const inv = await req("POST", `/api/v1/sales-orders/${order.body.id}/invoice`, {
-                token: tokens.sales,
-                body: { clientOpId: `yr-inv-${serial}` },
+                token: tokens.owner,
+                body: { clientOpId: `yr-inv-${serial}`,invoiceDate:when.toISOString().slice(0,10) },
               });
               monthReport.steps.push({ invoice: inv.status });
               const invoiceId = inv.body?.id ?? inv.body?.invoices?.[0]?.id;

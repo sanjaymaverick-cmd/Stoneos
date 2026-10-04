@@ -32,7 +32,7 @@ export default function LoginPage() {
   return (
     <main className="page">
       <div className="card" style={{ maxWidth: 420, margin: "10vh auto" }}>
-        <h1 className="brand">Vedam ≡</h1>
+        <h1 className="brand">StoneOS</h1>
         <p>Factory staff sign in with credentials issued by the owner.</p>
         <form onSubmit={onSubmit}>
           <label>

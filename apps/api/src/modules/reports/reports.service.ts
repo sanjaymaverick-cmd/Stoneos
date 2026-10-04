@@ -1,6 +1,7 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
   answerCeoQuestion,
+  availableSlabs,
   calendarMonthUtcRange,
   ceoExceptions,
   ceoNarrative,
@@ -11,6 +12,20 @@ import {
 } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
 
+/**
+ * Slabs on the yard: identified pieces plus what the lots still hold.
+ *
+ * Shared on purpose. Two screens counted this separately — /reports/today off
+ * ceoBrief and the shop screen off shopDashboard — so fixing one left the other
+ * reporting an empty yard. One function, called twice.
+ */
+function lotAwareSlabCount(
+  loosePieces: number,
+  lots: ReadonlyArray<{ goodSlabCount: number; brokenSlabCount: number; soldSlabCount: number }>,
+): number {
+  return loosePieces + lots.reduce((sum, lot) => sum + Math.max(0, availableSlabs(lot)), 0);
+}
+
 @Injectable()
 export class ReportsService {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
@@ -18,15 +33,25 @@ export class ReportsService {
   async shopDashboard(factoryId: string) {
     const soon = new Date();
     soon.setDate(soon.getDate() + 7);
-    const [blocksOnHand, slabsOnHand, openCutting, openOrders, maintenanceDue] = await Promise.all([
+    const [blocksOnHand, loosePieces, lotBlocks, openCutting, openOrders, maintenanceDue] =
+      await Promise.all([
       this.prisma.rawBlock.count({ where: { factoryId, currentStatus: "in_stock" } }),
+      // The older per-piece path still stocks identified slabs.
       this.prisma.slab.count({ where: { factoryId, salesStatus: "in_stock" } }),
+      // The lot path stocks counts against the block and creates no Slab rows at
+      // all, so counting only the table above reported an EMPTY YARD for a factory
+      // holding thousands of slabs — on the first screen anyone opens.
+      this.prisma.rawBlock.findMany({
+        where: { factoryId },
+        select: { goodSlabCount: true, brokenSlabCount: true, soldSlabCount: true },
+      }),
       this.prisma.cuttingSession.count({ where: { factoryId, status: "IN_PROGRESS" } }),
       this.prisma.salesOrder.count({ where: { factoryId, status: "CONFIRMED" } }),
       this.prisma.maintenanceJob.count({
         where: { factoryId, completedAt: null, dueOn: { lte: soon } },
       }),
     ]);
+    const slabsOnHand = lotAwareSlabCount(loosePieces, lotBlocks);
     return { blocksOnHand, slabsOnHand, openCutting, openOrders, maintenanceDue };
   }
 
@@ -51,7 +76,8 @@ export class ReportsService {
 
     const [
       blocksOnHand,
-      slabsOnHand,
+      loosePieces,
+      lotBlocks,
       openCutting,
       openPolishing,
       openOrders,
@@ -70,6 +96,10 @@ export class ReportsService {
         where: { factoryId, currentStatus: "in_stock" },
       }),
       this.prisma.slab.count({ where: { factoryId, salesStatus: "in_stock" } }),
+      this.prisma.rawBlock.findMany({
+        where: { factoryId },
+        select: { goodSlabCount: true, brokenSlabCount: true, soldSlabCount: true },
+      }),
       this.prisma.cuttingSession.count({
         where: { factoryId, status: "IN_PROGRESS" },
       }),
@@ -95,7 +125,7 @@ export class ReportsService {
         _sum: { amount: true },
       }),
       this.prisma.invoice.aggregate({
-        where: { factoryId, createdAt: instants },
+        where: { factoryId, OR:[{invoiceDate:dates},{invoiceDate:null,createdAt:instants}] },
         _sum: { amount: true },
       }),
       this.prisma.payment.aggregate({
@@ -157,6 +187,8 @@ export class ReportsService {
     const invoicedTotal = Number(invoicedAll._sum.amount ?? 0);
     const collectedTotal = Number(collectedAll._sum.amount ?? 0);
     const creditedTotal = Number(creditedAll._sum.amount ?? 0);
+    const slabsOnHand = lotAwareSlabCount(loosePieces, lotBlocks);
+
     const snap: CeoSnapshot = {
       factoryName: factory.name,
       operatingStatus: factory.operatingStatus,

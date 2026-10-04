@@ -1,8 +1,20 @@
-import { Body, Controller, Get, Inject, NotFoundException, Post } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Inject,
+  NotFoundException,
+  Post,
+} from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { PRODUCTION_INPUT_ROLES } from "@stoneos/contracts";
 import { operationalDateFor } from "@stoneos/domain";
-import { CurrentUser, Roles, type AuthenticatedUser } from "../../common/current-user";
+import {
+  CurrentUser,
+  Roles,
+  type AuthenticatedUser,
+} from "../../common/current-user";
 import { parseOccurredAt } from "../../common/occurred-at";
 import { PrismaService } from "../../common/prisma.service";
 
@@ -27,15 +39,36 @@ export class MachineRuntimeController {
   async log(
     @CurrentUser() user: AuthenticatedUser,
     @Body()
-    body: { machineId: string; runtimeHours: number; downtimeMinutes?: number; notes?: string; occurredAt?: string },
+    body: {
+      machineId: string;
+      runtimeHours: number;
+      downtimeMinutes?: number;
+      notes?: string;
+      occurredAt?: string;
+    },
   ) {
+    if (
+      !Number.isFinite(body.runtimeHours) ||
+      body.runtimeHours < 0 ||
+      body.runtimeHours > 24 ||
+      !Number.isInteger(body.downtimeMinutes ?? 0) ||
+      (body.downtimeMinutes ?? 0) < 0 ||
+      body.runtimeHours * 60 + (body.downtimeMinutes ?? 0) > 1440
+    )
+      throw new BadRequestException(
+        "Runtime and downtime must fit within one day",
+      );
     const machine = await this.prisma.machine.findFirst({
       where: { id: body.machineId, factoryId: user.factoryId },
     });
     if (!machine) throw new NotFoundException("Machine not in this factory");
-    const operationalDate = operationalDateFor(parseOccurredAt(body.occurredAt));
+    const operationalDate = operationalDateFor(
+      parseOccurredAt(body.occurredAt),
+    );
     return this.prisma.machineRuntimeLog.upsert({
-      where: { machineId_operationalDate: { machineId: machine.id, operationalDate } },
+      where: {
+        machineId_operationalDate: { machineId: machine.id, operationalDate },
+      },
       create: {
         machineId: machine.id,
         operationalDate,

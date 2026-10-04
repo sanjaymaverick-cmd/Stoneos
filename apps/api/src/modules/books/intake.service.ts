@@ -147,6 +147,7 @@ export class IntakeService {
       where: { id: draftId, factoryId: user.factoryId },
     });
     if (!draft) throw new NotFoundException("Draft not found");
+    if (['supplier_bill','delivery_note'].includes(draft.kind)) throw new BadRequestException('Review this document in Business insights; enter transactions manually');
     if (draft.status !== "proposed") throw new BadRequestException("Draft is not proposed");
     if (draft.proposedBy === user.id) {
       throw new ForbiddenException("The person who proposed the intake cannot confirm it");

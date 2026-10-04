@@ -36,11 +36,16 @@ export class ExpensesService {
   }
 
   vehicles(factoryId: string) {
-    return this.prisma.vehicle.findMany({ where: { factoryId, active: true }, orderBy: { name: "asc" } });
+    return this.prisma.vehicle.findMany({
+      where: { factoryId, active: true },
+      orderBy: { name: "asc" },
+    });
   }
 
   createVehicle(user: AuthenticatedUser, name: string) {
-    return this.prisma.vehicle.create({ data: { factoryId: user.factoryId, name } });
+    return this.prisma.vehicle.create({
+      data: { factoryId: user.factoryId, name },
+    });
   }
 
   list(factoryId: string) {
@@ -69,22 +74,36 @@ export class ExpensesService {
   ) {
     // Backstop, not the primary gate — see the same note in SalesService.pay.
     assertAllowedRoles(EXPENSE_DATA_ROLES, user.role as Role);
-    if (!EXPENSE_CATEGORIES.includes(input.category as (typeof EXPENSE_CATEGORIES)[number])) {
+    if (
+      !EXPENSE_CATEGORIES.includes(
+        input.category as (typeof EXPENSE_CATEGORIES)[number],
+      )
+    ) {
       throw new BadRequestException("Unknown expense category");
     }
     if (input.category === "vehicle" && !input.vehicleId) {
-      throw new BadRequestException("vehicleId is required for vehicle expenses");
+      throw new BadRequestException(
+        "vehicleId is required for vehicle expenses",
+      );
     }
     if (input.vehicleId) {
       const vehicle = await this.prisma.vehicle.findFirst({
         where: { id: input.vehicleId, factoryId: user.factoryId },
       });
-      if (!vehicle) throw new BadRequestException("Vehicle does not belong to this factory");
+      if (!vehicle)
+        throw new BadRequestException(
+          "Vehicle does not belong to this factory",
+        );
     }
     return this.prisma.$transaction(async (tx) => {
       if (input.clientOpId) {
         const existing = await tx.expense.findUnique({
-          where: { factoryId_idempotencyKey: { factoryId: user.factoryId, idempotencyKey: input.clientOpId } },
+          where: {
+            factoryId_idempotencyKey: {
+              factoryId: user.factoryId,
+              idempotencyKey: input.clientOpId,
+            },
+          },
         });
         if (existing) return existing;
       }
@@ -93,20 +112,25 @@ export class ExpensesService {
       // registered pump does; a labour chit from an unregistered hand does not.
       const claimsCredit = input.gstRatePct != null && input.gstRatePct > 0;
       const profile = claimsCredit
-        ? await tx.gstProfile.findUnique({ where: { factoryId: user.factoryId } })
-        : null;
-      const ourState = profile ? (stateCodeFromGstin(profile.gstin) ?? profile.stateCode) : null;
-      const taxable = input.taxableAmount ?? input.amount;
-      const gst = claimsCredit && profile
-        ? gstOnTaxable(rupeesToMinor(taxable), {
-            supplierStateCode: input.supplierGstin
-              ? stateCodeFromGstin(input.supplierGstin)
-              : ourState,
-            placeOfSupplyStateCode: ourState,
-            ratePct: input.gstRatePct,
-            defaultRatePct: GST_DEFAULTS.expense,
+        ? await tx.gstProfile.findUnique({
+            where: { factoryId: user.factoryId },
           })
-        : undefined;
+        : null;
+      const ourState = profile
+        ? (stateCodeFromGstin(profile.gstin) ?? profile.stateCode)
+        : null;
+      const taxable = input.taxableAmount ?? input.amount;
+      const gst =
+        claimsCredit && profile
+          ? gstOnTaxable(rupeesToMinor(taxable), {
+              supplierStateCode: input.supplierGstin
+                ? stateCodeFromGstin(input.supplierGstin)
+                : ourState,
+              placeOfSupplyStateCode: ourState,
+              ratePct: input.gstRatePct,
+              defaultRatePct: GST_DEFAULTS.expense,
+            })
+          : undefined;
       const created = await tx.expense.create({
         data: {
           factoryId: user.factoryId,
@@ -141,31 +165,103 @@ export class ExpensesService {
     user: AuthenticatedUser,
     expenseId: string,
     batchKey: string,
-    allocations: Array<{ rawBlockId: string; allocatedAmount: number }>,
+    allocations: Array<{
+      rawBlockId: string;
+      allocatedAmount: number;
+      costComponent?: "other" | "royalty" | "block_transport";
+    }>,
   ) {
-    const expense = await this.prisma.expense.findFirst({
-      where: { id: expenseId, factoryId: user.factoryId },
-      include: { allocations: true },
-    });
-    if (!expense) throw new BadRequestException("Expense not found");
-    const existing = expense.allocations.reduce((sum, row) => sum + Number(row.allocatedAmount), 0);
-    const incoming = allocations.reduce((sum, row) => sum + row.allocatedAmount, 0);
-    if (existing + incoming > Number(expense.amount) + 0.001) {
-      throw new BadRequestException("Allocation exceeds expense total");
+    if (!batchKey?.trim() || !Array.isArray(allocations) || !allocations.length)
+      throw new BadRequestException("Allocation batch and lines are required");
+    if (
+      new Set(allocations.map((a) => a.rawBlockId)).size !==
+        allocations.length ||
+      allocations.some(
+        (a) => !Number.isFinite(a.allocatedAmount) || a.allocatedAmount <= 0,
+      )
+    )
+      throw new BadRequestException("Use one positive allocation per block");
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.prisma.$transaction(
+          async (tx) => {
+            const expense = await tx.expense.findFirst({
+              where: { id: expenseId, factoryId: user.factoryId },
+              include: { allocations: true },
+            });
+            if (!expense) throw new BadRequestException("Expense not found");
+            const prior = expense.allocations.filter(
+              (a) => a.allocationBatchKey === batchKey,
+            );
+            if (prior.length) {
+              if (
+                prior.length !== allocations.length ||
+                prior.some(
+                  (a) =>
+                    !allocations.some(
+                      (b) =>
+                        b.rawBlockId === a.rawBlockId &&
+                        Number(a.allocatedAmount) === b.allocatedAmount &&
+                        a.costComponent === (b.costComponent ?? "other"),
+                    ),
+                )
+              )
+                throw new BadRequestException(
+                  "Batch key already used for different allocations",
+                );
+              return { count: prior.length };
+            }
+            const existing = expense.allocations.reduce(
+              (n, a) => n + rupeesToMinor(Number(a.allocatedAmount)),
+              0,
+            );
+            const incoming = allocations.reduce(
+              (n, a) => n + rupeesToMinor(a.allocatedAmount),
+              0,
+            );
+            if (
+              existing + incoming >
+              rupeesToMinor(Number(expense.taxableAmount ?? expense.amount))
+            )
+              throw new BadRequestException(
+                "Allocation exceeds expense total before GST",
+              );
+            const blocks = await tx.rawBlock.count({
+              where: {
+                factoryId: user.factoryId,
+                id: { in: allocations.map((a) => a.rawBlockId) },
+              },
+            });
+            if (blocks !== allocations.length)
+              throw new BadRequestException(
+                "Raw block does not belong to this factory",
+              );
+            await tx.rawBlock.updateMany({
+              where: {
+                factoryId: user.factoryId,
+                id: { in: allocations.map((a) => a.rawBlockId) },
+              },
+              data: { costsConfirmedAt: null },
+            });
+            return tx.expenseAllocation.createMany({
+              data: allocations.map((a) => ({
+                expenseId,
+                rawBlockId: a.rawBlockId,
+                costComponent: a.costComponent ?? "other",
+                allocatedAmount: minorToRupees(
+                  rupeesToMinor(a.allocatedAmount),
+                ),
+                allocationBatchKey: batchKey,
+              })),
+            });
+          },
+          { isolationLevel: "Serializable" },
+        );
+      } catch (error) {
+        if ((error as { code?: string }).code === "P2034" && attempt < 2)
+          continue;
+        throw error;
+      }
     }
-    for (const row of allocations) {
-      const block = await this.prisma.rawBlock.findFirst({
-        where: { id: row.rawBlockId, factoryId: user.factoryId },
-      });
-      if (!block) throw new BadRequestException("Raw block does not belong to this factory");
-    }
-    return this.prisma.expenseAllocation.createMany({
-      data: allocations.map((row) => ({
-        expenseId,
-        rawBlockId: row.rawBlockId,
-        allocatedAmount: row.allocatedAmount,
-        allocationBatchKey: batchKey,
-      })),
-    });
   }
 }

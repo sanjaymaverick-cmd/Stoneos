@@ -58,3 +58,5 @@ describe("lot screens", () => {
     assert.equal(tabs.includes("/lots/dispatch"), false);
   });
 });
+
+it("keeps financial insights owner-only without adding a primary tab",()=>{assert.equal(canAccessPath("owner","/analytics"),true);for(const role of ["supervisor","operator","manager","auditor"] as Role[])assert.equal(canAccessPath(role,"/analytics"),false);assert.equal(visibleRoutes("owner").length,5);});

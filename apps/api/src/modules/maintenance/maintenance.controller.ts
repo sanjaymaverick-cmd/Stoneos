@@ -10,6 +10,13 @@ import { MaintenanceService } from "./maintenance.service";
 export class MaintenanceController {
   constructor(@Inject(MaintenanceService) private service: MaintenanceService) {}
 
+  @Post(":id/reschedule")
+  @Roles(...PRODUCTION_INPUT_ROLES)
+  reschedule(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string,
+    @Body() body: {dueOn:string;reason:string}) {
+    return this.service.reschedule(user,id,body.dueOn,body.reason);
+  }
+
   @Get()
   @Roles(...PRODUCTION_INPUT_ROLES)
   list(@CurrentUser() user: AuthenticatedUser) {

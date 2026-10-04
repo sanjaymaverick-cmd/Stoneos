@@ -11,8 +11,8 @@
 #
 #   ROLLBACK_TO=<commit> nohup bash /opt/stoneos/deploy/oci/redeploy.sh >/dev/null 2>&1 &
 #
-# Order matters: refuse a dirty checkout, back up, pull, build, migrate. A failed
-# build leaves the old containers running (compose only replaces on success).
+# Order matters: refuse a dirty checkout, back up, pull, build, migrate, replace. Additive migrations run
+# before the new API starts; failures leave the previous containers running.
 set -uo pipefail
 
 # `git pull` below may rewrite this very file, and bash reads scripts as it goes.
@@ -58,13 +58,18 @@ else
 fi
 echo "== deploying $(git -C "$REPO" log --oneline -1)"
 
-sudo -n docker compose --env-file .env up -d --build
+sudo -n docker compose --env-file .env build
 status=$?
 echo "== build exit $status"
 if [ "$status" -eq 0 ]; then
   sudo -n docker compose --env-file .env --profile tasks run --rm --build migrate
   status=$?
   echo "== migrate exit $status"
+fi
+if [ "$status" -eq 0 ]; then
+  sudo -n docker compose --env-file .env up -d
+  status=$?
+  echo "== replace exit $status"
 fi
 sudo -n docker compose --env-file .env ps
 finish

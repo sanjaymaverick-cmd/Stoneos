@@ -38,6 +38,8 @@ export function isQueued(value: unknown): value is Queued {
 
 /** Extra options for a write. Fetch ignores unknown keys, so this rides on RequestInit. */
 export interface WriteOptions extends RequestInit {
+  /** Sensitive settings and AI requests must never be persisted or replayed offline. */
+  onlineOnly?: boolean;
   /** What a person would call this write on the sync screen. */
   label?: string;
 }
@@ -181,7 +183,7 @@ export async function apiFetch<T = any>(path: string, init: WriteOptions = {}): 
   const isAuth = path.includes("/auth/");
 
   if (!isWrite) return read<T>(path, init);
-  if (isAuth) return direct<T>(path, init);
+  if (isAuth || init.onlineOnly || /^\/api\/v1\/reports\/analytics\/(ask|settings|documents)(\/|$)/.test(path)) return direct<T>(path, init);
 
   const stamped = stampWrite(path, init);
   const ready = await resolveSynced(path, stamped);

@@ -23,14 +23,26 @@ import {
 } from "../books/money";
 import type { AuthenticatedUser } from "../../common/current-user";
 
-const DEFAULT_LOCATIONS: Array<{ code: string; name: string; locationType: string }> = [
+const DEFAULT_LOCATIONS: Array<{
+  code: string;
+  name: string;
+  locationType: string;
+}> = [
   { code: "RAW_YARD", name: "Raw Yard", locationType: "RAW_YARD" },
   { code: "B21_QUEUE", name: "B-21 Queue", locationType: "B21_QUEUE" },
   { code: "B21_WIP", name: "B-21 WIP", locationType: "B21_WIP" },
-  { code: "UNPOLISHED_STOCK", name: "Unpolished Stock", locationType: "UNPOLISHED_STOCK" },
+  {
+    code: "UNPOLISHED_STOCK",
+    name: "Unpolished Stock",
+    locationType: "UNPOLISHED_STOCK",
+  },
   { code: "LPM_QUEUE", name: "LPM Queue", locationType: "LPM_QUEUE" },
   { code: "LPM_WIP", name: "LPM WIP", locationType: "LPM_WIP" },
-  { code: "FINISHED_STOCK", name: "Finished Stock", locationType: "FINISHED_STOCK" },
+  {
+    code: "FINISHED_STOCK",
+    name: "Finished Stock",
+    locationType: "FINISHED_STOCK",
+  },
   { code: "HOLD", name: "Hold", locationType: "HOLD" },
   { code: "PACKING", name: "Packing", locationType: "PACKING" },
   { code: "DELIVERED", name: "Delivered", locationType: "DELIVERED" },
@@ -84,24 +96,41 @@ export class InventoryService {
   }
 
   suppliers(factoryId: string) {
-    return this.prisma.supplier.findMany({ where: { factoryId }, orderBy: { name: "asc" } });
+    return this.prisma.supplier.findMany({
+      where: { factoryId },
+      orderBy: { name: "asc" },
+    });
   }
 
   async createSupplier(
     user: AuthenticatedUser,
     name: string,
     contactInfo?: string,
-    gst?: { stateCode?: string | null; gstin?: string | null; billingAddress?: string | null; shippingAddress?: string | null },
+    gst?: {
+      stateCode?: string | null;
+      gstin?: string | null;
+      billingAddress?: string | null;
+      shippingAddress?: string | null;
+    },
   ) {
     const trimmed = name?.trim();
     if (!trimmed) throw new BadRequestException("A supplier needs a name");
     const gstin = supplierGstin(gst?.gstin);
     const claimed = normaliseStateCode(gst?.stateCode);
     const fromGstin = gstin ? stateCodeFromGstin(gstin) : null;
-    if (claimed && fromGstin && claimed !== fromGstin) throw new BadRequestException("State code contradicts supplier GSTIN");
+    if (claimed && fromGstin && claimed !== fromGstin)
+      throw new BadRequestException("State code contradicts supplier GSTIN");
     const stateCode = fromGstin ?? claimed;
     const supplier = await this.prisma.supplier.create({
-      data: { factoryId: user.factoryId, name: trimmed, contactInfo: contactInfo?.trim() || null, stateCode, gstin, billingAddress: gst?.billingAddress?.trim() || null, shippingAddress: gst?.shippingAddress?.trim() || null },
+      data: {
+        factoryId: user.factoryId,
+        name: trimmed,
+        contactInfo: contactInfo?.trim() || null,
+        stateCode,
+        gstin,
+        billingAddress: gst?.billingAddress?.trim() || null,
+        shippingAddress: gst?.shippingAddress?.trim() || null,
+      },
     });
     await this.audit.record({
       factoryId: user.factoryId,
@@ -113,21 +142,58 @@ export class InventoryService {
     return supplier;
   }
 
-  async updateSupplier(user: AuthenticatedUser, id: string, input: {name?: string;contactInfo?: string | null;gstin?: string | null;stateCode?: string | null;billingAddress?: string | null;shippingAddress?: string | null}) {
-    const existing = await this.prisma.supplier.findFirst({where:{id,factoryId:user.factoryId}});
+  async updateSupplier(
+    user: AuthenticatedUser,
+    id: string,
+    input: {
+      name?: string;
+      contactInfo?: string | null;
+      gstin?: string | null;
+      stateCode?: string | null;
+      billingAddress?: string | null;
+      shippingAddress?: string | null;
+    },
+  ) {
+    const existing = await this.prisma.supplier.findFirst({
+      where: { id, factoryId: user.factoryId },
+    });
     if (!existing) throw new NotFoundException("Supplier not found");
-    const data: Prisma.SupplierUpdateInput = {version:{increment:1}};
-    if(input.name !== undefined){if(!input.name.trim())throw new BadRequestException("A supplier needs a name");data.name=input.name.trim();}
-    for(const field of ["contactInfo","billingAddress","shippingAddress"] as const) if(input[field] !== undefined)data[field]=input[field]?.trim() || null;
-    if(input.gstin !== undefined || input.stateCode !== undefined){
-      const gstin=input.gstin === undefined ? existing.gstin : supplierGstin(input.gstin);
-      const claimed=normaliseStateCode(input.stateCode === undefined ? existing.stateCode : input.stateCode);
-      const fromGstin=gstin ? stateCodeFromGstin(gstin) : null;
-      if(claimed && fromGstin && claimed !== fromGstin)throw new BadRequestException("State code contradicts supplier GSTIN");
-      data.gstin=gstin;data.stateCode=fromGstin ?? claimed;
+    const data: Prisma.SupplierUpdateInput = { version: { increment: 1 } };
+    if (input.name !== undefined) {
+      if (!input.name.trim())
+        throw new BadRequestException("A supplier needs a name");
+      data.name = input.name.trim();
     }
-    const updated=await this.prisma.supplier.update({where:{id:existing.id},data});
-    await this.audit.record({factoryId:user.factoryId,actorId:user.id,action:"supplier.update",entityType:"supplier",entityId:existing.id});
+    for (const field of [
+      "contactInfo",
+      "billingAddress",
+      "shippingAddress",
+    ] as const)
+      if (input[field] !== undefined)
+        data[field] = input[field]?.trim() || null;
+    if (input.gstin !== undefined || input.stateCode !== undefined) {
+      const gstin =
+        input.gstin === undefined ? existing.gstin : supplierGstin(input.gstin);
+      const claimed = normaliseStateCode(
+        input.stateCode === undefined ? existing.stateCode : input.stateCode,
+      );
+      const fromGstin = gstin ? stateCodeFromGstin(gstin) : null;
+      if (claimed && fromGstin && claimed !== fromGstin)
+        throw new BadRequestException("State code contradicts supplier GSTIN");
+      data.gstin = gstin;
+      data.stateCode = fromGstin ?? claimed;
+    }
+    const updated = await this.prisma.supplier.update({
+      where: { id: existing.id },
+      data,
+    });
+    await this.audit.record({
+      factoryId: user.factoryId,
+      actorId: user.id,
+      action: "supplier.update",
+      entityType: "supplier",
+      entityId: existing.id,
+    });
     return updated;
   }
 
@@ -157,27 +223,40 @@ export class InventoryService {
       clientOpId: string;
     },
   ) {
-    if (!Number.isFinite(input.purchaseCashAmount) || input.purchaseCashAmount < 0) {
+    if (
+      !Number.isFinite(input.purchaseCashAmount) ||
+      input.purchaseCashAmount < 0
+    ) {
       throw new BadRequestException("Cash amount cannot be negative");
     }
     const reason = input.reason?.trim();
     if (!reason) {
       throw new BadRequestException("Say why the cash amount is being changed");
     }
-    if (!input.clientOpId) throw new BadRequestException("clientOpId is required");
+    if (!input.clientOpId)
+      throw new BadRequestException("clientOpId is required");
 
     return this.prisma.$transaction(async (tx) => {
       const replay = await tx.syncOperation.findUnique({
         where: {
-          factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId },
+          factoryId_clientOpId: {
+            factoryId: user.factoryId,
+            clientOpId: input.clientOpId,
+          },
         },
       });
       if (replay) return replay.response;
 
       const block = await tx.rawBlock.findFirst({
-        where: { factoryId: user.factoryId, serialNumber: input.blockSerial.trim() },
+        where: {
+          factoryId: user.factoryId,
+          serialNumber: input.blockSerial.trim(),
+        },
       });
-      if (!block) throw new NotFoundException(`No block ${input.blockSerial} in this factory`);
+      if (!block)
+        throw new NotFoundException(
+          `No block ${input.blockSerial} in this factory`,
+        );
 
       const before = Number(block.purchaseCashAmount ?? 0);
       const after = input.purchaseCashAmount;
@@ -185,7 +264,12 @@ export class InventoryService {
 
       await tx.rawBlock.update({
         where: { id: block.id },
-        data: { purchaseCashAmount: after, version: { increment: 1 } },
+        data: {
+          purchaseCashAmount: after,
+          blockPricePerTon: null,
+          costsConfirmedAt: null,
+          version: { increment: 1 },
+        },
       });
 
       // Nothing moved, so nothing is posted. Still audited: an attempt to change a
@@ -255,6 +339,9 @@ export class InventoryService {
       supplierId?: string;
       quarry?: string;
       weightTons?: number;
+      blockPricePerTon?: number;
+      royaltyPerTon?: number;
+      transportPerTon?: number;
       /** Value before tax. Rough blocks are quoted ex-GST like everything else. */
       purchaseTaxable?: number;
       /** Statutory slab. Defaults to 5% for rough blocks (HSN 2516). */
@@ -279,6 +366,9 @@ export class InventoryService {
     const receivedAt = parseOccurredAt(input.occurredAt);
     assertBlockWeight(input.weightTons);
     for (const [field, value] of [
+      ["blockPricePerTon", input.blockPricePerTon],
+      ["royaltyPerTon", input.royaltyPerTon],
+      ["transportPerTon", input.transportPerTon],
       ["purchaseTaxable", input.purchaseTaxable],
       ["purchaseCashAmount", input.purchaseCashAmount],
       ["invoicedAmount", input.invoicedAmount],
@@ -288,9 +378,41 @@ export class InventoryService {
         throw new BadRequestException(`${field} cannot be negative`);
       }
     }
+    if (
+      [input.blockPricePerTon, input.royaltyPerTon, input.transportPerTon].some(
+        (v) => v !== undefined,
+      ) &&
+      !(input.weightTons && input.weightTons > 0)
+    )
+      throw new BadRequestException("Record tonnage before per-ton rates");
+    const quotedStone =
+      input.blockPricePerTon === undefined
+        ? undefined
+        : minorToRupees(
+            rupeesToMinor(input.blockPricePerTon * input.weightTons!),
+          );
+    if (
+      quotedStone !== undefined &&
+      input.purchaseTaxable !== undefined &&
+      rupeesToMinor(input.purchaseTaxable + (input.purchaseCashAmount ?? 0)) !==
+        rupeesToMinor(quotedStone)
+    )
+      throw new BadRequestException(
+        "Billed value plus cash must equal block price per ton × tonnage",
+      );
+    if (
+      quotedStone !== undefined &&
+      (input.purchaseCashAmount ?? 0) > quotedStone
+    )
+      throw new BadRequestException("Cash stone cost exceeds per-ton price");
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.syncOperation.findUnique({
-        where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId } },
+        where: {
+          factoryId_clientOpId: {
+            factoryId: user.factoryId,
+            clientOpId: input.clientOpId,
+          },
+        },
       });
       if (existing) return existing.response;
 
@@ -300,23 +422,41 @@ export class InventoryService {
           code: input.locationCode ?? "RAW_YARD",
         },
       });
-      if (!location) throw new BadRequestException("Location not found in this factory");
-      let supplier: { id: string; name: string; stateCode: string | null; gstin: string | null } | null = null;
+      if (!location)
+        throw new BadRequestException("Location not found in this factory");
+      let supplier: {
+        id: string;
+        name: string;
+        stateCode: string | null;
+        gstin: string | null;
+      } | null = null;
       if (input.supplierId) {
         supplier = await tx.supplier.findFirst({
           where: { id: input.supplierId, factoryId: user.factoryId },
         });
-        if (!supplier) throw new BadRequestException("Supplier does not belong to this factory");
+        if (!supplier)
+          throw new BadRequestException(
+            "Supplier does not belong to this factory",
+          );
       }
 
       // Rough blocks are 5% (HSN 2516), not the 18% a finished slab carries. The rate is
       // chosen per receipt because a yard buys more than stone.
-      const taxable = input.purchaseTaxable ?? input.invoicedAmount ?? 0;
+      const taxable =
+        input.purchaseTaxable ??
+        (quotedStone !== undefined
+          ? quotedStone - (input.purchaseCashAmount ?? 0)
+          : (input.invoicedAmount ?? 0));
       const cash = input.purchaseCashAmount ?? 0;
-      const profile = await tx.gstProfile.findUnique({ where: { factoryId: user.factoryId } });
-      const ourState = profile ? (stateCodeFromGstin(profile.gstin) ?? profile.stateCode) : null;
+      const profile = await tx.gstProfile.findUnique({
+        where: { factoryId: user.factoryId },
+      });
+      const ourState = profile
+        ? (stateCodeFromGstin(profile.gstin) ?? profile.stateCode)
+        : null;
       const vendorState =
-        supplier?.stateCode ?? (supplier?.gstin ? stateCodeFromGstin(supplier.gstin) : null);
+        supplier?.stateCode ??
+        (supplier?.gstin ? stateCodeFromGstin(supplier.gstin) : null);
       const gst = gstOnTaxable(rupeesToMinor(taxable), {
         // On a purchase we are the recipient: the credit heads follow whether the vendor
         // is in our state, so our own state is the place of supply.
@@ -335,7 +475,10 @@ export class InventoryService {
           supplierId: input.supplierId,
           quarry: input.quarry,
           weightTons: input.weightTons,
-          purchaseTaxable: taxable || undefined,
+          blockPricePerTon: input.blockPricePerTon,
+          royaltyPerTon: input.royaltyPerTon,
+          transportPerTon: input.transportPerTon,
+          purchaseTaxable: taxable,
           purchaseCashAmount: cash,
           purchaseCgst: minorToRupees(gst.cgstMinor),
           purchaseSgst: minorToRupees(gst.sgstMinor),
@@ -345,7 +488,9 @@ export class InventoryService {
           supplierGstin: supplier?.gstin ?? undefined,
           placeOfSupply: normaliseStateCode(ourState) ?? undefined,
           // The vendor is owed the whole bill; the block is valued at the taxable amount.
-          invoicedAmount: input.invoicedAmount ?? (taxable ? minorToRupees(gst.totalMinor) : undefined),
+          invoicedAmount:
+            input.invoicedAmount ??
+            (taxable ? minorToRupees(gst.totalMinor) : undefined),
           actualAmountPaid: input.actualAmountPaid,
           purchasePaymentMethod: input.purchasePaymentMethod?.trim() || null,
           qualityNote: input.qualityNote,
@@ -410,7 +555,9 @@ export class InventoryService {
   }
 
   async startOpeningCount(user: AuthenticatedUser) {
-    const factory = await this.prisma.factory.findUniqueOrThrow({ where: { id: user.factoryId } });
+    const factory = await this.prisma.factory.findUniqueOrThrow({
+      where: { id: user.factoryId },
+    });
     if (factory.operatingStatus === "LIVE") {
       throw new BadRequestException("Factory is already live");
     }
@@ -450,7 +597,8 @@ export class InventoryService {
     const snapshot = await this.prisma.openingInventorySnapshot.findFirst({
       where: { id: snapshotId, factoryId: user.factoryId },
     });
-    if (!snapshot || snapshot.status !== "DRAFT") throw new BadRequestException("Cannot submit");
+    if (!snapshot || snapshot.status !== "DRAFT")
+      throw new BadRequestException("Cannot submit");
     await this.prisma.openingInventorySnapshot.update({
       where: { id: snapshotId },
       data: { status: "SUBMITTED" },
@@ -470,19 +618,26 @@ export class InventoryService {
           include: { lines: true },
         });
         if (!snapshot || snapshot.status !== "SUBMITTED") {
-          throw new BadRequestException("Opening count is not awaiting approval");
+          throw new BadRequestException(
+            "Opening count is not awaiting approval",
+          );
         }
         if (snapshot.lines.length === 0) {
           throw new BadRequestException("Opening count has no lines");
         }
-        const enterers = new Set(snapshot.lines.map((line) => line.enteredById));
+        const enterers = new Set(
+          snapshot.lines.map((line) => line.enteredById),
+        );
         if (enterers.has(user.id)) {
-          throw new ForbiddenException("Anyone who entered opening lines cannot approve it");
+          throw new ForbiddenException(
+            "Anyone who entered opening lines cannot approve it",
+          );
         }
         const already = await tx.openingInventorySnapshot.findFirst({
           where: { factoryId: user.factoryId, status: "APPROVED" },
         });
-        if (already) throw new ConflictException("An opening count is already approved");
+        if (already)
+          throw new ConflictException("An opening count is already approved");
 
         const rawYard = await tx.inventoryLocation.findFirst({
           where: { factoryId: user.factoryId, code: "RAW_YARD" },
@@ -494,8 +649,12 @@ export class InventoryService {
           where: { factoryId: user.factoryId, code: "UNPOLISHED_STOCK" },
         });
 
-        const blockLines = snapshot.lines.filter((line) => line.kind === "RAW_BLOCK");
-        const slabLines = snapshot.lines.filter((line) => line.kind !== "RAW_BLOCK");
+        const blockLines = snapshot.lines.filter(
+          (line) => line.kind === "RAW_BLOCK",
+        );
+        const slabLines = snapshot.lines.filter(
+          (line) => line.kind !== "RAW_BLOCK",
+        );
 
         if (blockLines.length > 0) {
           const blocks = await tx.rawBlock.createManyAndReturn({
@@ -512,12 +671,17 @@ export class InventoryService {
               };
             }),
           });
-          const bySerial = new Map(blocks.map((block) => [block.serialNumber, block]));
+          const bySerial = new Map(
+            blocks.map((block) => [block.serialNumber, block]),
+          );
           await tx.inventoryMovement.createMany({
             data: blockLines.map((line) => {
               const body = line.payload as Record<string, unknown>;
               const block = bySerial.get(String(body.serialNumber));
-              if (!block) throw new BadRequestException("Opening block serial did not round-trip");
+              if (!block)
+                throw new BadRequestException(
+                  "Opening block serial did not round-trip",
+                );
               return {
                 factoryId: user.factoryId,
                 movementType: InventoryMovementType.OPENING_RECEIPT,
@@ -554,12 +718,17 @@ export class InventoryService {
               };
             }),
           });
-          const bySerial = new Map(slabs.map((slab) => [slab.slabSerial, slab]));
+          const bySerial = new Map(
+            slabs.map((slab) => [slab.slabSerial, slab]),
+          );
           await tx.inventoryMovement.createMany({
             data: slabLines.map((line) => {
               const body = line.payload as Record<string, unknown>;
               const slab = bySerial.get(String(body.slabSerial));
-              if (!slab) throw new BadRequestException("Opening slab serial did not round-trip");
+              if (!slab)
+                throw new BadRequestException(
+                  "Opening slab serial did not round-trip",
+                );
               return {
                 factoryId: user.factoryId,
                 movementType: InventoryMovementType.OPENING_RECEIPT,
@@ -604,12 +773,19 @@ export class InventoryService {
     );
   }
 
-  async reverseMovement(user: AuthenticatedUser, movementId: string, reason: string, clientOpId: string) {
+  async reverseMovement(
+    user: AuthenticatedUser,
+    movementId: string,
+    reason: string,
+    clientOpId: string,
+  ) {
     if (!reason?.trim()) throw new BadRequestException("Reason is required");
     if (!clientOpId) throw new BadRequestException("clientOpId is required");
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.syncOperation.findUnique({
-        where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId } },
+        where: {
+          factoryId_clientOpId: { factoryId: user.factoryId, clientOpId },
+        },
       });
       if (existing) return existing.response;
 
@@ -633,14 +809,17 @@ export class InventoryService {
         movement.movementType === InventoryMovementType.GOODS_RECEIPT ||
         movement.movementType === InventoryMovementType.OPENING_RECEIPT
       ) {
-        if (!movement.rawBlockId) throw new BadRequestException("Receipt has no block to void");
+        if (!movement.rawBlockId)
+          throw new BadRequestException("Receipt has no block to void");
         const block = await tx.rawBlock.findFirst({
           where: { id: movement.rawBlockId, factoryId: user.factoryId },
           include: { slabs: true, cuttingSessions: true },
         });
         if (!block) throw new NotFoundException("Block not found");
         if (block.slabs.length > 0 || block.cuttingSessions.length > 0) {
-          throw new BadRequestException("Cannot reverse a block that has been cut");
+          throw new BadRequestException(
+            "Cannot reverse a block that has been cut",
+          );
         }
         if (block.currentStatus !== "in_stock") {
           throw new BadRequestException("Block is no longer in stock");
@@ -649,8 +828,11 @@ export class InventoryService {
           where: { id: block.id },
           data: { currentStatus: "voided", version: { increment: 1 } },
         });
-      } else if (movement.movementType === InventoryMovementType.SALES_RESERVATION) {
-        if (!movement.slabId) throw new BadRequestException("Reservation has no slab");
+      } else if (
+        movement.movementType === InventoryMovementType.SALES_RESERVATION
+      ) {
+        if (!movement.slabId)
+          throw new BadRequestException("Reservation has no slab");
         const slab = await tx.slab.findFirst({
           where: { id: movement.slabId, factoryId: user.factoryId },
         });
@@ -666,7 +848,8 @@ export class InventoryService {
         movement.movementType === InventoryMovementType.DELIVERY ||
         movement.movementType === InventoryMovementType.DISPATCH
       ) {
-        if (!movement.slabId) throw new BadRequestException("Dispatch has no slab");
+        if (!movement.slabId)
+          throw new BadRequestException("Dispatch has no slab");
         const slab = await tx.slab.findFirst({
           where: { id: movement.slabId, factoryId: user.factoryId },
         });
@@ -679,10 +862,16 @@ export class InventoryService {
         });
         await tx.slab.update({
           where: { id: slab.id },
-          data: { salesStatus: "in_stock", locationId: packing?.id ?? slab.locationId, version: { increment: 1 } },
+          data: {
+            salesStatus: "in_stock",
+            locationId: packing?.id ?? slab.locationId,
+            version: { increment: 1 },
+          },
         });
       } else {
-        throw new BadRequestException(`No reversal path for ${movement.movementType}`);
+        throw new BadRequestException(
+          `No reversal path for ${movement.movementType}`,
+        );
       }
 
       const reversal = await tx.inventoryMovement.create({
@@ -697,7 +886,11 @@ export class InventoryService {
           notes: `reverses:${movement.id} ${reason.trim()}`,
         },
       });
-      const response = { reversed: true, movementId: reversal.id, originalId: movement.id };
+      const response = {
+        reversed: true,
+        movementId: reversal.id,
+        originalId: movement.id,
+      };
       await tx.syncOperation.create({
         data: {
           factoryId: user.factoryId,
@@ -717,7 +910,11 @@ export class InventoryService {
           action: "inventory.movement_reversed",
           entityType: "inventory_movement",
           entityId: reversal.id,
-          payload: { originalId: movement.id, reason: reason.trim(), type: movement.movementType },
+          payload: {
+            originalId: movement.id,
+            reason: reason.trim(),
+            type: movement.movementType,
+          },
         },
       });
       return response;
@@ -750,18 +947,30 @@ function payloadNumber(value: unknown): number | undefined {
  * A received block has a real weight. Zero or negative tons broke recovery (sqft per
  * ton) and the stock value; past MAX_BLOCK_TONS it is kilograms typed as tons.
  */
-export function assertBlockWeight(weightTons: unknown): asserts weightTons is number {
+export function assertBlockWeight(
+  weightTons: unknown,
+): asserts weightTons is number {
   if (typeof weightTons !== "number" || !Number.isFinite(weightTons)) {
     throw new BadRequestException("weightTons is required");
   }
-  if (weightTons <= 0) throw new BadRequestException("weightTons must be more than 0");
+  if (weightTons <= 0)
+    throw new BadRequestException("weightTons must be more than 0");
   if (weightTons > MAX_BLOCK_TONS) {
-    throw new BadRequestException(`weightTons over ${MAX_BLOCK_TONS} is not a block; check kg vs tons`);
+    throw new BadRequestException(
+      `weightTons over ${MAX_BLOCK_TONS} is not a block; check kg vs tons`,
+    );
   }
 }
 
 function supplierGstin(value?: string | null): string | null {
- const gstin=value?.trim().toUpperCase() || null;
- if(gstin && (!/^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/.test(gstin) || !stateCodeFromGstin(gstin)))throw new BadRequestException("Supplier GSTIN must be a valid 15-character GSTIN");
- return gstin;
+  const gstin = value?.trim().toUpperCase() || null;
+  if (
+    gstin &&
+    (!/^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/.test(gstin) ||
+      !stateCodeFromGstin(gstin))
+  )
+    throw new BadRequestException(
+      "Supplier GSTIN must be a valid 15-character GSTIN",
+    );
+  return gstin;
 }

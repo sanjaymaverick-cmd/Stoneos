@@ -89,7 +89,7 @@ function loadWorker(networkImpl: (req: any) => Promise<any>) {
 
   const caches = {
     open: async () => cache,
-    keys: async () => ["stoneos-shell-v1", "stoneos-shell-v3"],
+    keys: async () => ["stoneos-shell-v1", "stoneos-shell-v4"],
     delete: async (k: string) => {
       deleted.push(k);
       return true;
@@ -108,6 +108,8 @@ function loadWorker(networkImpl: (req: any) => Promise<any>) {
     Promise,
     Boolean,
     console,
+    setTimeout: (fn: () => void) => setTimeout(fn, 5),
+    clearTimeout,
   };
   context.globalThis = context;
   vm.createContext(context);
@@ -207,14 +209,15 @@ describe("service worker", () => {
     assert.equal(res.body, "cached production page");
   });
 
-  it("falls back to the dashboard shell for a page never opened online", async () => {
+  it("never substitutes dashboard HTML for an unknown offline route", async () => {
     const w = loadWorker(offline);
     w.cache.seed("/dashboard", "cached dashboard shell");
+    w.cache.seed("/offline.html", "offline notice");
     const event = fetchEvent(request("https://stoneos.test/muster", { mode: "navigate" }), w.waits);
     w.handlers.fetch(event);
     const res = await event.captured.promise!;
     // The app opens, so the outbox is reachable — rather than a browser error.
-    assert.equal(res.body, "cached dashboard shell");
+    assert.equal(res.body, "offline notice");
   });
 
   it("falls back to the offline notice only when no shell is cached at all", async () => {
@@ -271,3 +274,7 @@ describe("service worker", () => {
     assert.equal(fetched.filter((k) => k === "/_next/static/css/shared.css").length, 1, "a shared file is fetched once");
   });
 });
+
+ describe('slow first navigation',()=>{it('waits for the requested page instead of returning dashboard',async()=>{const w=loadWorker(async()=>{await new Promise(r=>setTimeout(r,20));return response(200,'correct yard');});w.cache.seed('/dashboard','wrong dashboard');const e=fetchEvent(request('https://stoneos.test/inventory',{mode:'navigate'}),w.waits);w.handlers.fetch(e);assert.equal((await e.captured.promise!).body,'correct yard');assert.ok(w.cache.puts.includes('/inventory'));});it('does not acknowledge a failed warm as complete',async()=>{const w=loadWorker(async()=>{throw Error('offline');});let ack:any;await w.fire('message',{data:{type:'warm',urls:['/inventory']},ports:[{postMessage:(data:any)=>{ack=data;}}],waitUntil:(p:Promise<unknown>)=>w.waits.push(p)});assert.equal(ack.complete,false);});});
+
+it("shows the offline notice when an uncached slow navigation eventually fails",async()=>{const w=loadWorker(async()=>{await new Promise(r=>setTimeout(r,20));throw Error("network gone");});w.cache.seed("/offline.html","No network");const e=fetchEvent(request("https://stoneos.test/uncached",{mode:"navigate"}),w.waits);w.handlers.fetch(e);assert.equal((await e.captured.promise!).body,"No network");});
