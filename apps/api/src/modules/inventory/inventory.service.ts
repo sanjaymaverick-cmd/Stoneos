@@ -74,7 +74,11 @@ export class InventoryService {
   slabs(factoryId: string) {
     return this.prisma.slab.findMany({
       where: { factoryId },
-      include: { parentBlock: true, location: true },
+      include: {
+        parentBlock: true,
+        location: true,
+        finishedPurchase: { select: { id: true, reference: true, kind: true } },
+      },
       orderBy: { createdAt: "desc" },
     });
   }

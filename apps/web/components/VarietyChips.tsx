@@ -1,31 +1,26 @@
 "use client";
-const varieties = [
-  ["Imperial Red", "#8c4439"],
-  ["Kashmir White", "#e1ded5"],
-  ["Tan Brown", "#795747"],
-  ["Absolute Black", "#242424"],
-];
+import { GRANITE_VARIETIES } from "@stoneos/contracts";
 export function VarietyChips({
   value,
   onChange,
+  options = [],
 }: {
   value: string;
   onChange: (value: string) => void;
+  options?: readonly string[];
 }) {
+  const varieties = Array.from(
+    new Set([...GRANITE_VARIETIES, ...options, ...(value ? [value] : [])]),
+  );
   return (
-    <div className="chips">
-      {varieties.map(([name, color]) => (
-        <button
-          key={name}
-          type="button"
-          className="chip"
-          aria-pressed={value === name}
-          onClick={() => onChange(value === name ? "" : name)}
-        >
-          <span className="swatch" style={{ backgroundColor: color }} />
-          {name}
-        </button>
-      ))}
-    </div>
+    <label>
+      Variety filter
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">All varieties</option>
+        {varieties.map((v) => (
+          <option key={v}>{v}</option>
+        ))}
+      </select>
+    </label>
   );
 }

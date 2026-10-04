@@ -43,6 +43,10 @@ type Review = {
   component: "other" | "royalty" | "block_transport";
   date: string;
   payee: string;
+  paymentMethod: "cash" | "bank" | "upi";
+  gstRatePct: number;
+  supplierGstin?: string;
+  paidAmount: number;
   op: string;
 };
 const money = (v: number | null) =>
@@ -77,6 +81,13 @@ export function BlockCostsWorkspace({
     [category, setCategory] = useState("other"),
     [date, setDate] = useState(todayIst()),
     [payee, setPayee] = useState("");
+  const [suppliers, setSuppliers] = useState<
+      Array<{ id: string; name: string; gstin: string | null }>
+    >([]),
+    [supplierId, setSupplierId] = useState(""),
+    [gstRatePct, setGstRatePct] = useState(0);
+  const [paymentMethod, setPaymentMethod] =
+    useState<Review["paymentMethod"]>("cash");
   const [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [loading, setLoading] = useState(true),
@@ -85,12 +96,16 @@ export function BlockCostsWorkspace({
     [review, setReview] = useState<Review | null>(null),
     [retryRequired, setRetryRequired] = useState(false);
   const refresh = async () => {
-    const [snapshot, rows] = await Promise.all([
+    const [snapshot, rows, vendors] = await Promise.all([
       apiFetch<{ blockCosts: Block[] }>("/api/v1/reports/analytics"),
       apiFetch<Expense[]>("/api/v1/expenses"),
+      apiFetch<Array<{ id: string; name: string; gstin: string | null }>>(
+        "/api/v1/inventory/suppliers",
+      ),
     ]);
     setBlocks(snapshot.blockCosts);
     setExpenses(rows);
+    setSuppliers(vendors);
   };
   useEffect(() => {
     const q = new URLSearchParams(location.search);
@@ -125,6 +140,8 @@ export function BlockCostsWorkspace({
     setAmount("");
     setExpenseId("");
     setPayee("");
+    setSupplierId("");
+    setGstRatePct(0);
   };
   const prepare = (e: FormEvent) => {
     e.preventDefault();
@@ -146,11 +163,21 @@ export function BlockCostsWorkspace({
       );
       return;
     }
+    const vendor = suppliers.find((s) => s.id === supplierId);
+    if (kind === "new" && gstRatePct > 0 && !vendor?.gstin) {
+      setError("Select a supplier with a GSTIN for charged GST.");
+      return;
+    }
     setReview({
       block: selected,
       kind,
       expense,
       amount: value,
+      gstRatePct,
+      paymentMethod,
+      supplierGstin: vendor?.gstin ?? undefined,
+      paidAmount:
+        (Math.round(value * 100) + Math.round(value * gstRatePct)) / 100,
       category,
       component,
       date,
@@ -169,7 +196,11 @@ export function BlockCostsWorkspace({
           onlineOnly: true,
           body: JSON.stringify({
             category: review.category,
-            amount: review.amount,
+            amount: review.paidAmount,
+            taxableAmount: review.amount,
+            gstRatePct: review.gstRatePct,
+            paymentMethod: review.paymentMethod,
+            supplierGstin: review.supplierGstin,
             expenseDate: review.date,
             toWhom: review.payee.trim(),
             clientOpId: review.op,
@@ -439,6 +470,20 @@ export function BlockCostsWorkspace({
                     ? review.date
                     : review.expense?.expenseDate.slice(0, 10)}
                 </dd>
+                {review.kind === "new" && (
+                  <>
+                    <dt>Expense category / supplier GSTIN</dt>
+                    <dd>
+                      {review.category} ·{" "}
+                      {review.supplierGstin ?? "No GST charged"}
+                    </dd>
+                    <dt>Paid total including GST / mode</dt>
+                    <dd>
+                      {formatInr(review.paidAmount)} · {review.paymentMethod} ·{" "}
+                      {review.gstRatePct}% GST
+                    </dd>
+                  </>
+                )}
                 <dt>Amount linked before GST</dt>
                 <dd>
                   <strong>{formatInr(review.amount)}</strong>
@@ -629,9 +674,61 @@ export function BlockCostsWorkspace({
                     </select>
                   </label>
                 )}
+                {kind === "new" && (
+                  <>
+                    <label>
+                      GST supplier / transporter
+                      <select
+                        value={supplierId}
+                        onChange={(e) => {
+                          setSupplierId(e.target.value);
+                          const vendor = suppliers.find(
+                            (s) => s.id === e.target.value,
+                          );
+                          if (vendor) setPayee(vendor.name);
+                        }}
+                      >
+                        <option value="">No supplier GST charged</option>
+                        {suppliers.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.name} · {v.gstin ?? "unregistered"}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Payment mode
+                      <select
+                        value={paymentMethod}
+                        onChange={(e) =>
+                          setPaymentMethod(
+                            e.target.value as Review["paymentMethod"],
+                          )
+                        }
+                      >
+                        <option value="cash">Cash</option>
+                        <option value="bank">Bank</option>
+                        <option value="upi">UPI</option>
+                      </select>
+                    </label>
+                    <label>
+                      GST charged on this bill
+                      <select
+                        value={gstRatePct}
+                        onChange={(e) => setGstRatePct(Number(e.target.value))}
+                      >
+                        {[0, 0.25, 3, 5, 12, 18, 28].map((r) => (
+                          <option key={r} value={r}>
+                            {r}%
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                )}
                 <label>
                   {kind === "new"
-                    ? "Paid amount — no GST charged (₹)"
+                    ? "Expense cost before GST (₹)"
                     : "Amount to link before GST (₹)"}
                   <input
                     type="number"
@@ -649,7 +746,7 @@ export function BlockCostsWorkspace({
                 </label>
                 <p className="muted">
                   {kind === "new"
-                    ? "For an expense carrying GST, link an existing expense using its recorded value before GST. This form records expenses without GST."
+                    ? "The cost before GST is linked to the block. Charged GST goes to input GST, with a matching supplier GSTIN and your GST profile. Zero records a payment without charged GST."
                     : "Only the remaining cost before GST can be linked. Fully allocated expenses are excluded."}
                 </p>
                 <button disabled={busy || !online}>

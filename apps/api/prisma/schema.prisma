@@ -218,6 +218,7 @@ model Factory {
   customers          Customer[]
   machines           Machine[]
   vehicles           Vehicle[]
+  finishedPurchases FinishedPurchase[]
   rawBlocks          RawBlock[]
   slabs              Slab[]
   movements          InventoryMovement[]
@@ -357,6 +358,8 @@ model Supplier {
   gstin       String?
   createdAt   DateTime   @default(now()) @map("created_at")
   version     Int        @default(0)
+  finishedPurchases FinishedPurchase[] @relation("FinishedSupplier")
+  transportedPurchases FinishedPurchase[] @relation("FinishedTransporter")
   rawBlocks   RawBlock[]
 
   @@index([factoryId])
@@ -521,6 +524,9 @@ model StockWriteOff {
 }
 
 model Slab {
+  finishedPurchaseId String? @map("finished_purchase_id")
+  finishedPurchase FinishedPurchase? @relation(fields:[finishedPurchaseId],references:[id])
+  purchaseCost Decimal? @map("purchase_cost") @db.Decimal(14,2)
   id               String             @id @default(uuid())
   factoryId        String             @map("factory_id")
   factory          Factory            @relation(fields: [factoryId], references: [id])
@@ -1495,4 +1501,44 @@ model AnalyticsSettings {
   openaiKeyEncrypted String? @map("openai_key_encrypted")
   updatedAt DateTime @updatedAt @map("updated_at")
   @@map("analytics_settings")
+}
+
+model FinishedPurchase {
+  supplierGstin          String?   @map("supplier_gstin")
+  transportSupplierGstin String?   @map("transport_supplier_gstin")
+  id                     String    @id @default(uuid())
+  factoryId              String    @map("factory_id")
+  factory                Factory   @relation(fields: [factoryId], references: [id])
+  reference              String
+  kind                   String
+  varietyName            String    @map("variety_name")
+  supplierId             String    @map("supplier_id")
+  supplier               Supplier  @relation("FinishedSupplier", fields: [supplierId], references: [id])
+  invoiceNo              String    @map("invoice_no")
+  purchaseDate           DateTime  @map("purchase_date") @db.Date
+  goodsTaxable           Decimal   @map("goods_taxable") @db.Decimal(14, 2)
+  gstRatePct             Decimal   @map("gst_rate_pct") @db.Decimal(5, 2)
+  cgst                   Decimal   @db.Decimal(14, 2)
+  sgst                   Decimal   @db.Decimal(14, 2)
+  igst                   Decimal   @db.Decimal(14, 2)
+  paidAmount             Decimal   @map("paid_amount") @db.Decimal(14, 2)
+  paymentMethod          String    @map("payment_method")
+  transportTaxable       Decimal   @map("transport_taxable") @db.Decimal(14, 2)
+  transportGstRatePct    Decimal   @map("transport_gst_rate_pct") @db.Decimal(5, 2)
+  transportCgst          Decimal   @map("transport_cgst") @db.Decimal(14, 2)
+  transportSgst          Decimal   @map("transport_sgst") @db.Decimal(14, 2)
+  transportIgst          Decimal   @map("transport_igst") @db.Decimal(14, 2)
+  transportSupplierId    String?   @map("transport_supplier_id")
+  transportSupplier      Supplier? @relation("FinishedTransporter", fields: [transportSupplierId], references: [id])
+  transportInvoiceNo     String?   @map("transport_invoice_no")
+  transportPaidAmount    Decimal   @map("transport_paid_amount") @db.Decimal(14, 2)
+  transportPaymentMethod String    @map("transport_payment_method")
+  clientOpId             String    @map("client_op_id")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  slabs                  Slab[]
+
+  @@unique([factoryId, reference])
+  @@unique([factoryId, clientOpId])
+  @@index([factoryId, purchaseDate])
+  @@map("finished_purchase")
 }

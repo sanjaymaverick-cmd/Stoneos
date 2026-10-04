@@ -6,6 +6,7 @@ import { EXPENSE_DATA_ROLES, type Role } from "@stoneos/contracts";
 import { BooksService } from "../books/books.service";
 import {
   GST_DEFAULTS,
+  cleanGstin,
   gstOnTaxable,
   minorToRupees,
   parseBusinessDate,
@@ -65,6 +66,7 @@ export class ExpensesService {
       vehicleId?: string;
       toWhom?: string;
       clientOpId?: string;
+      paymentMethod?: "cash" | "bank" | "upi";
       /** Statutory slab on this spend. Omit for a supplier who charged no GST. */
       gstRatePct?: number;
       /** Value before tax. Defaults to the whole amount when no GST was charged. */
@@ -99,6 +101,11 @@ export class ExpensesService {
           "Vehicle does not belong to this factory",
         );
     }
+    if (
+      input.paymentMethod &&
+      !["cash", "bank", "upi"].includes(input.paymentMethod)
+    )
+      throw new BadRequestException("Choose cash, bank or UPI");
     return this.prisma.$transaction(async (tx) => {
       if (input.clientOpId) {
         const existing = await tx.expense.findUnique({
@@ -169,6 +176,15 @@ export class ExpensesService {
             where: { factoryId: user.factoryId },
           })
         : null;
+      if (
+        input.blockCost &&
+        claimsCredit &&
+        (!profile || !cleanGstin(input.supplierGstin))
+      ) {
+        throw new BadRequestException(
+          "GST profile and supplier GSTIN are required for charged GST",
+        );
+      }
       const ourState = profile
         ? (stateCodeFromGstin(profile.gstin) ?? profile.stateCode)
         : null;
@@ -184,6 +200,14 @@ export class ExpensesService {
               defaultRatePct: GST_DEFAULTS.expense,
             })
           : undefined;
+      if (
+        input.blockCost &&
+        gst &&
+        gst.totalMinor !== rupeesToMinor(input.amount)
+      )
+        throw new BadRequestException(
+          "Paid amount must match taxable cost plus charged GST",
+        );
       const created = await tx.expense.create({
         data: {
           factoryId: user.factoryId,
@@ -207,7 +231,7 @@ export class ExpensesService {
         amount: input.amount,
         gst,
         clientOpId: input.clientOpId ?? `expense:${created.id}`,
-        method: "cash",
+        method: input.paymentMethod ?? "cash",
         date: expenseDate,
       });
       if (input.blockCost) {

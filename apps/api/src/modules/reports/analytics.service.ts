@@ -57,6 +57,7 @@ export class AnalyticsService {
           machines,
           maintenance,
           settings,
+          finished,
           polishing,
         ] = await Promise.all([
           tx.salesOrder.findMany({
@@ -96,6 +97,10 @@ export class AnalyticsService {
             where: { factoryId },
             select: { targets: true },
           }),
+          tx.finishedPurchase.findMany({
+            where: { factoryId },
+            include: { slabs: true, supplier: true },
+          }),
           tx.polishingSession.findMany({
             where: { factoryId },
             include: { slabs: { include: { slab: true, rawBlock: true } } },
@@ -111,6 +116,7 @@ export class AnalyticsService {
           maintenance,
           settings,
           polishing,
+          finished,
         };
       },
       { isolationLevel: "RepeatableRead", timeout: 20000 },
@@ -556,6 +562,38 @@ export class AnalyticsService {
     const stock = blockCosts.filter(
       (b) => b.availableSlabs + b.heldForDispatch > 0 || b.stage === "Raw",
     );
+    const purchasedStock = data.finished
+      .map((p) => {
+        const available = p.slabs.filter((s) => s.salesStatus === "in_stock"),
+          held = p.slabs.filter(
+            (s) => s.salesStatus === "reserved" || s.salesStatus === "sold",
+          );
+        return {
+          id: p.id,
+          reference: p.reference,
+          variety: p.varietyName,
+          kind: p.kind,
+          supplier: p.supplier.name,
+          ageDays: daysBetween(day(p.purchaseDate), today),
+          available: available.length,
+          held: held.length,
+          availableSqft: available.reduce(
+            (n, s) => n + num(s.lengthFt) * num(s.widthFt),
+            0,
+          ),
+          remainingValue:
+            [...available, ...held].reduce(
+              (n, s) => n + minor(s.purchaseCost),
+              0,
+            ) / 100,
+          source: addSource(
+            "finished:" + p.id,
+            p.reference,
+            "/inventory?view=finished#finished-" + p.id,
+          ),
+        };
+      })
+      .filter((p) => p.available + p.held > 0);
     const machines = data.machines.map((m) => {
       const cuts = data.blocks.flatMap((b) =>
         b.cuttingSessions
@@ -913,6 +951,7 @@ export class AnalyticsService {
       trends,
       collections,
       stock,
+      purchasedStock,
       blockCosts,
       varieties,
       machines,
