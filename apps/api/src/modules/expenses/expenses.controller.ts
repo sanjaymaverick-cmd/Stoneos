@@ -53,6 +53,7 @@ export class ExpensesController {
       vehicleId?: string;
       toWhom?: string;
       clientOpId?: string;
+      paymentMethod?: "cash" | "bank" | "upi";
       /** Statutory slab on this spend. Omit when the supplier charged no GST. */
       gstRatePct?: number;
       /** Value before tax; defaults to the whole amount when no GST was charged. */

@@ -5,7 +5,10 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { Attachments } from "../../components/Attachments";
 import { VarietyChips } from "../../components/VarietyChips";
 import { AppShell } from "../../components/AppShell";
-import { CustomerForm, type EditableCustomer } from "../../components/CustomerForm";
+import {
+  CustomerForm,
+  type EditableCustomer,
+} from "../../components/CustomerForm";
 import { EmptyState } from "../../components/EmptyState";
 import { apiFetch, isQueued, pendingRef, ref } from "../../lib/api";
 import { bodyOf, queuedAt, useOutbox } from "../../lib/useOutbox";
@@ -68,7 +71,12 @@ type OrderRow = {
   returnSlabIds?: string[];
   packed?: boolean;
   pending?: string;
-  invoice?: { id: string; amount: string; invoiceNumber?: string; invoiceDate?: string };
+  invoice?: {
+    id: string;
+    amount: string;
+    invoiceNumber?: string;
+    invoiceDate?: string;
+  };
 };
 
 export default function SalesPage() {
@@ -272,8 +280,14 @@ export default function SalesPage() {
   return (
     <AppShell>
       <h1>Sell</h1>
-      <p><Link href="/parties">Add / edit buyers & suppliers →</Link></p>
-      <p><Link href="/sales/reports">Reports · customer and supplier statements, payments and dues →</Link></p>
+      <p>
+        <Link href="/parties">Add / edit buyers & suppliers →</Link>
+      </p>
+      <p>
+        <Link href="/sales/reports">
+          Reports · customer and supplier statements, payments and dues →
+        </Link>
+      </p>
       {/*
         This page is the older per-slab flow: it sells named pieces. The yard works
         by the lot now, and everything added since — the cash-and-billed split, the
@@ -283,9 +297,9 @@ export default function SalesPage() {
       <div className="card">
         <h2>Selling by the lot</h2>
         <p className="muted">
-          Pick a block and a slab count — &ldquo;80 from VG-101, 70 from VG-102&rdquo; —
-          take part of it in cash if that is the deal, and bill the whole order on one
-          tax invoice with HSN codes and both addresses.
+          Pick a block and a slab count — &ldquo;80 from VG-101, 70 from
+          VG-102&rdquo; — take part of it in cash if that is the deal, and bill
+          the whole order on one tax invoice with HSN codes and both addresses.
         </p>
         <p>
           <Link href="/lots/sell">
@@ -337,9 +351,10 @@ export default function SalesPage() {
           <>
             {customers.some((c) => !c.gstin) ? (
               <p className="hint">
-                {customers.filter((c) => !c.gstin).length} of {customers.length} have no
-                GSTIN. Their bills go out as unregistered local sales — an out-of-state
-                buyer is charged CGST + SGST where it should be IGST. Edit them to fix it.
+                {customers.filter((c) => !c.gstin).length} of {customers.length}{" "}
+                have no GSTIN. Their bills go out as unregistered local sales —
+                an out-of-state buyer is charged CGST + SGST where it should be
+                IGST. Edit them to fix it.
               </p>
             ) : null}
             <table>
@@ -360,7 +375,9 @@ export default function SalesPage() {
                     </td>
                     <td>{c.gstin ?? <span className="muted">none</span>}</td>
                     <td>{c.stateCode ?? <span className="muted">—</span>}</td>
-                    <td className="muted">{c.billingAddress ?? "not on file"}</td>
+                    <td className="muted">
+                      {c.billingAddress ?? "not on file"}
+                    </td>
                     <td>
                       <button type="button" onClick={() => setEditing(c)}>
                         Edit
@@ -396,7 +413,11 @@ export default function SalesPage() {
             Search slabs
             <input value={search} onChange={(e) => setSearch(e.target.value)} />
           </label>
-          <VarietyChips value={variety} onChange={setVariety} />
+          <VarietyChips
+            value={variety}
+            onChange={setVariety}
+            options={slabs.map((s) => s.varietyName ?? "").filter(Boolean)}
+          />
           <label>
             Slab
             <select
@@ -443,7 +464,16 @@ export default function SalesPage() {
       </div>
       <div className="card">
         <h2>Orders</h2>
-        <label>Invoice date <input type="date" required max={todayIst()} value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></label>
+        <label>
+          Invoice date{" "}
+          <input
+            type="date"
+            required
+            max={todayIst()}
+            value={invoiceDate}
+            onChange={(e) => setInvoiceDate(e.target.value)}
+          />
+        </label>
         {rows.length === 0 ? (
           <EmptyState>
             No sales orders yet. Add a customer and confirm an order to populate
@@ -461,7 +491,12 @@ export default function SalesPage() {
               {row.invoice?.invoiceNumber ? (
                 <span className="muted"> · {row.invoice.invoiceNumber}</span>
               ) : null}
-              {row.invoice?.invoiceDate && <span className="muted"> · Date: {row.invoice.invoiceDate.slice(0,10)}</span>}
+              {row.invoice?.invoiceDate && (
+                <span className="muted">
+                  {" "}
+                  · Date: {row.invoice.invoiceDate.slice(0, 10)}
+                </span>
+              )}
               {waiting.length ? (
                 <span className="muted"> · queued: {waiting.join(", ")}</span>
               ) : null}{" "}
@@ -529,11 +564,29 @@ export default function SalesPage() {
                   </button>
                 )}
               {canCollect && row.invoice && Number(row.invoice.amount) > 0 ? (
-                <PaymentEntry amount={Number(row.invoice.amount)} onSave={(amount, method, paidAt)=>run(async()=>{
-                  const invoice=row.invoice!;
-                  const result=await apiFetch(`/api/v1/invoices/${invoice.id}/payments`,{method:"POST",label: `Payment · ${row.customerName}`,body:JSON.stringify({amount,method,paidAt,clientOpId:stableOp(`pay:${invoice.id}`)})});
-                  clearOp(`pay:${invoice.id}`);report(result,"Payment recorded");
-                })} />
+                <PaymentEntry
+                  amount={Number(row.invoice.amount)}
+                  onSave={(amount, method, paidAt) =>
+                    run(async () => {
+                      const invoice = row.invoice!;
+                      const result = await apiFetch(
+                        `/api/v1/invoices/${invoice.id}/payments`,
+                        {
+                          method: "POST",
+                          label: `Payment · ${row.customerName}`,
+                          body: JSON.stringify({
+                            amount,
+                            method,
+                            paidAt,
+                            clientOpId: stableOp(`pay:${invoice.id}`),
+                          }),
+                        },
+                      );
+                      clearOp(`pay:${invoice.id}`);
+                      report(result, "Payment recorded");
+                    })
+                  }
+                />
               ) : row.pending ? (
                 <span className="muted">
                   {" "}
@@ -571,12 +624,55 @@ export default function SalesPage() {
   );
 }
 
-function PaymentEntry({amount,onSave}:{amount:number;onSave:(amount:number,method:string,date:string)=>Promise<void>}){
-  const [paid,setPaid]=useState(String(amount));const [mode,setMode]=useState("cash");const [date,setDate]=useState(todayIst());
-  return <form onSubmit={e=>{e.preventDefault();void onSave(Number(paid),mode,date);}}>
-    <label>Payment amount<input type="number" min="0.01" step="0.01" max={amount} required value={paid} onChange={e=>setPaid(e.target.value)}/></label>
-    <label>Payment mode<select value={mode} onChange={e=>setMode(e.target.value)}><option value="cash">Cash</option><option value="UPI">UPI</option><option value="bank transfer">Bank transfer</option><option value="cheque">Cheque</option></select></label>
-    <label>Payment date<input type="date" required max={todayIst()} value={date} onChange={e=>setDate(e.target.value)}/></label>
-    <button type="submit">Record payment</button>
-  </form>;
+function PaymentEntry({
+  amount,
+  onSave,
+}: {
+  amount: number;
+  onSave: (amount: number, method: string, date: string) => Promise<void>;
+}) {
+  const [paid, setPaid] = useState(String(amount));
+  const [mode, setMode] = useState("cash");
+  const [date, setDate] = useState(todayIst());
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void onSave(Number(paid), mode, date);
+      }}
+    >
+      <label>
+        Payment amount
+        <input
+          type="number"
+          min="0.01"
+          step="0.01"
+          max={amount}
+          required
+          value={paid}
+          onChange={(e) => setPaid(e.target.value)}
+        />
+      </label>
+      <label>
+        Payment mode
+        <select value={mode} onChange={(e) => setMode(e.target.value)}>
+          <option value="cash">Cash</option>
+          <option value="UPI">UPI</option>
+          <option value="bank transfer">Bank transfer</option>
+          <option value="cheque">Cheque</option>
+        </select>
+      </label>
+      <label>
+        Payment date
+        <input
+          type="date"
+          required
+          max={todayIst()}
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+        />
+      </label>
+      <button type="submit">Record payment</button>
+    </form>
+  );
 }

@@ -1,4 +1,9 @@
 import {
+  type FinishedGoodsInput,
+  COMMERCIAL_READ_ROLES,
+} from "@stoneos/contracts";
+import { FinishedPurchasesService } from "./finished-purchases.service";
+import {
   Body,
   Controller,
   Get,
@@ -26,7 +31,24 @@ import { InventoryService } from "./inventory.service";
 @ApiBearerAuth()
 @Controller("inventory")
 export class InventoryController {
-  constructor(@Inject(InventoryService) private service: InventoryService) {}
+  constructor(
+    @Inject(InventoryService) private service: InventoryService,
+    @Inject(FinishedPurchasesService)
+    private finished: FinishedPurchasesService,
+  ) {}
+  @Get("finished-purchases")
+  @Roles(...COMMERCIAL_READ_ROLES)
+  finishedPurchases(@CurrentUser() user: AuthenticatedUser) {
+    return this.finished.list(user.factoryId);
+  }
+  @Post("finished-purchases")
+  @Roles(...INVENTORY_DATA_ROLES)
+  receiveFinished(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() input: FinishedGoodsInput,
+  ) {
+    return this.finished.receive(user, input);
+  }
 
   @Get("locations")
   @Roles(...INVENTORY_DATA_ROLES)

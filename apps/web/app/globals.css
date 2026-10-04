@@ -653,3 +653,25 @@ tr:target {
     grid-template-columns: 1fr;
   }
 }
+
+.finished-purchases-workspace label,
+.finished-purchases-workspace form,
+.finished-purchases-workspace fieldset {
+  min-width: 0;
+}
+.finished-purchases-workspace input,
+.finished-purchases-workspace select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.finished-purchases-workspace fieldset {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+.finished-purchases-workspace .metric b {
+  overflow-wrap: anywhere;
+}

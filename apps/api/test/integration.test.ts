@@ -1,3 +1,4 @@
+import {FinishedPurchasesService} from "../src/modules/inventory/finished-purchases.service";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 import path from "node:path";
@@ -3804,6 +3805,65 @@ describe("postgres-backed workflows", () => {
     assert.equal(Number((await prisma.consumable.findUniqueOrThrow({where:{id:item.id}})).onHand),12);
     assert.equal((await c.movements(asOwner)).length,2);
     assert.equal((await c.movements({...asOwner,factoryId:'other'})).length,0);
+  });
+
+  it("receives finished goods directly into sellable stock with transport, GST credit, dues and safe replay",async()=>{
+    const {factory,asOwner}=await staffFactory("finished-direct");const service=new FinishedPurchasesService(prisma as never);
+    await gst.upsertProfile(asOwner,{gstin:"08AAUFV3603N1ZH",legalName:"Vedam",stateCode:"08"});
+    const supplier=await inventory.createSupplier(asOwner,"Finished supplier",undefined,{gstin:"08AABCG1234H1Z1"});
+    const input={reference:"FG-DIRECT",kind:"countertop" as const,varietyName:"Tan brown",count:3,lengthFt:8,widthFt:3,thicknessMm:20,finish:"polished",supplierId:supplier.id,invoiceNo:"FG-BILL",purchaseDate:currentFactoryDate(),goodsTaxable:10000.01,gstRatePct:18,paidAmount:1180,paymentMethod:"bank",transportTaxable:500,transportGstRatePct:18,transportPaidAmount:590,transportPaymentMethod:"cash",clientOpId:"finished-once"};
+    const receipt=await service.receive(asOwner,input);assert.equal((await service.receive(asOwner,input)).id,receipt.id);
+    assert.equal(await prisma.rawBlock.count({where:{factoryId:factory.id}}),0);
+    assert.equal(await prisma.finishedPurchase.count({where:{factoryId:factory.id}}),1);
+    assert.equal(receipt.supplierGstin,supplier.gstin);
+    assert.equal(receipt.slabs.length,3);assert.ok(receipt.slabs.every(s=>s.parentBlockId===null&&s.cuttingSessionId===null&&s.finish==="polished"));
+    const stock=await inventory.slabs(factory.id);assert.ok(stock.every(s=>s.location?.code==="FINISHED_STOCK"&&s.salesStatus==="in_stock"));
+    assert.equal(receipt.slabs.reduce((n,s)=>n+Math.round(Number(s.purchaseCost)*100),0),1050001);
+    assert.equal(await prisma.inventoryMovement.count({where:{factoryId:factory.id,movementType:"GOODS_RECEIPT"}}),3);
+    const vouchers=await prisma.voucher.findMany({where:{factoryId:factory.id},include:{lines:true}});assert.equal(vouchers.length,4);
+    assert.ok(vouchers.every(v=>v.lines.reduce((n,l)=>n+l.debit-l.credit,0)===0));
+    const position=await gst.position(factory.id,currentFactoryMonth());assert.equal(position.input.cgst,945);assert.equal(position.input.sgst,945);
+    const report=await new PartyReportService(prisma as never).report(factory.id,{side:"supplier"});
+    assert.equal(report.rows.filter(r=>r.type==="Purchase").length,2);assert.equal(report.rows.filter(r=>r.type==="Payment made").length,2);assert.equal(report.summary[0]!.due,10620.01);
+    const insights=await new AnalyticsService(prisma as never,new AuditService(prisma as never)).snapshot(factory.id);assert.equal(insights.purchasedStock[0]!.remainingValue,10500.01);assert.equal(insights.purchasedStock[0]!.available,3);
+    const customer=await sales.createCustomer(asOwner,"Finished buyer");const slab=stock[0]!;
+    const order=await sales.createOrder(asOwner,{customerId:customer.id,orderDate:currentFactoryDate(),clientOpId:"finished-order",lines:[{slabId:slab.id,quantitySqft:24,rate:200}]}) as {id:string};
+    await sales.invoice(asOwner,order.id,"finished-invoice",[],undefined,currentFactoryDate());
+    const after=await gst.position(factory.id,currentFactoryMonth());assert.equal(after.output.cgst,432);assert.equal(after.net.cgst,-513);
+    assert.equal((await prisma.slab.findUniqueOrThrow({where:{id:slab.id}})).salesStatus,"reserved");
+  });
+  it("separates interstate transporter credit and rejects invalid finished purchases without stock or postings",async()=>{
+    const {factory,asOwner}=await staffFactory("finished-guards");const service=new FinishedPurchasesService(prisma as never);
+    await gst.upsertProfile(asOwner,{gstin:"08AAUFV3603N1ZH",legalName:"Vedam",stateCode:"08"});
+    const supplier=await inventory.createSupplier(asOwner,"Local stone",undefined,{gstin:"08AABCG1234H1Z1"});
+    const transporter=await inventory.createSupplier(asOwner,"Interstate transport",undefined,{gstin:"29AABCG1234H1Z1"});
+    const input={reference:"FG-GUARD",kind:"slab" as const,varietyName:"Black galaxy",count:2,lengthFt:8,widthFt:5,thicknessMm:18,finish:"polished",supplierId:supplier.id,invoiceNo:"G-1",purchaseDate:currentFactoryDate(),goodsTaxable:1000,gstRatePct:18,paidAmount:0,paymentMethod:"bank",transportTaxable:200,transportGstRatePct:5,transportSupplierId:transporter.id,transportInvoiceNo:"T-1",transportPaidAmount:100,transportPaymentMethod:"upi",clientOpId:"finished-guard"};
+    await assert.rejects(()=>service.receive(asOwner,{...input,count:0}),/count/);
+    await assert.rejects(()=>service.receive(asOwner,{...input,supplierId:"foreign"}),/factory/);
+    await assert.rejects(()=>service.receive(asOwner,{...input,transportPaidAmount:211}),/exceeds/);
+    await assert.rejects(()=>service.receive(asOwner,{...input,transportInvoiceNo:undefined}),/bill number/);
+    await assert.rejects(()=>service.receive({...asOwner,role:"operator"},input),/Insufficient role/);
+    const unregistered=await inventory.createSupplier(asOwner,"No GST vendor");
+    await assert.rejects(()=>service.receive(asOwner,{...input,supplierId:unregistered.id}),/GSTIN/);
+    assert.equal(await prisma.finishedPurchase.count({where:{factoryId:factory.id}}),0);assert.equal(await prisma.slab.count({where:{factoryId:factory.id}}),0);assert.equal(await prisma.voucher.count({where:{factoryId:factory.id}}),0);
+    const receipt=await service.receive(asOwner,input);assert.equal(Number(receipt.transportIgst),10);assert.equal(Number(receipt.transportCgst),0);
+    const report=await new PartyReportService(prisma as never).report(factory.id,{side:"supplier"});assert.equal(report.summary.find(p=>p.name==="Local stone")!.due,1180);assert.equal(report.summary.find(p=>p.name==="Interstate transport")!.due,110);
+    const position=await gst.position(factory.id,currentFactoryMonth());assert.equal(position.input.igst,10);
+    await assert.rejects(()=>service.receive(asOwner,{...input,clientOpId:"duplicate-reference"}));
+    assert.equal(await prisma.finishedPurchase.count({where:{factoryId:factory.id}}),1);assert.equal(await prisma.voucher.count({where:{factoryId:factory.id}}),3);
+  });
+
+  it("allocates rough-block charges without their recoverable GST and atomically rejects mismatched bill amounts",async()=>{
+    const {factory,asOwner}=await staffFactory("block-gst");await gst.upsertProfile(asOwner,{gstin:"08AAUFV3603N1ZH",legalName:"Vedam",stateCode:"08"});
+    const block=(await inventory.receiveBlock(asOwner,{serialNumber:"GST-BLOCK",varietyName:"Kotda black",weightTons:10,clientOpId:"gst-block"})).block;
+    const input={category:"transport",amount:1180,taxableAmount:1000,gstRatePct:18,supplierGstin:"29AABCG1234H1Z1",expenseDate:currentFactoryDate(),toWhom:"Transporter",clientOpId:"gst-cost",paymentMethod:"bank" as const,blockCost:{rawBlockId:block.id,costComponent:"block_transport" as const}};
+    await assert.rejects(()=>expenses.create(asOwner,{...input,amount:1000}),/must match/);
+    await assert.rejects(()=>expenses.create(asOwner,{...input,supplierGstin:undefined}),/GSTIN/);
+    assert.equal(await prisma.expense.count({where:{factoryId:factory.id}}),0);
+    const expense=await expenses.create(asOwner,input);assert.equal(Number(expense.igstAmount),180);
+    const paid=await prisma.voucher.findFirstOrThrow({where:{sourceId:expense.id},include:{lines:{include:{ledger:true}}}});assert.ok(paid.lines.some(l=>l.ledger.code==="BANK_OTHER"&&l.credit===118000));
+    assert.equal(Number((await prisma.expenseAllocation.findFirstOrThrow({where:{expenseId:expense.id}})).allocatedAmount),1000);
+    assert.equal((await gst.position(factory.id,currentFactoryMonth())).input.igst,180);
   });
   it("allocates only net costs, rejects negative amounts, and safely replays allocations",async()=>{
     const {asOwner}=await staffFactory('cost-proof');const block=(await inventory.receiveBlock(asOwner,{serialNumber:'COST-PROOF',varietyName:'White',weightTons:18,purchaseTaxable:10000,clientOpId:'cost-receipt'})).block;

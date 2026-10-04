@@ -1,5 +1,7 @@
 "use client";
+import { ROUGH_BLOCK_VARIETIES } from "@stoneos/contracts";
 
+import { FinishedPurchasesWorkspace } from "../../components/FinishedPurchasesWorkspace";
 import { BlockCostsWorkspace } from "../../components/BlockCostsWorkspace";
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
@@ -17,6 +19,8 @@ type Slab = {
   id: string;
   slabSerial: string;
   parentBlockId?: string;
+  finishedPurchaseId?: string;
+  finishedPurchase?: { id: string; reference: string; kind: string };
   parentBlock?: { serialNumber: string };
   finish?: string;
   location?: { code: string };
@@ -54,20 +58,21 @@ export default function InventoryPage() {
   const [varietyFilter, setVarietyFilter] = useState("");
   const [finishFilter, setFinishFilter] = useState("");
   const [serialNumber, setSerial] = useState("");
-  const [varietyName, setVariety] = useState("Kashmir White");
+  const [varietyName, setVariety] = useState<string>(ROUGH_BLOCK_VARIETIES[0]);
   const [weightTons, setWeightTons] = useState("");
   const [supplierId, setSupplierId] = useState("");
   const [quarry, setQuarry] = useState("");
   const [blockPricePerTon, setBlockPricePerTon] = useState("");
   const [royaltyPerTon, setRoyaltyPerTon] = useState("");
   const [transportPerTon, setTransportPerTon] = useState("");
+  const [purchaseGstRate, setPurchaseGstRate] = useState(5);
   const [purchaseTaxable, setPurchaseTaxable] = useState("");
   const [purchasePaid, setPurchasePaid] = useState("");
   const [purchasePaymentMethod, setPurchasePaymentMethod] = useState("cash");
   const [purchaseCash, setPurchaseCash] = useState("");
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState("");
   const [suppliers, setSuppliers] = useState<
-    Array<{ id: string; name: string }>
+    Array<{ id: string; name: string; gstin?: string | null }>
   >([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -86,8 +91,9 @@ export default function InventoryPage() {
     apiFetch<{ role: string }>("/api/v1/auth/me")
       .then((u) => setOwner(u.role === "owner"))
       .catch(() => undefined);
-    if (new URLSearchParams(location.search).get("view") === "costs")
-      setView("costs");
+    const requestedView = new URLSearchParams(location.search).get("view");
+    if (["costs", "finished"].includes(requestedView ?? ""))
+      setView(requestedView!);
   }, []);
 
   const numeric = (v: unknown) => Number(v ?? 0) || 0;
@@ -139,12 +145,22 @@ export default function InventoryPage() {
     setError("");
     setNotice("");
     try {
+      if (
+        Number(purchaseTaxable) > 0 &&
+        purchaseGstRate > 0 &&
+        !suppliers.find((supplier) => supplier.id === supplierId)?.gstin
+      ) {
+        throw new Error(
+          "Select a supplier with GSTIN before recording purchase GST.",
+        );
+      }
       const result = await apiFetch("/api/v1/inventory/raw-blocks", {
         method: "POST",
         label: `Receive block ${serialNumber}`,
         body: JSON.stringify({
           serialNumber,
           varietyName,
+          gstRatePct: purchaseGstRate,
           weightTons: Number(weightTons),
           blockPricePerTon: blockPricePerTon
             ? Number(blockPricePerTon)
@@ -213,7 +229,10 @@ export default function InventoryPage() {
           <button
             aria-pressed={view === "stock"}
             className={view === "stock" ? "" : "secondary"}
-            onClick={() => setView("stock")}
+            onClick={() => {
+              setView("stock");
+              void refresh();
+            }}
           >
             Stock & receipts
           </button>
@@ -224,9 +243,18 @@ export default function InventoryPage() {
           >
             Block costs
           </button>
+          <button
+            aria-pressed={view === "finished"}
+            className={view === "finished" ? "" : "secondary"}
+            onClick={() => setView("finished")}
+          >
+            Buy finished goods
+          </button>
         </div>
       )}
-      {owner && view === "costs" ? (
+      {owner && view === "finished" ? (
+        <FinishedPurchasesWorkspace />
+      ) : owner && view === "costs" ? (
         <BlockCostsWorkspace initialBlockId={costBlockId} />
       ) : (
         <>
@@ -249,11 +277,17 @@ export default function InventoryPage() {
               <label>
                 Variety
                 <input
+                  list="rough-block-varieties"
                   value={varietyName}
                   onChange={(e) => setVariety(e.target.value)}
                   required
                 />
               </label>
+              <datalist id="rough-block-varieties">
+                {ROUGH_BLOCK_VARIETIES.map((v) => (
+                  <option key={v} value={v} />
+                ))}
+              </datalist>
               <label>
                 Weight (tons)
                 <input
@@ -271,7 +305,14 @@ export default function InventoryPage() {
                 Supplier
                 <select
                   value={supplierId}
-                  onChange={(e) => setSupplierId(e.target.value)}
+                  onChange={(e) => {
+                    setSupplierId(e.target.value);
+                    setPurchaseGstRate(
+                      suppliers.find((s) => s.id === e.target.value)?.gstin
+                        ? 5
+                        : 0,
+                    );
+                  }}
                 >
                   <option value="">Not recorded</option>
                   {suppliers.map((s) => (
@@ -373,6 +414,19 @@ export default function InventoryPage() {
                 />
               </label>
               <label>
+                GST charged on block bill
+                <select
+                  value={purchaseGstRate}
+                  onChange={(e) => setPurchaseGstRate(Number(e.target.value))}
+                >
+                  {[0, 0.25, 3, 5, 12, 18, 28].map((r) => (
+                    <option key={r} value={r}>
+                      {r}%
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Paid in cash, no bill (₹)
                 <input
                   type="number"
@@ -401,7 +455,9 @@ export default function InventoryPage() {
                           Number(weightTons),
                       )} per ton`
                     : ""}
-                  {purchaseTaxable ? " · 5% GST on the billed part" : ""}
+                  {purchaseTaxable
+                    ? ` · ${purchaseGstRate}% GST on the billed part`
+                    : ""}
                 </p>
               ) : null}
               <label>
@@ -525,7 +581,7 @@ export default function InventoryPage() {
             </p>
           </div>
           <div className="card">
-            <h2>Slabs by block</h2>
+            <h2>Stock by block or finished purchase</h2>
             <div className="yard-search">
               <label>
                 Search
@@ -535,7 +591,11 @@ export default function InventoryPage() {
                   placeholder="Block, slab or variety"
                 />
               </label>
-              <VarietyChips value={varietyFilter} onChange={setVarietyFilter} />
+              <VarietyChips
+                value={varietyFilter}
+                onChange={setVarietyFilter}
+                options={slabs.map((s) => s.varietyName ?? "").filter(Boolean)}
+              />
               <label>
                 Finish
                 <select
@@ -553,18 +613,25 @@ export default function InventoryPage() {
             </div>
             {yardSlabs.length === 0 ? (
               <EmptyState>
-                No slabs in the yard. Complete a cutting session to stock
-                unpolished pieces.
+                No slabs in the yard. Receive finished purchases or complete a
+                cutting session.
               </EmptyState>
             ) : (
               <>
                 {Array.from(
-                  new Set(yardSlabs.map((s) => s.parentBlockId ?? "loose")),
+                  new Set(
+                    yardSlabs.map(
+                      (s) => s.parentBlockId ?? s.finishedPurchaseId ?? "loose",
+                    ),
+                  ),
                 ).map((id) => (
                   <section key={id}>
                     <h3>
                       {yardSlabs.find((s) => s.parentBlockId === id)
-                        ?.parentBlock?.serialNumber ?? "Loose slabs"}
+                        ?.parentBlock?.serialNumber ??
+                        yardSlabs.find((s) => s.finishedPurchaseId === id)
+                          ?.finishedPurchase?.reference ??
+                        "Loose slabs"}
                     </h3>
                     <table>
                       <thead>

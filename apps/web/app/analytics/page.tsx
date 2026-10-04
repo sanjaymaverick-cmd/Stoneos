@@ -390,6 +390,35 @@ export default function AnalyticsPage() {
               ])}
             />
           </details>
+          <details className="card">
+            <summary>
+              <h2>Purchased finished-stock ageing</h2>
+            </summary>
+            <p>
+              Purchased slabs and countertops. Remaining landed value includes
+              inward transport and excludes recorded GST.
+            </p>
+            <Table
+              heads={[
+                "Purchase",
+                "Variety / product",
+                "Supplier",
+                "Age",
+                "Available / to dispatch",
+                "Available sqft",
+                "Remaining value",
+              ]}
+              rows={(data.purchasedStock ?? []).map((r: Row) => [
+                link(r.source, r.reference),
+                r.variety + " · " + r.kind,
+                r.supplier,
+                r.ageDays + " days",
+                r.available + " / " + r.held,
+                number(r.availableSqft),
+                money(r.remainingValue),
+              ])}
+            />
+          </details>
           <details className="card" id="costs">
             <summary>
               <h2>Block costs, margin & recovery</h2>
