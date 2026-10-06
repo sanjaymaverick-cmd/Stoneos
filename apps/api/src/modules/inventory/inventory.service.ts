@@ -63,24 +63,97 @@ export class InventoryService {
     });
   }
 
-  rawBlocks(factoryId: string) {
-    return this.prisma.rawBlock.findMany({
-      where: { factoryId },
-      include: { supplier: true, location: true },
-      orderBy: { createdAt: "desc" },
-    });
+  private pagination(query: Record<string, string>) {
+    if (query.page === undefined) return undefined;
+    const page = Number(query.page),
+      pageSize = Number(query.pageSize ?? 50);
+    if (
+      !Number.isSafeInteger(page) ||
+      page < 1 ||
+      page > 1000000 ||
+      !Number.isSafeInteger(pageSize) ||
+      pageSize < 1 ||
+      pageSize > 100
+    )
+      throw new BadRequestException(
+        "Use a positive page and pageSize between 1 and 100",
+      );
+    return { page, pageSize, skip: (page - 1) * pageSize, take: pageSize };
   }
 
-  slabs(factoryId: string) {
-    return this.prisma.slab.findMany({
-      where: { factoryId },
+  async rawBlocks(factoryId: string, query: Record<string, string> = {}) {
+    const paging = this.pagination(query);
+    const where: Prisma.RawBlockWhereInput = {
+      factoryId,
+      ...(query.status ? { currentStatus: query.status } : {}),
+      ...(query.q
+        ? {
+            OR: [
+              { serialNumber: { contains: query.q, mode: "insensitive" } },
+              { varietyName: { contains: query.q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+    const items = await this.prisma.rawBlock.findMany({
+      where,
+      include: { supplier: true, location: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      ...(paging ? { skip: paging.skip, take: paging.take } : {}),
+    });
+    if (!paging) return items;
+    return {
+      items,
+      total: await this.prisma.rawBlock.count({ where }),
+      page: paging.page,
+      pageSize: paging.pageSize,
+    };
+  }
+
+  async slabs(factoryId: string, query: Record<string, string> = {}) {
+    const paging = this.pagination(query);
+    const where: Prisma.SlabWhereInput = {
+      factoryId,
+      ...(query.parentBlockId ? { parentBlockId: query.parentBlockId } : {}),
+      ...(query.salesStatus ? { salesStatus: query.salesStatus } : {}),
+      ...(query.variety ? { varietyName: query.variety } : {}),
+      ...(query.finish ? { finish: query.finish } : {}),
+      ...(query.q
+        ? {
+            OR: [
+              { slabSerial: { contains: query.q, mode: "insensitive" } },
+              { varietyName: { contains: query.q, mode: "insensitive" } },
+              {
+                parentBlock: {
+                  serialNumber: { contains: query.q, mode: "insensitive" },
+                },
+              },
+              {
+                finishedPurchase: {
+                  reference: { contains: query.q, mode: "insensitive" },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const items = await this.prisma.slab.findMany({
+      where,
       include: {
         parentBlock: true,
         location: true,
         finishedPurchase: { select: { id: true, reference: true, kind: true } },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      ...(paging ? { skip: paging.skip, take: paging.take } : {}),
     });
+    if (!paging) return items;
+    return {
+      items,
+      total: await this.prisma.slab.count({ where }),
+      page: paging.page,
+      pageSize: paging.pageSize,
+    };
   }
 
   openingSnapshots(factoryId: string) {

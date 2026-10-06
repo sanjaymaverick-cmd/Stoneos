@@ -11,6 +11,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { InventoryKind } from "@prisma/client";
@@ -58,14 +59,20 @@ export class InventoryController {
 
   @Get("raw-blocks")
   @Roles(...PRODUCTION_INPUT_ROLES)
-  rawBlocks(@CurrentUser() user: AuthenticatedUser) {
-    return this.service.rawBlocks(user.factoryId);
+  rawBlocks(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: Record<string, string>,
+  ) {
+    return this.service.rawBlocks(user.factoryId, query);
   }
 
   @Get("slabs")
   @Roles(...SALES_READ_ROLES, ...PRODUCTION_INPUT_ROLES)
-  slabs(@CurrentUser() user: AuthenticatedUser) {
-    return this.service.slabs(user.factoryId);
+  slabs(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: Record<string, string>,
+  ) {
+    return this.service.slabs(user.factoryId, query);
   }
 
   @Get("movements")

@@ -7,6 +7,7 @@ import {
   Inject,
   Param,
   Post,
+  Query,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { Prisma } from "@prisma/client";
@@ -31,13 +32,61 @@ export class ConsumablesController {
 
   @Get("movements")
   @Roles(...PRODUCTION_INPUT_ROLES)
-  movements(@CurrentUser() user: AuthenticatedUser) {
-    return this.prisma.consumableMovement.findMany({
-      where: { factoryId: user.factoryId },
+  async movements(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: Record<string, string> = {},
+  ) {
+    const paging = this.pagination(query);
+    const where: Prisma.ConsumableMovementWhereInput = {
+      factoryId: user.factoryId,
+      ...(query.q
+        ? {
+            OR: [
+              { reason: { contains: query.q, mode: "insensitive" } },
+              {
+                consumable: {
+                  name: { contains: query.q, mode: "insensitive" },
+                },
+              },
+            ],
+          }
+        : {}),
+      ...(query.direction ? { direction: query.direction } : {}),
+    };
+    const items = await this.prisma.consumableMovement.findMany({
+      where,
       include: { consumable: true },
-      orderBy: { createdAt: "desc" },
-      take: 200,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      ...(paging
+        ? { skip: paging.skip, take: paging.pageSize }
+        : { skip: 0, take: 200 }),
     });
+    return paging
+      ? {
+          items,
+          total: await this.prisma.consumableMovement.count({ where }),
+          page: paging.page,
+          pageSize: paging.pageSize,
+        }
+      : items;
+  }
+
+  private pagination(query: Record<string, string>) {
+    if (query.page === undefined) return undefined;
+    const page = Number(query.page),
+      pageSize = Number(query.pageSize ?? 50);
+    if (
+      !Number.isSafeInteger(page) ||
+      page < 1 ||
+      page > 1000000 ||
+      !Number.isSafeInteger(pageSize) ||
+      pageSize < 1 ||
+      pageSize > 100
+    )
+      throw new BadRequestException(
+        "Use a positive page and pageSize between 1 and 100",
+      );
+    return { page, pageSize, skip: (page - 1) * pageSize };
   }
 
   @Post(":id/movements")
@@ -128,11 +177,28 @@ export class ConsumablesController {
 
   @Get()
   @Roles(...PRODUCTION_INPUT_ROLES)
-  list(@CurrentUser() user: AuthenticatedUser) {
-    return this.prisma.consumable.findMany({
-      where: { factoryId: user.factoryId },
-      orderBy: { name: "asc" },
+  async list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: Record<string, string> = {},
+  ) {
+    const paging = this.pagination(query);
+    const where: Prisma.ConsumableWhereInput = {
+      factoryId: user.factoryId,
+      ...(query.q ? { name: { contains: query.q, mode: "insensitive" } } : {}),
+    };
+    const items = await this.prisma.consumable.findMany({
+      where,
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      ...(paging ? { skip: paging.skip, take: paging.pageSize } : {}),
     });
+    return paging
+      ? {
+          items,
+          total: await this.prisma.consumable.count({ where }),
+          page: paging.page,
+          pageSize: paging.pageSize,
+        }
+      : items;
   }
 
   @Post()
