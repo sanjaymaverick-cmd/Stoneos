@@ -3234,6 +3234,74 @@ describe("postgres-backed workflows", () => {
     assert.equal(await slabsOnHand(b.factory.id), 41);
   });
 
+  it("values saw damage from the block's cost before GST, even when it was bought on credit", async () => {
+    const { factory, asOwner } = await staffFactory("damage-credit");
+    const saw = await prisma.machine.findFirstOrThrow({ where: { factoryId: factory.id, name: "B-21" } });
+    const cut = async (serial: string, receipt: Record<string, number>, good: number) => {
+      const received = (await inventory.receiveBlock(asOwner, {
+        serialNumber: serial,
+        varietyName: "Grey",
+        weightTons: 20,
+        clientOpId: `dmg-${serial}`,
+        ...receipt,
+      })) as { block: { id: string } };
+      const session = await production.startCutting(asOwner, { rawBlockId: received.block.id, machineId: saw.id });
+      const done = await production.completeCutting(asOwner, session.id, { totalSlabsCut: 10, finalGoodSlabCount: good });
+      const stored = await prisma.cuttingSession.findUniqueOrThrow({ where: { id: session.id } });
+      return { reported: done.damagedCost, stored: Number(stored.damagedCostAmount) };
+    };
+
+    // Bought on credit: nothing paid yet. Two of ten broke, so a fifth of the
+    // ₹2,00,000 cost before GST is lost - not ₹0, which is what the 5 Oct run found
+    // on every one of 528 credit blocks.
+    const credit = await cut("DMG-CREDIT", { purchaseTaxable: 200_000, actualAmountPaid: 0 }, 8);
+    assert.equal(credit.reported, 40_000);
+    assert.equal(credit.stored, 40_000);
+
+    // An older receipt with only a paid amount still values its damage from that.
+    const paidOnly = await cut("DMG-PAID", { actualAmountPaid: 100_000 }, 9);
+    assert.equal(paidOnly.stored, 10_000);
+  });
+
+  it("counts a finished slab once on the DPR and the daily report, not once per stage", async () => {
+    const { factory, asOwner } = await staffFactory("dpr-stages");
+    const saw = await prisma.machine.findFirstOrThrow({ where: { factoryId: factory.id, name: "B-21" } });
+    const lpm = await prisma.machine.findFirstOrThrow({ where: { factoryId: factory.id, name: "LPM" } });
+
+    // Three identified slabs through grinding, resin and polishing.
+    const received = (await inventory.receiveBlock(asOwner, {
+      serialNumber: "STG-1",
+      varietyName: "Grey",
+      weightTons: 2,
+      clientOpId: "stg-block",
+    })) as { block: { id: string } };
+    const session = await production.startCutting(asOwner, { rawBlockId: received.block.id, machineId: saw.id });
+    const { slabs } = await production.completeCutting(asOwner, session.id, { totalSlabsCut: 3, finalGoodSlabCount: 3 });
+    for (const processType of ["GRINDING", "RESIN", "POLISHING"] as const) {
+      const run = await production.startPolishing(asOwner, { machineId: lpm.id, processType, slabIds: slabs.map((s) => s.id) });
+      await production.completePolishing(asOwner, run.id);
+    }
+
+    // Fifty slabs of a lot through the same three stages.
+    await receiveBlock(factory.id, "STG-LOT", { taxable: 100_000, cash: 0 });
+    await lots.recordCut(asOwner, { blockSerial: "STG-LOT", totalSlabsCut: 50, damagedAtSaw: 0, sqftPerSlab: 40, clientOpId: "stg-lot-cut" });
+    for (const processType of ["GRINDING", "RESIN", "POLISHING"] as const) {
+      await lots.polishLot(asOwner, {
+        blockSerial: "STG-LOT",
+        slabCount: 50,
+        machineId: lpm.id,
+        processType,
+        clientOpId: `stg-lot-${processType}`,
+      });
+    }
+
+    const now = new Date();
+    const dpr = await production.derivedDpr(factory.id, now, now);
+    const daily = await dailyReports.gather(factory.id, now);
+    assert.equal(dpr.slabsPolished, 53, "3 pieces + 50 from the lot, each once - was 9 + 150");
+    assert.equal(daily.polishing.slabsPolished, 53, "the daily report uses the same rule");
+  });
+
   it("posts breakage to the ledger and keeps the books balanced", async () => {
     const { factory, asOwner } = await staffFactory("lotbooks");
     await receiveBlock(factory.id, "VG-001", { taxable: 180_000, cash: 0 });
