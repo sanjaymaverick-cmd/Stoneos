@@ -11,6 +11,7 @@ import {
 } from "@stoneos/domain";
 import { buildWorkbook } from "@stoneos/xlsx";
 import { PrismaService } from "../../common/prisma.service";
+import { finishedPieceCount } from "../production/finished-count";
 
 /** Prisma hands money and measurements back as Decimal; the report wants plain numbers. */
 function num(value: { toString(): string } | null | undefined): number {
@@ -150,7 +151,6 @@ export class DailyReportService {
     const lotLines = polishingSessions
       .filter((session) => session.processType === "POLISHING")
       .flatMap((session) => session.slabs.filter((s) => s.rawBlock && s.slabCount));
-    const lotSlabsPolished = sum(lotLines.map((line) => line.slabCount ?? 0));
     const lotSqftPolished = sum(
       lotLines.map((line) => (line.slabCount ?? 0) * num(line.rawBlock?.sqftPerSlab)),
     );
@@ -174,7 +174,7 @@ export class DailyReportService {
         sessions: polishingSessions.length,
         runtimeHours: sum(polishingSessions.map((s) => num(s.runtimeHours))),
         downtimeMinutes: sum(polishingSessions.map((s) => s.downtimeMinutes ?? 0)),
-        slabsPolished: polishedSlabs.size + lotSlabsPolished,
+        slabsPolished: finishedPieceCount(polishingSessions),
         sqftPolished: sum([...polishedSlabs.values()].map(slabSqft)) + lotSqftPolished,
       },
       ordersTaken: orders.length,

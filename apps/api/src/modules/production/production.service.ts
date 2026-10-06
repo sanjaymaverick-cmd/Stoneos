@@ -8,6 +8,7 @@ import {
 import { damagedCostAtRawBlock, damagedSlabCount, slabSerial } from "@stoneos/domain";
 import { operationalDateFor } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
+import { finishedPieceCount } from "./finished-count";
 import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
 import type { AuthenticatedUser } from "../../common/current-user";
@@ -162,8 +163,7 @@ export class ProductionService {
       throw new BadRequestException("Session is not in progress");
     }
     const damaged = damagedSlabCount(input.totalSlabsCut, input.finalGoodSlabCount);
-    const rawCost = Number(session.rawBlock.actualAmountPaid ?? session.rawBlock.invoicedAmount ?? 0);
-    const damagedCost = damagedCostAtRawBlock(input.totalSlabsCut, damaged, rawCost);
+    const damagedCost = damagedCostAtRawBlock(input.totalSlabsCut, damaged, blockCostBasis(session.rawBlock));
     const unpolished = await this.prisma.inventoryLocation.findFirst({
       where: { factoryId: user.factoryId, code: "UNPOLISHED_STOCK" },
     });
@@ -365,12 +365,28 @@ export class ProductionService {
       slabsCut,
       runtimeHours: cutting.reduce((sum, row) => sum + Number(row.runtimeHours ?? 0), 0),
       downtimeMinutes: cutting.reduce((sum, row) => sum + (row.downtimeMinutes ?? 0), 0),
-      // A per-piece line is one slab; a lot line is a count. Counting rows would
-      // report a 50-slab lot run as a single slab polished.
-      slabsPolished: polishing.reduce(
-        (sum, row) => sum + row.slabs.reduce((n, line) => n + (line.slabCount ?? 1), 0),
-        0,
-      ),
+      slabsPolished: finishedPieceCount(polishing),
     };
   }
+}
+
+/**
+ * What a raw block cost, for valuing the slabs that broke on the saw.
+ *
+ * The cost before GST first: it is the cost basis everywhere else, recoverable tax is
+ * not a cost, and it is known from the day the block arrives. Paid amount came first
+ * before, and a block bought on credit has paid 0 - so every credit block valued its
+ * saw damage at nothing. Older rows without a taxable value fall back to the invoiced,
+ * then the paid amount.
+ */
+export function blockCostBasis(block: {
+  purchaseTaxable: unknown;
+  invoicedAmount: unknown;
+  actualAmountPaid: unknown;
+}): number {
+  for (const value of [block.purchaseTaxable, block.invoicedAmount, block.actualAmountPaid]) {
+    const amount = Number(value ?? 0);
+    if (Number.isFinite(amount) && amount > 0) return amount;
+  }
+  return 0;
 }
