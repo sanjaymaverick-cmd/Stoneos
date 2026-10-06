@@ -497,7 +497,7 @@ export default function SellLotsPage() {
                 </EmptyState>
               ) : (
                 <>
-                  <table>
+                  <div className="table-wrap" role="region" aria-label="Lots in this sale" tabIndex={0}><table>
                     <thead>
                       <tr>
                         <th>Block</th>
@@ -536,7 +536,7 @@ export default function SellLotsPage() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </table></div>
                   <p className="hint">
                     Billed {formatInr(basketTaxable)} · GST about{" "}
                     {formatInr(Math.round(basketTax * 100) / 100)} · around{" "}
@@ -657,7 +657,7 @@ function BillView({ bill, onDone }: { bill: Bill; onDone: () => void }) {
         {bill.interState ? "inter-state (IGST)" : "within the state (CGST + SGST)"}
       </p>
 
-      <table>
+      <div className="table-wrap" role="region" aria-label="Invoice lines" tabIndex={0}><table>
         <thead>
           <tr>
             <th>Description</th>
@@ -687,10 +687,10 @@ function BillView({ bill, onDone }: { bill: Bill; onDone: () => void }) {
             </tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
 
       <h3>HSN summary</h3>
-      <table>
+      <div className="table-wrap" role="region" aria-label="HSN tax summary" tabIndex={0}><table>
         <thead>
           <tr>
             <th>HSN</th>
@@ -713,7 +713,7 @@ function BillView({ bill, onDone }: { bill: Bill; onDone: () => void }) {
             </tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
 
       <div className="grid">
         <div className="metric">

@@ -357,7 +357,7 @@ export default function SalesPage() {
                 IGST. Edit them to fix it.
               </p>
             ) : null}
-            <table>
+            <div className="table-wrap" role="region" aria-label="Customers" tabIndex={0}><table>
               <thead>
                 <tr>
                   <th>Name</th>
@@ -386,7 +386,7 @@ export default function SalesPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </>
         )}
       </div>
