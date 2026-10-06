@@ -1,0 +1,39 @@
+{
+  "release": "finished-purchases-regular-gst",
+  "date": "2026-10-04",
+  "pullRequest": "https://github.com/sanjaymaverick-cmd/Stoneos/pull/34",
+  "commit": "8ed71d518f2ff689240fe7dcdb03fa9aff827867",
+  "oracle": "193.122.159.175",
+  "url": "https://stoneos.duckdns.org/inventory?view=finished",
+  "deployment": {
+    "build": 0,
+    "migrations": 19,
+    "featuresVerified": true,
+    "replace": 0,
+    "productionDataAndOwnerUnchanged": true,
+    "migrate": 0,
+    "apiHealthy": true
+  },
+  "verification": {
+    "webTests": 20,
+    "desktopAndMobile": true,
+    "ciGates": [
+      "quality",
+      "security",
+      "terraform",
+      "images",
+      "restore-fresh-runner"
+    ],
+    "apiTests": 163,
+    "interruptedSaveRetry": true,
+    "productionTestWrites": 0,
+    "blockGstPaymentAndNetAllocation": true
+  },
+  "deferred": [
+    "offsite backups",
+    "real statutory credentials"
+  ],
+  "openAiKeyConfigured": false,
+  "statutoryMode": "test",
+  "gstLimitation": "Head-wise monthly books; final eligibility, carry and cross-head utilization require reconciliation"
+}

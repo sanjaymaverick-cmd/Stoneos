@@ -1,5 +1,11 @@
 # Handoff for Grok
 
+Latest continuation: [6 October 2026 — PR #31 review and local UI/UX work](handoff-2026-10-06.md). Read before resuming; preserves the dirty workspace and distinguishes completed checks from pending sales/mobile verification.
+
+Archived session notes are in [docs/handoffs/](handoffs/) and Oracle release records (commit, migrations, test counts per deploy) in [docs/releases/](releases/).
+
+Latest testing update: [5 October 2026 — Oracle 12-month company run and UI/UX findings](testing/company-year-results-2026-10-05.md). Source testing agents: [execution guide](testing/company-year-testing.md). Product deployment remains `8ed71d5`; no app fixes were deployed by the test run.
+
 Latest session update: [4 October 2026 — owner KPIs, OpenAI, per-ton costs and workflow reliability](handoff-2026-10-04.md). This supersedes earlier AI deferral for the owner analytics/document endpoints.
 
 Previous session update: [3 October 2026 — invoices, reports, complete party details and Oracle migration fix](handoff-2026-10-03.md). Read it before the historical notes below.

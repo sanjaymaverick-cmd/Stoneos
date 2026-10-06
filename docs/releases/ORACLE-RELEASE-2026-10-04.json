@@ -1,0 +1,16 @@
+{
+  "commit": "d9720a9d66135cb2d28310ae6765f32a41f235a8",
+  "pullRequest": 32,
+  "deployed": true,
+  "deploymentExit": 0,
+  "migrations": 18,
+  "readiness": "database reachable",
+  "analyticsPageHttp": 200,
+  "unauthenticatedAnalyticsApiHttp": 401,
+  "productionDataAndOwnerLogin": "unchanged",
+  "aiKeyConfigured": false,
+  "statutoryMode": "test",
+  "offsiteBackups": "deferred",
+  "apiTests": 159,
+  "webTests": 20
+}
