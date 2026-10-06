@@ -43,6 +43,8 @@ export default function ExpensesPage() {
     Array<{ id: string; serialNumber: string }>
   >([]);
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [items, setItems] = useState<Expense[]>([]);
   const [category, setCategory] = useState("diesel");
   const [amount, setAmount] = useState("1000");
@@ -56,6 +58,35 @@ export default function ExpensesPage() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
+  async function loadExpenses() {
+    const result = await apiFetch<{ items: Expense[]; total: number }>(
+      `/api/v1/expenses?page=${page}&pageSize=50&search=${encodeURIComponent(search)}`,
+    );
+    setItems(result.items);
+    setTotal(result.total);
+  }
+  useEffect(() => {
+    let active = true;
+    const timer = setTimeout(() => {
+      apiFetch<{ items: Expense[]; total: number }>(
+        `/api/v1/expenses?page=${page}&pageSize=50&search=${encodeURIComponent(search)}`,
+      )
+        .then((result) => {
+          if (active) {
+            setItems(result.items);
+            setTotal(result.total);
+            setError("");
+          }
+        })
+        .catch((e) => {
+          if (active) setError(e.message);
+        });
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [page, search]);
   async function refresh() {
     const me = await apiFetch<{ role: string }>("/api/v1/auth/me");
     setReadOnly(["accountant", "auditor"].includes(me.role));
@@ -64,7 +95,7 @@ export default function ExpensesPage() {
       "/api/v1/books/collections-today",
     );
     setCollected(today.collected);
-    setItems(await apiFetch("/api/v1/expenses"));
+    await loadExpenses();
     setBlocks(await apiFetch("/api/v1/inventory/raw-blocks"));
     const v = await apiFetch<Array<{ id: string; name: string }>>(
       "/api/v1/expenses/vehicles",
@@ -306,10 +337,32 @@ export default function ExpensesPage() {
         Find an expense
         <input
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(1);
+          }}
           placeholder="Paid to, date, category or block"
         />
       </label>
+      <div className="pager" aria-label="Expense pages">
+        <button
+          className="secondary"
+          disabled={page === 1}
+          onClick={() => setPage(page - 1)}
+        >
+          Previous
+        </button>
+        <span role="status">
+          Page {page} of {Math.max(1, Math.ceil(total / 50))} · {total} expenses
+        </span>
+        <button
+          className="secondary"
+          disabled={page * 50 >= total}
+          onClick={() => setPage(page + 1)}
+        >
+          Next
+        </button>
+      </div>
       {items.length === 0 ? (
         <EmptyState>
           No expenses yet. Record diesel, wages, or other costs above.
@@ -328,77 +381,60 @@ export default function ExpensesPage() {
               </tr>
             </thead>
             <tbody>
-              {items
-                .filter((i) =>
-                  [
-                    i.toWhom,
-                    i.category,
-                    i.expenseDate,
-                    ...(i.allocations ?? []).map(
-                      (a) =>
-                        blocks.find((b) => b.id === a.rawBlockId)?.serialNumber,
-                    ),
-                  ]
-                    .join(" ")
-                    .toLowerCase()
-                    .includes(search.toLowerCase()),
-                )
-                .map((i) => (
-                  <tr id={"expense-" + i.id} key={i.id}>
-                    <td>{i.expenseDate?.slice(0, 10)}</td>
-                    <td>
-                      {i.category}
-                      {i.vehicle ? ` · ${i.vehicle.name}` : ""}
-                    </td>
-                    <td>{i.toWhom ?? ""}</td>
-                    <td className="num">{formatInr(Number(i.amount))}</td>
-                    <td>
-                      {i.allocations?.map((a, j) => (
-                        <div key={j}>
-                          <Link
-                            href={"/inventory?view=costs&block=" + a.rawBlockId}
-                          >
-                            {blocks.find((b) => b.id === a.rawBlockId)
-                              ?.serialNumber ?? "Block"}{" "}
-                            ·{" "}
-                            {a.costComponent === "royalty"
-                              ? "Royalty"
-                              : a.costComponent === "block_transport"
-                                ? "Transport"
-                                : "Other"}{" "}
-                            · {formatInr(Number(a.allocatedAmount))} →
-                          </Link>
-                        </div>
-                      ))}
-                    </td>
-                    <td>
-                      {formatInr(
-                        Math.max(
-                          0,
-                          Math.round(
-                            Number(i.taxableAmount ?? i.amount) * 100,
-                          ) -
-                            (i.allocations ?? []).reduce(
-                              (n, a) =>
-                                n + Math.round(Number(a.allocatedAmount) * 100),
-                              0,
-                            ),
-                        ) / 100,
-                      )}{" "}
-                      {!readOnly &&
-                        Number(i.taxableAmount ?? i.amount) -
+              {items.map((i) => (
+                <tr id={"expense-" + i.id} key={i.id}>
+                  <td>{i.expenseDate?.slice(0, 10)}</td>
+                  <td>
+                    {i.category}
+                    {i.vehicle ? ` · ${i.vehicle.name}` : ""}
+                  </td>
+                  <td>{i.toWhom ?? ""}</td>
+                  <td className="num">{formatInr(Number(i.amount))}</td>
+                  <td>
+                    {i.allocations?.map((a, j) => (
+                      <div key={j}>
+                        <Link
+                          href={"/inventory?view=costs&block=" + a.rawBlockId}
+                        >
+                          {blocks.find((b) => b.id === a.rawBlockId)
+                            ?.serialNumber ?? "Block"}{" "}
+                          ·{" "}
+                          {a.costComponent === "royalty"
+                            ? "Royalty"
+                            : a.costComponent === "block_transport"
+                              ? "Transport"
+                              : "Other"}{" "}
+                          · {formatInr(Number(a.allocatedAmount))} →
+                        </Link>
+                      </div>
+                    ))}
+                  </td>
+                  <td>
+                    {formatInr(
+                      Math.max(
+                        0,
+                        Math.round(Number(i.taxableAmount ?? i.amount) * 100) -
                           (i.allocations ?? []).reduce(
-                            (n, a) => n + Number(a.allocatedAmount),
+                            (n, a) =>
+                              n + Math.round(Number(a.allocatedAmount) * 100),
                             0,
-                          ) >
-                          0.005 && (
-                          <Link href={"/inventory?view=costs&expense=" + i.id}>
-                            Review in Yard →
-                          </Link>
-                        )}
-                    </td>
-                  </tr>
-                ))}
+                          ),
+                      ) / 100,
+                    )}{" "}
+                    {!readOnly &&
+                      Number(i.taxableAmount ?? i.amount) -
+                        (i.allocations ?? []).reduce(
+                          (n, a) => n + Number(a.allocatedAmount),
+                          0,
+                        ) >
+                        0.005 && (
+                        <Link href={"/inventory?view=costs&expense=" + i.id}>
+                          Review in Yard →
+                        </Link>
+                      )}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

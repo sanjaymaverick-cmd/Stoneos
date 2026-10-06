@@ -117,6 +117,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               .filter(
                 (r) =>
                   [
+                    "/consumables",
+                    "/recovery-ratio",
+                    "/parties",
+                    "/sales/reports",
+                    "/lots",
+                    "/lots/dispatch",
+                    "/books",
                     "/analytics",
                     "/muster",
                     "/maintenance",

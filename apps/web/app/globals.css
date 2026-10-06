@@ -675,3 +675,102 @@ tr:target {
 .finished-purchases-workspace .metric b {
   overflow-wrap: anywhere;
 }
+
+/* Keep intrinsic form and currency widths inside the available workspace. */
+.page,
+.card,
+.grid > *,
+.metric,
+form,
+label,
+fieldset {
+  min-width: 0;
+}
+input,
+select,
+textarea {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+fieldset {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+}
+.metric b,
+.report-totals strong {
+  overflow-wrap: anywhere;
+  font-size: clamp(1.3rem, 4vw, 1.75rem);
+}
+.card,
+.bubble,
+.cost-heading,
+.cost-actions {
+  overflow-wrap: anywhere;
+}
+.grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.pager,
+.workspace-actions,
+.period-presets {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 12px 0;
+}
+.nav .more[open] > div {
+  max-height: 65dvh;
+  overflow-y: auto;
+}
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 620px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  table {
+    max-width: 100%;
+  }
+  .card {
+    padding: 12px;
+  }
+  .table-wrap {
+    width: 100%;
+    min-width: 0;
+  }
+  .page h1 {
+    font-size: 1.8rem;
+  }
+  .nav .more[open] {
+    max-width: calc(100vw - 16px);
+  }
+}
+
+.batch-list {
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+}
+.batch-list label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  min-height: 44px;
+}
+.batch-list input[type="checkbox"] {
+  flex: 0 0 auto;
+}
