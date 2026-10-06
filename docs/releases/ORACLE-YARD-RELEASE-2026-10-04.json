@@ -1,0 +1,36 @@
+{
+  "release": "yard-money-workspace",
+  "date": "2026-10-04",
+  "pullRequest": "https://github.com/sanjaymaverick-cmd/Stoneos/pull/33",
+  "commit": "2c4740bd8a26d5e3f681912e8c3f07d11fc70d08",
+  "oracle": "193.122.159.175",
+  "url": "https://stoneos.duckdns.org/inventory?view=costs",
+  "deployment": {
+    "build": 0,
+    "migrate": 0,
+    "replace": 0,
+    "apiHealthy": true,
+    "migrations": 18,
+    "featuresVerified": true,
+    "productionDataAndOwnerUnchanged": true
+  },
+  "verification": {
+    "apiTests": 160,
+    "webTests": 20,
+    "ciGates": [
+      "quality",
+      "security",
+      "terraform",
+      "images",
+      "restore-fresh-runner"
+    ],
+    "desktopAndMobile": true,
+    "interruptedSaveRetry": true,
+    "productionTestWrites": 0
+  },
+  "deferred": [
+    "offsite backups",
+    "real statutory credentials"
+  ],
+  "openAiKeyConfigured": false
+}
