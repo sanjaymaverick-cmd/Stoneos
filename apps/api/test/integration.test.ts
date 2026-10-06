@@ -3162,6 +3162,78 @@ describe("postgres-backed workflows", () => {
     assert.equal(stored.gstin, null);
   });
 
+  it("counts lot stock on both dashboards, not just identified slabs", async () => {
+    const { factory, asOwner } = await staffFactory("dash");
+    await receiveBlock(factory.id, "VG-001", { taxable: 100_000, cash: 0 });
+    await lots.recordCut(asOwner, {
+      blockSerial: "VG-001", totalSlabsCut: 70, damagedAtSaw: 0, sqftPerSlab: 49.5,
+      clientOpId: "dash-cut",
+    });
+    // A cut creates no Slab rows at all, so a dashboard counting that table alone
+    // reported an empty yard for a factory holding seventy slabs.
+    assert.equal(await prisma.slab.count({ where: { factoryId: factory.id } }), 0);
+
+    // Both of them: /reports/today is served by ceoBrief and the shop screen by
+    // shopDashboard. They counted separately, so fixing one left the other wrong.
+    assert.equal((await reports.shopDashboard(factory.id)).slabsOnHand, 70);
+    assert.equal((await reports.ceoBrief(factory.id)).slabsOnHand, 70);
+
+    const customer = await prisma.customer.create({
+      data: { factoryId: factory.id, name: "Buyer", stateCode: "08" },
+    });
+    await lots.sellLots(asOwner, {
+      customerId: customer.id, clientOpId: "dash-sell",
+      lines: [{ blockSerial: "VG-001", slabCount: 50, rate: 30 }],
+    });
+    await lots.writeOffBroken(asOwner, {
+      blockSerial: "VG-001", slabCount: 3, stage: "yard", reason: "cracked",
+      clientOpId: "dash-off",
+    });
+    assert.equal((await reports.shopDashboard(factory.id)).slabsOnHand, 17, "70 less 50 sold less 3 broken");
+    assert.equal((await reports.ceoBrief(factory.id)).slabsOnHand, 17);
+  });
+
+  it("adds identified pieces to lot stock, per factory, and a sold-out lot adds nothing", async () => {
+    const slabsOnHand = async (factoryId: string) => {
+      const shop = (await reports.shopDashboard(factoryId)).slabsOnHand;
+      const ceo = (await reports.ceoBrief(factoryId)).slabsOnHand;
+      assert.equal(shop, ceo, "both dashboards must agree");
+      return shop;
+    };
+
+    // Factory A holds both kinds of stock: two identified pieces on the older
+    // per-piece path, one already dispatched, and a ten-slab lot.
+    const a = await staffFactory("dash-mixed-a");
+    for (const [slabSerial, salesStatus] of [["A-P1", "in_stock"], ["A-P2", "in_stock"], ["A-P3", "dispatched"]]) {
+      await prisma.slab.create({ data: { factoryId: a.factory.id, slabSerial, varietyName: "Grey", salesStatus } });
+    }
+    await receiveBlock(a.factory.id, "A-LOT", { taxable: 50_000, cash: 0 });
+    await lots.recordCut(a.asOwner, {
+      blockSerial: "A-LOT", totalSlabsCut: 10, damagedAtSaw: 0, sqftPerSlab: 40, clientOpId: "dash-mixed-a-cut",
+    });
+    assert.equal(await slabsOnHand(a.factory.id), 12, "2 identified in stock + 10 in the lot; the dispatched piece is gone");
+
+    // Factory B's yard is its own. Counting it into A's, or A's into B's, would
+    // show one tenant another's stock.
+    const b = await staffFactory("dash-mixed-b");
+    await prisma.slab.create({ data: { factoryId: b.factory.id, slabSerial: "B-P1", varietyName: "Grey" } });
+    await receiveBlock(b.factory.id, "B-LOT", { taxable: 50_000, cash: 0 });
+    await lots.recordCut(b.asOwner, {
+      blockSerial: "B-LOT", totalSlabsCut: 40, damagedAtSaw: 0, sqftPerSlab: 40, clientOpId: "dash-mixed-b-cut",
+    });
+    assert.equal(await slabsOnHand(b.factory.id), 41);
+    assert.equal(await slabsOnHand(a.factory.id), 12, "B's stock must not appear in A");
+
+    // Sell A's lot out entirely: it contributes nothing, and never goes negative.
+    const buyer = await prisma.customer.create({ data: { factoryId: a.factory.id, name: "Buyer", stateCode: "08" } });
+    await lots.sellLots(a.asOwner, {
+      customerId: buyer.id, clientOpId: "dash-mixed-a-sell",
+      lines: [{ blockSerial: "A-LOT", slabCount: 10, rate: 30 }],
+    });
+    assert.equal(await slabsOnHand(a.factory.id), 2, "only the identified pieces remain");
+    assert.equal(await slabsOnHand(b.factory.id), 41);
+  });
+
   it("posts breakage to the ledger and keeps the books balanced", async () => {
     const { factory, asOwner } = await staffFactory("lotbooks");
     await receiveBlock(factory.id, "VG-001", { taxable: 180_000, cash: 0 });
