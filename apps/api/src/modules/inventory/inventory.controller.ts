@@ -26,6 +26,7 @@ import {
   Roles,
   type AuthenticatedUser,
 } from "../../common/current-user";
+import type { RegisterQuery } from "../../common/registers";
 import { InventoryService } from "./inventory.service";
 
 @ApiTags("inventory")
@@ -61,7 +62,7 @@ export class InventoryController {
   @Roles(...PRODUCTION_INPUT_ROLES)
   rawBlocks(
     @CurrentUser() user: AuthenticatedUser,
-    @Query() query: Record<string, string>,
+    @Query() query: RegisterQuery,
   ) {
     return this.service.rawBlocks(user.factoryId, query);
   }
@@ -70,7 +71,7 @@ export class InventoryController {
   @Roles(...SALES_READ_ROLES, ...PRODUCTION_INPUT_ROLES)
   slabs(
     @CurrentUser() user: AuthenticatedUser,
-    @Query() query: Record<string, string>,
+    @Query() query: RegisterQuery,
   ) {
     return this.service.slabs(user.factoryId, query);
   }

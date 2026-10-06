@@ -14,6 +14,7 @@ import {
   Roles,
   type AuthenticatedUser,
 } from "../../common/current-user";
+import type { RegisterQuery } from "../../common/registers";
 import { ExpensesService } from "./expenses.service";
 
 @ApiTags("expenses")
@@ -47,7 +48,7 @@ export class ExpensesController {
   @Roles(...COMMERCIAL_READ_ROLES)
   list(
     @CurrentUser() user: AuthenticatedUser,
-    @Query() query: Record<string, string>,
+    @Query() query: RegisterQuery,
   ) {
     return this.service.list(user.factoryId, query);
   }

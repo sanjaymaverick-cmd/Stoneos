@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../common/prisma.service";
+import { queryText, registerPage, type RegisterQuery } from "../../common/registers";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { assertAllowedRoles } from "../../common/session.guard";
 import { EXPENSE_DATA_ROLES, type Role } from "@stoneos/contracts";
@@ -50,23 +51,9 @@ export class ExpensesService {
     });
   }
 
-  async list(factoryId: string, query: Record<string, string> = {}) {
-    const paging = query.page !== undefined;
-    const page = Number(query.page ?? 1),
-      pageSize = Number(query.pageSize ?? 50);
-    if (
-      paging &&
-      (!Number.isSafeInteger(page) ||
-        page < 1 ||
-        page > 1000000 ||
-        !Number.isSafeInteger(pageSize) ||
-        pageSize < 1 ||
-        pageSize > 100)
-    )
-      throw new BadRequestException(
-        "Use a positive page and pageSize between 1 and 100",
-      );
-    const term = (query.search ?? "").trim().slice(0, 120);
+  async list(factoryId: string, query: RegisterQuery = {}) {
+    const paging = registerPage(query);
+    const term = queryText(query, "search");
     const where: Prisma.ExpenseWhereInput = { factoryId };
     if (term) {
       const blocks = await this.prisma.rawBlock.findMany({
@@ -93,14 +80,14 @@ export class ExpensesService {
       where,
       include: { allocations: true, vehicle: true },
       orderBy: [{ expenseDate: "desc" }, { id: "desc" }],
-      ...(paging ? { skip: (page - 1) * pageSize, take: pageSize } : {}),
+      ...(paging ? { skip: paging.skip, take: paging.take } : {}),
     });
     return paging
       ? {
           items,
           total: await this.prisma.expense.count({ where }),
-          page,
-          pageSize,
+          page: paging.page,
+          pageSize: paging.pageSize,
         }
       : items;
   }

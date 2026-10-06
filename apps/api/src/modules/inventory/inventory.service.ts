@@ -10,6 +10,7 @@ import { InventoryKind, InventoryMovementType, Prisma } from "@prisma/client";
 import { MAX_BLOCK_TONS } from "@stoneos/contracts";
 import { costPerSlab } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
+import { queryText, registerPage, type RegisterQuery } from "../../common/registers";
 import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
 import { BooksService } from "../books/books.service";
@@ -63,34 +64,18 @@ export class InventoryService {
     });
   }
 
-  private pagination(query: Record<string, string>) {
-    if (query.page === undefined) return undefined;
-    const page = Number(query.page),
-      pageSize = Number(query.pageSize ?? 50);
-    if (
-      !Number.isSafeInteger(page) ||
-      page < 1 ||
-      page > 1000000 ||
-      !Number.isSafeInteger(pageSize) ||
-      pageSize < 1 ||
-      pageSize > 100
-    )
-      throw new BadRequestException(
-        "Use a positive page and pageSize between 1 and 100",
-      );
-    return { page, pageSize, skip: (page - 1) * pageSize, take: pageSize };
-  }
-
-  async rawBlocks(factoryId: string, query: Record<string, string> = {}) {
-    const paging = this.pagination(query);
+  async rawBlocks(factoryId: string, query: RegisterQuery = {}) {
+    const paging = registerPage(query);
+    const status = queryText(query, "status");
+    const q = queryText(query, "q");
     const where: Prisma.RawBlockWhereInput = {
       factoryId,
-      ...(query.status ? { currentStatus: query.status } : {}),
-      ...(query.q
+      ...(status ? { currentStatus: status } : {}),
+      ...(q
         ? {
             OR: [
-              { serialNumber: { contains: query.q, mode: "insensitive" } },
-              { varietyName: { contains: query.q, mode: "insensitive" } },
+              { serialNumber: { contains: q, mode: "insensitive" } },
+              { varietyName: { contains: q, mode: "insensitive" } },
             ],
           }
         : {}),
@@ -110,29 +95,26 @@ export class InventoryService {
     };
   }
 
-  async slabs(factoryId: string, query: Record<string, string> = {}) {
-    const paging = this.pagination(query);
+  async slabs(factoryId: string, query: RegisterQuery = {}) {
+    const paging = registerPage(query);
+    const parentBlockId = queryText(query, "parentBlockId");
+    const salesStatus = queryText(query, "salesStatus");
+    const variety = queryText(query, "variety");
+    const finish = queryText(query, "finish");
+    const q = queryText(query, "q");
     const where: Prisma.SlabWhereInput = {
       factoryId,
-      ...(query.parentBlockId ? { parentBlockId: query.parentBlockId } : {}),
-      ...(query.salesStatus ? { salesStatus: query.salesStatus } : {}),
-      ...(query.variety ? { varietyName: query.variety } : {}),
-      ...(query.finish ? { finish: query.finish } : {}),
-      ...(query.q
+      ...(parentBlockId ? { parentBlockId } : {}),
+      ...(salesStatus ? { salesStatus } : {}),
+      ...(variety ? { varietyName: variety } : {}),
+      ...(finish ? { finish } : {}),
+      ...(q
         ? {
             OR: [
-              { slabSerial: { contains: query.q, mode: "insensitive" } },
-              { varietyName: { contains: query.q, mode: "insensitive" } },
-              {
-                parentBlock: {
-                  serialNumber: { contains: query.q, mode: "insensitive" },
-                },
-              },
-              {
-                finishedPurchase: {
-                  reference: { contains: query.q, mode: "insensitive" },
-                },
-              },
+              { slabSerial: { contains: q, mode: "insensitive" } },
+              { varietyName: { contains: q, mode: "insensitive" } },
+              { parentBlock: { serialNumber: { contains: q, mode: "insensitive" } } },
+              { finishedPurchase: { reference: { contains: q, mode: "insensitive" } } },
             ],
           }
         : {}),
