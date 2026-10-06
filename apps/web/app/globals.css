@@ -544,10 +544,28 @@ th {
   max-width: 100%;
 }
 .table-wrap table {
+  display: table;
   min-width: 620px;
+}
+.table-wrap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 .table-wrap td {
   vertical-align: top;
+}
+/* Cards break long words anywhere so text never pushes past a phone screen. A
+   table in a scrolling region must not inherit that: it let the browser squeeze
+   columns to one character ("St/at/e", "346/5", a GSTIN over three lines) instead
+   of scrolling. Here words wrap only at spaces, and headings, amounts and codes
+   stay on one line; the region scrolls to show the rest. */
+.table-wrap th,
+.table-wrap td {
+  overflow-wrap: normal;
+}
+.table-wrap th,
+.table-wrap td.num {
+  white-space: nowrap;
 }
 .table-wrap form {
   min-width: 190px;
