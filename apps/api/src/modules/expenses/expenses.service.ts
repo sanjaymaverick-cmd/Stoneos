@@ -1,5 +1,7 @@
 import { BadRequestException, Inject, Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../common/prisma.service";
+import { queryText, registerPage, type RegisterQuery } from "../../common/registers";
 import type { AuthenticatedUser } from "../../common/current-user";
 import { assertAllowedRoles } from "../../common/session.guard";
 import { EXPENSE_DATA_ROLES, type Role } from "@stoneos/contracts";
@@ -49,12 +51,45 @@ export class ExpensesService {
     });
   }
 
-  list(factoryId: string) {
-    return this.prisma.expense.findMany({
-      where: { factoryId },
+  async list(factoryId: string, query: RegisterQuery = {}) {
+    const paging = registerPage(query);
+    const term = queryText(query, "search");
+    const where: Prisma.ExpenseWhereInput = { factoryId };
+    if (term) {
+      const blocks = await this.prisma.rawBlock.findMany({
+        where: {
+          factoryId,
+          serialNumber: { contains: term, mode: "insensitive" },
+        },
+        select: { id: true },
+      });
+      where.OR = [
+        { category: { contains: term, mode: "insensitive" } },
+        { toWhom: { contains: term, mode: "insensitive" } },
+        { vehicle: { name: { contains: term, mode: "insensitive" } } },
+        {
+          allocations: {
+            some: { rawBlockId: { in: blocks.map((b) => b.id) } },
+          },
+        },
+      ];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(term) && !Number.isNaN(Date.parse(term)))
+        where.OR.push({ expenseDate: new Date(term) });
+    }
+    const items = await this.prisma.expense.findMany({
+      where,
       include: { allocations: true, vehicle: true },
-      orderBy: { expenseDate: "desc" },
+      orderBy: [{ expenseDate: "desc" }, { id: "desc" }],
+      ...(paging ? { skip: paging.skip, take: paging.take } : {}),
     });
+    return paging
+      ? {
+          items,
+          total: await this.prisma.expense.count({ where }),
+          page: paging.page,
+          pageSize: paging.pageSize,
+        }
+      : items;
   }
 
   async create(

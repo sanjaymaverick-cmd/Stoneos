@@ -7,6 +7,7 @@ import {
   Inject,
   Param,
   Post,
+  Query,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { Prisma } from "@prisma/client";
@@ -22,6 +23,7 @@ import {
 } from "../../common/current-user";
 import { parseBusinessDate } from "../books/money";
 import { PrismaService } from "../../common/prisma.service";
+import { queryText, registerPage, type RegisterQuery } from "../../common/registers";
 
 @ApiTags("consumables")
 @ApiBearerAuth()
@@ -31,13 +33,41 @@ export class ConsumablesController {
 
   @Get("movements")
   @Roles(...PRODUCTION_INPUT_ROLES)
-  movements(@CurrentUser() user: AuthenticatedUser) {
-    return this.prisma.consumableMovement.findMany({
-      where: { factoryId: user.factoryId },
+  async movements(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: RegisterQuery = {},
+  ) {
+    const paging = registerPage(query);
+    const q = queryText(query, "q");
+    const direction = queryText(query, "direction");
+    const where: Prisma.ConsumableMovementWhereInput = {
+      factoryId: user.factoryId,
+      ...(q
+        ? {
+            OR: [
+              { reason: { contains: q, mode: "insensitive" } },
+              { consumable: { name: { contains: q, mode: "insensitive" } } },
+            ],
+          }
+        : {}),
+      ...(direction ? { direction } : {}),
+    };
+    const items = await this.prisma.consumableMovement.findMany({
+      where,
       include: { consumable: true },
-      orderBy: { createdAt: "desc" },
-      take: 200,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      ...(paging
+        ? { skip: paging.skip, take: paging.pageSize }
+        : { skip: 0, take: 200 }),
     });
+    return paging
+      ? {
+          items,
+          total: await this.prisma.consumableMovement.count({ where }),
+          page: paging.page,
+          pageSize: paging.pageSize,
+        }
+      : items;
   }
 
   @Post(":id/movements")
@@ -128,11 +158,29 @@ export class ConsumablesController {
 
   @Get()
   @Roles(...PRODUCTION_INPUT_ROLES)
-  list(@CurrentUser() user: AuthenticatedUser) {
-    return this.prisma.consumable.findMany({
-      where: { factoryId: user.factoryId },
-      orderBy: { name: "asc" },
+  async list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: RegisterQuery = {},
+  ) {
+    const paging = registerPage(query);
+    const q = queryText(query, "q");
+    const where: Prisma.ConsumableWhereInput = {
+      factoryId: user.factoryId,
+      ...(q ? { name: { contains: q, mode: "insensitive" } } : {}),
+    };
+    const items = await this.prisma.consumable.findMany({
+      where,
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      ...(paging ? { skip: paging.skip, take: paging.pageSize } : {}),
     });
+    return paging
+      ? {
+          items,
+          total: await this.prisma.consumable.count({ where }),
+          page: paging.page,
+          pageSize: paging.pageSize,
+        }
+      : items;
   }
 
   @Post()

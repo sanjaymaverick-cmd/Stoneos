@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Query,
+} from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { EXPENSE_DATA_ROLES, COMMERCIAL_READ_ROLES } from "@stoneos/contracts";
 import {
@@ -6,6 +14,7 @@ import {
   Roles,
   type AuthenticatedUser,
 } from "../../common/current-user";
+import type { RegisterQuery } from "../../common/registers";
 import { ExpensesService } from "./expenses.service";
 
 @ApiTags("expenses")
@@ -37,8 +46,11 @@ export class ExpensesController {
 
   @Get()
   @Roles(...COMMERCIAL_READ_ROLES)
-  list(@CurrentUser() user: AuthenticatedUser) {
-    return this.service.list(user.factoryId);
+  list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: RegisterQuery,
+  ) {
+    return this.service.list(user.factoryId, query);
   }
 
   @Post()

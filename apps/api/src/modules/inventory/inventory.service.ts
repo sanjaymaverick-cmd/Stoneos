@@ -10,6 +10,7 @@ import { InventoryKind, InventoryMovementType, Prisma } from "@prisma/client";
 import { MAX_BLOCK_TONS } from "@stoneos/contracts";
 import { costPerSlab } from "@stoneos/domain";
 import { PrismaService } from "../../common/prisma.service";
+import { queryText, registerPage, type RegisterQuery } from "../../common/registers";
 import { parseOccurredAt } from "../../common/occurred-at";
 import { AuditService } from "../../common/audit.service";
 import { BooksService } from "../books/books.service";
@@ -63,24 +64,78 @@ export class InventoryService {
     });
   }
 
-  rawBlocks(factoryId: string) {
-    return this.prisma.rawBlock.findMany({
-      where: { factoryId },
+  async rawBlocks(factoryId: string, query: RegisterQuery = {}) {
+    const paging = registerPage(query);
+    const status = queryText(query, "status");
+    const q = queryText(query, "q");
+    const where: Prisma.RawBlockWhereInput = {
+      factoryId,
+      ...(status ? { currentStatus: status } : {}),
+      ...(q
+        ? {
+            OR: [
+              { serialNumber: { contains: q, mode: "insensitive" } },
+              { varietyName: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+    const items = await this.prisma.rawBlock.findMany({
+      where,
       include: { supplier: true, location: true },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      ...(paging ? { skip: paging.skip, take: paging.take } : {}),
     });
+    if (!paging) return items;
+    return {
+      items,
+      total: await this.prisma.rawBlock.count({ where }),
+      page: paging.page,
+      pageSize: paging.pageSize,
+    };
   }
 
-  slabs(factoryId: string) {
-    return this.prisma.slab.findMany({
-      where: { factoryId },
+  async slabs(factoryId: string, query: RegisterQuery = {}) {
+    const paging = registerPage(query);
+    const parentBlockId = queryText(query, "parentBlockId");
+    const salesStatus = queryText(query, "salesStatus");
+    const variety = queryText(query, "variety");
+    const finish = queryText(query, "finish");
+    const q = queryText(query, "q");
+    const where: Prisma.SlabWhereInput = {
+      factoryId,
+      ...(parentBlockId ? { parentBlockId } : {}),
+      ...(salesStatus ? { salesStatus } : {}),
+      ...(variety ? { varietyName: variety } : {}),
+      ...(finish ? { finish } : {}),
+      ...(q
+        ? {
+            OR: [
+              { slabSerial: { contains: q, mode: "insensitive" } },
+              { varietyName: { contains: q, mode: "insensitive" } },
+              { parentBlock: { serialNumber: { contains: q, mode: "insensitive" } } },
+              { finishedPurchase: { reference: { contains: q, mode: "insensitive" } } },
+            ],
+          }
+        : {}),
+    };
+    const items = await this.prisma.slab.findMany({
+      where,
       include: {
         parentBlock: true,
         location: true,
         finishedPurchase: { select: { id: true, reference: true, kind: true } },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      ...(paging ? { skip: paging.skip, take: paging.take } : {}),
     });
+    if (!paging) return items;
+    return {
+      items,
+      total: await this.prisma.slab.count({ where }),
+      page: paging.page,
+      pageSize: paging.pageSize,
+    };
   }
 
   openingSnapshots(factoryId: string) {
