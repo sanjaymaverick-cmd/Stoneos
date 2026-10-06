@@ -3991,6 +3991,24 @@ describe("postgres-backed workflows", () => {
     const machine=snap.machines[0]!;await assert.rejects(()=>service.standard(asOwner,machine.id,{plannedHoursPerDay:25,idealSqftPerHour:100}),/Planned/);
     await assert.rejects(()=>service.standard({...asOwner,factoryId:"other"},machine.id,{plannedHoursPerDay:8,idealSqftPerHour:100}),/not found/);
   });
+  it("starts the all-dates period at the earliest record, and keeps month-to-date as the default", async () => {
+    const { factory, asOwner } = await staffFactory("analytics-all");
+    const service = new AnalyticsService(prisma as never, new AuditService(prisma as never));
+    const today = currentFactoryDate();
+    // Nothing recorded yet: "all dates" is just today, never an invalid range.
+    const empty = await service.snapshot(factory.id, "all");
+    assert.equal(empty.period.from, today);
+    assert.equal(empty.period.to, today);
+
+    await expenses.create(asOwner, { category: "other", amount: 500, expenseDate: "2025-11-03", clientOpId: "an-all-old" });
+    await expenses.create(asOwner, { category: "other", amount: 200, expenseDate: today, clientOpId: "an-all-new" });
+    const all = await service.snapshot(factory.id, "all");
+    assert.equal(all.period.from, "2025-11-03", "all dates starts at the earliest record");
+    assert.equal(all.period.to, today);
+
+    const monthToDate = await service.snapshot(factory.id);
+    assert.equal(monthToDate.period.from, today.slice(0, 7) + "-01", "no period still means this month");
+  });
   it("saves encrypted provider settings and document reviews without financial posting",async()=>{
     const {factory,asOwner}=await staffFactory("ai-settings");const audit=new AuditService(prisma as never);const ai=new OpenaiService(prisma as never,new AnalyticsService(prisma as never,audit),audit,new FilesService(prisma as never,audit));
     const oldSecret=process.env.SESSION_SECRET;process.env.SESSION_SECRET="local-test-encryption-secret";

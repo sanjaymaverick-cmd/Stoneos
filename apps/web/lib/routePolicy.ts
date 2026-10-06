@@ -19,6 +19,7 @@ const floor: Role[] = [
   "sales",
 ];
 const owners: Role[] = ["owner", "manager", "admin"];
+const production: Role[] = [...floor, "operator"];
 const money: Role[] = [...owners, "accountant", "auditor"];
 export const routes: Array<{
   href: string;
@@ -30,9 +31,26 @@ export const routes: Array<{
   { href: "/inventory", label: "Yard", roles: floor },
   { href: "/production", label: "Cut", roles: [...floor, "operator"] },
   { href: "/sales", label: "Sell", roles: floor },
-  { href: "/sales/reports", label: "Party reports", roles: [...floor, ...money], nav: false },
+  {
+    href: "/sales/reports",
+    label: "Party reports",
+    roles: [...floor, ...money],
+    nav: false,
+  },
   { href: "/expenses", label: "Money", roles: money },
-  { href: "/parties", label: "Buyers & suppliers", roles: [...floor, ...money], nav: false },
+  {
+    href: "/parties",
+    label: "Buyers & suppliers",
+    roles: [...floor, ...money],
+    nav: false,
+  },
+  { href: "/consumables", label: "Consumables", roles: production, nav: false },
+  {
+    href: "/recovery-ratio",
+    label: "Recovery & quality",
+    roles: production,
+    nav: false,
+  },
   ...[
     {
       href: "/muster",
@@ -50,7 +68,11 @@ export const routes: Array<{
     { href: "/books/import", label: "Import", roles: owners },
     { href: "/muster/payroll", label: "Payroll", roles: owners },
     { href: "/tally", label: "Tally archive", roles: owners },
-    { href: "/analytics", label: "Business insights", roles: ["owner"] as Role[] },
+    {
+      href: "/analytics",
+      label: "Business insights",
+      roles: ["owner"] as Role[],
+    },
     { href: "/intake", label: "Drafts", roles: owners },
     { href: "/files", label: "Attachments", roles: floor },
     { href: "/setup/opening-inventory", label: "Opening count", roles: owners },

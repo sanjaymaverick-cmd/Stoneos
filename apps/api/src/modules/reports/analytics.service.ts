@@ -32,7 +32,7 @@ export class AnalyticsService {
   async snapshot(factoryId: string, fromIn?: string, toIn?: string) {
     const today = factoryToday();
     const to = toIn || today;
-    const from = fromIn || to.slice(0, 7) + "-01";
+    let from = fromIn === "all" ? to : fromIn || to.slice(0, 7) + "-01";
     try {
       parseOperationalDate(from);
       parseOperationalDate(to);
@@ -43,9 +43,6 @@ export class AnalyticsService {
       throw new BadRequestException(
         "Choose a past or current period with start before end",
       );
-    const periodDays = daysBetween(from, to) + 1;
-    const priorTo = day(new Date(Date.parse(from) - 86400000));
-    const priorFrom = day(new Date(Date.parse(from) - periodDays * 86400000));
     const data = await this.prisma.$transaction(
       async (tx) => {
         const [
@@ -121,6 +118,27 @@ export class AnalyticsService {
       },
       { isolationLevel: "RepeatableRead", timeout: 20000 },
     );
+    if (fromIn === "all") {
+      const dates = [
+        to,
+        ...data.invoices.map((i) =>
+          i.invoiceDate ? day(i.invoiceDate) : factoryToday(i.createdAt),
+        ),
+        ...data.invoices.flatMap((i) =>
+          i.payments.map((p) => factoryToday(p.paidAt)),
+        ),
+        ...data.expenses.map((e) => day(e.expenseDate)),
+        ...data.orders.map((o) =>
+          o.cashSale ? day(o.cashSale.saleDate) : factoryToday(o.createdAt),
+        ),
+        ...data.runtime.map((r) => day(r.operationalDate)),
+        ...data.polishing.map((p) => day(p.operationalDate)),
+      ];
+      from = dates.filter((d) => d <= to).sort()[0] ?? to;
+    }
+    const periodDays = daysBetween(from, to) + 1;
+    const priorTo = day(new Date(Date.parse(from) - 86400000));
+    const priorFrom = day(new Date(Date.parse(from) - periodDays * 86400000));
     const sources = new Map<
       string,
       { id: string; label: string; url: string }

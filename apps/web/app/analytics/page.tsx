@@ -71,9 +71,9 @@ export default function AnalyticsPage() {
     [draft, setDraft] = useState<Row | null>(null),
     [draftFields, setDraftFields] = useState<DocumentFields | null>(null),
     [drafts, setDrafts] = useState<Row[]>([]);
-  const load = async () => {
+  const load = async (start = from || "all", end = to) => {
     const [d, s] = await Promise.all([
-      apiFetch<Row>("/api/v1/reports/analytics?from=" + from + "&to=" + to),
+      apiFetch<Row>("/api/v1/reports/analytics?from=" + start + "&to=" + end),
       apiFetch<Row>("/api/v1/reports/analytics/settings"),
     ]);
     setData(d);
@@ -153,11 +153,54 @@ export default function AnalyticsPage() {
         Sales, collections and expenses follow the selected document dates.
         Stock, costs and dispatch are current snapshots.
       </p>
+      <div
+        className="period-presets"
+        role="group"
+        aria-label="Reporting period"
+      >
+        {[
+          "All dates",
+          "This month",
+          "Last month",
+          "This financial year",
+          "Last financial year",
+        ].map((label) => (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            key={label}
+            onClick={() => {
+              const [year, month] = today.split("-").map(Number);
+              let start = today.slice(0, 7) + "-01",
+                end = today;
+              const fy = year! - (month! < 4 ? 1 : 0);
+              if (label === "All dates") start = "all";
+              if (label === "This financial year") start = `${fy}-04-01`;
+              if (label === "Last financial year") {
+                start = `${fy - 1}-04-01`;
+                end = `${fy}-03-31`;
+              }
+              if (label === "Last month") {
+                end = new Date(Date.UTC(year!, month! - 1, 0))
+                  .toISOString()
+                  .slice(0, 10);
+                start = end.slice(0, 7) + "-01";
+              }
+              setFrom(start === "all" ? "" : start);
+              setTo(end);
+              void run(() => load(start, end));
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <form
         className="card row"
         onSubmit={(e) => {
           e.preventDefault();
-          run(load);
+          run(() => load());
         }}
       >
         <label>
@@ -167,7 +210,6 @@ export default function AnalyticsPage() {
             value={from}
             onChange={(e) => setFrom(e.target.value)}
             max={to}
-            required
           />
         </label>
         <label>
@@ -801,8 +843,8 @@ export default function AnalyticsPage() {
           </details>
         </>
       )}
-      <section className="card">
-        <h2>Read a supplier bill or delivery note</h2>
+      <details className="card">
+        <summary>Read a supplier bill or delivery note</summary>
         <p>
           Upload a clear image or PDF, up to 4 MB. Reading uses OpenAI and
           creates a draft for review. Approved drafts are kept for manual entry.
@@ -865,7 +907,7 @@ export default function AnalyticsPage() {
             <Link href="/intake">Open drafts ↗</Link>
           </form>
         )}
-      </section>
+      </details>
       <details className="card">
         <summary>Targets & OpenAI settings</summary>
         <form

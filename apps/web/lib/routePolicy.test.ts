@@ -37,15 +37,45 @@ describe("yard navigation", () => {
 describe("lot screens", () => {
   it("follows the yard's roles", () => {
     // Counting and selling stock is floor work; the books roles have no business there.
-    for (const role of ["owner", "manager", "supervisor", "inventory", "sales"] as Role[]) {
-      assert.equal(canAccessPath(role, "/lots"), true, `${role} should reach /lots`);
-      assert.equal(canAccessPath(role, "/lots/sell"), true, `${role} should reach /lots/sell`);
-      assert.equal(canAccessPath(role, "/lots/dispatch"), true, `${role} should reach /lots/dispatch`);
+    for (const role of [
+      "owner",
+      "manager",
+      "supervisor",
+      "inventory",
+      "sales",
+    ] as Role[]) {
+      assert.equal(
+        canAccessPath(role, "/lots"),
+        true,
+        `${role} should reach /lots`,
+      );
+      assert.equal(
+        canAccessPath(role, "/lots/sell"),
+        true,
+        `${role} should reach /lots/sell`,
+      );
+      assert.equal(
+        canAccessPath(role, "/lots/dispatch"),
+        true,
+        `${role} should reach /lots/dispatch`,
+      );
     }
     for (const role of ["accountant", "auditor", "operator"] as Role[]) {
-      assert.equal(canAccessPath(role, "/lots"), false, `${role} should not reach /lots`);
-      assert.equal(canAccessPath(role, "/lots/sell"), false, `${role} should not reach /lots/sell`);
-      assert.equal(canAccessPath(role, "/lots/dispatch"), false, `${role} should not reach /lots/dispatch`);
+      assert.equal(
+        canAccessPath(role, "/lots"),
+        false,
+        `${role} should not reach /lots`,
+      );
+      assert.equal(
+        canAccessPath(role, "/lots/sell"),
+        false,
+        `${role} should not reach /lots/sell`,
+      );
+      assert.equal(
+        canAccessPath(role, "/lots/dispatch"),
+        false,
+        `${role} should not reach /lots/dispatch`,
+      );
     }
   });
 
@@ -59,4 +89,16 @@ describe("lot screens", () => {
   });
 });
 
-it("keeps financial insights owner-only without adding a primary tab",()=>{assert.equal(canAccessPath("owner","/analytics"),true);for(const role of ["supervisor","operator","manager","auditor"] as Role[])assert.equal(canAccessPath(role,"/analytics"),false);assert.equal(visibleRoutes("owner").length,5);});
+it("keeps financial insights owner-only without adding a primary tab", () => {
+  assert.equal(canAccessPath("owner", "/analytics"), true);
+  for (const role of ["supervisor", "operator", "manager", "auditor"] as Role[])
+    assert.equal(canAccessPath(role, "/analytics"), false);
+  assert.equal(visibleRoutes("owner").length, 5);
+});
+
+it("makes materials and recovery discoverable with floor-only access", () => {
+  for (const path of ["/consumables", "/recovery-ratio"])
+    for (const role of ["owner", "supervisor", "operator", "auditor"] as Role[])
+      assert.equal(canAccessPath(role, path), role !== "auditor");
+  assert.equal(visibleRoutes("owner").length, 5);
+});
