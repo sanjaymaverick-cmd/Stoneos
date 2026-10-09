@@ -1,5 +1,7 @@
 # Handoff for Grok
 
+Latest continuation (9 October 2026): [September openings and completed Oracle cleanup](handoff-september-opening-2026-10-09.md). Read this first: operational database has been cleared at the user's request; prior release counts are historical. Source explanations and unresolved import questions are recorded privately in this local handoff.
+
 Latest release (9 October 2026): [Oracle opening balances and collection details](releases/2026-10-09-opening-balances.md). Code `15a98e8` is deployed and verified with 21 migrations, healthy services and unchanged existing business-record checksums. API 183/183, focused WIP lifecycle 1/1, browser flows 4/4, and all five PR CI checks passed. [Opening-date/WIP rules](opening-balances.md) and [collection details](customer-collection-details.md). No customer opening figures or production test entries have been entered.
 
 Latest continuation: [6 October 2026 — PR #31 review and local UI/UX work](handoff-2026-10-06.md). Read before resuming; preserves the dirty workspace and distinguishes completed checks from pending sales/mobile verification.
