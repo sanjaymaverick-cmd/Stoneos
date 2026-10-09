@@ -10,6 +10,9 @@ export class OpeningBalancesController {
   @Get()
   @Roles(...BOOKS_STATEMENT_ROLES)
   list(@CurrentUser() user: AuthenticatedUser) { return this.service.list(user.factoryId); }
+  @Get("job-stock")
+  @Roles(...BOOKS_STATEMENT_ROLES)
+  jobStock(@CurrentUser() user: AuthenticatedUser) { return this.service.jobStock(user.factoryId); }
   @Post()
   @Roles(...HISTORICAL_IMPORT_ROLES)
   create(@CurrentUser() user: AuthenticatedUser, @Body() body: Draft & { clientOpId: string }) { return this.service.create(user, body); }

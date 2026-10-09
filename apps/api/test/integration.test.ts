@@ -1126,6 +1126,43 @@ describe("postgres-backed workflows", () => {
   });
 
 
+  it("opens sqft-only lots, customer job stock, supplier advances and deposits without distorting the books", async () => {
+    const { factory, asOwner, asManager } = await staffFactory("opening-sqft-job");
+    const service = new OpeningBalancesService(prisma as never);
+    const base = { title: "Close", effectiveDate: "2026-10-01" };
+    await assert.rejects(() => service.create(asOwner, { ...base, clientOpId: "jb1", lines: [{ ref: "j", kind: "JOB_STOCK", name: "Rough", serial: "J-1", jobStage: "rough", totalSqft: 100, amount: 500 }] }), /not a Vedam asset/);
+    await assert.rejects(() => service.create(asOwner, { ...base, clientOpId: "jb2", lines: [{ ref: "l", kind: "FINISHED_LOT", name: "Apple", serial: "L-1", totalSqft: 100, quantity: 5, amount: 1000 }] }), /not both/);
+    await assert.rejects(() => service.create(asOwner, { ...base, clientOpId: "jb3", lines: [{ ref: "l", kind: "FINISHED_LOT", name: "Apple", serial: "L-1", totalSqft: 10.5, amount: 1000 }] }), /Total sqft/);
+    const lines: OpeningRow[] = [
+      { ref: "ruff", kind: "UNPOLISHED_LOT", name: "Ruff maal", serial: "OLD-RUFF", totalSqft: 18142, amount: 362840 },
+      { ref: "apple", kind: "FINISHED_LOT", name: "Apple", serial: "OLD-APPLE", totalSqft: 1419, amount: 78045 },
+      { ref: "job", kind: "JOB_STOCK", name: "Job rough", serial: "JOB-ROUGH", jobStage: "rough", totalSqft: 11808, weightTons: 12.5, customerName: "Job Customer", amount: 0 },
+      { ref: "adv", kind: "ADVANCE", name: "Sagar Mines", amount: 8625 },
+      { ref: "dep", kind: "DEPOSIT", name: "Solar lender", amount: 1672860 },
+      { ref: "grease", kind: "CONSUMABLE", name: "Mobil EP 2 grease", unit: "kg", quantity: 10, amount: 3300 },
+    ];
+    const draft = await service.create(asOwner, { ...base, clientOpId: "sqft-job", lines });
+    const submitted = await service.transition(asOwner, draft.id, draft.version);
+    await service.approve(asManager, draft.id, { baseVersion: submitted.version, reconciled: true });
+    const ruff = await prisma.rawBlock.findFirstOrThrow({ where: { factoryId: factory.id, serialNumber: "OLD-RUFF" } });
+    assert.equal(ruff.goodSlabCount, 18142);
+    assert.equal(Number(ruff.sqftPerSlab), 1);
+    assert.match(ruff.qualityNote!, /slab count not recorded/);
+    assert.equal(await prisma.rawBlock.count({ where: { factoryId: factory.id, serialNumber: "JOB-ROUGH" } }), 0);
+    const jobStock = await service.jobStock(factory.id);
+    assert.equal(jobStock.length, 1);
+    assert.equal(Number(jobStock[0].sqft), 11808);
+    assert.equal(jobStock[0].customerName, "Job Customer");
+    assert.equal(await prisma.voucher.count({ where: { factoryId: factory.id } }), 5);
+    const trial = await books.trialBalance(factory.id);
+    assert.equal(trial.reduce((n, l) => n + l.debit, 0), trial.reduce((n, l) => n + l.credit, 0));
+    assert.equal(trial.find(l => l.code === "SUPPLIER_ADVANCE")!.debit, 8625);
+    assert.equal(trial.find(l => l.code === "SECURITY_DEPOSIT")!.debit, 1672860);
+    assert.equal(trial.find(l => l.code === "STOCK")!.debit, 78045);
+    assert.equal((await prisma.consumable.findFirstOrThrow({ where: { factoryId: factory.id, name: "Mobil EP 2 grease" } })).unit, "kg");
+  });
+
+
   it("preserves a live factory's existing records and rolls back duplicate opening stock", async () => {
     const { factory, asOwner, asManager } = await staffFactory("opening-live");
     const originalDate = new Date("2026-09-01T01:30:00Z");
@@ -2428,7 +2465,8 @@ describe("postgres-backed workflows", () => {
       (error: { status?: number; response?: { code?: string } }) =>
         error.status === 409 && error.response?.code === "CONSUMABLE_EXISTS",
     );
-    await assert.rejects(() => consumables.create(asOwner, { name: "Grout", unit: "bucket" }), /piece, litre/);
+    await assert.rejects(() => consumables.create(asOwner, { name: "Grout", unit: "bucket" }), /piece, litre, kg/);
+    assert.equal((await consumables.create(asOwner, { name: "Mobil EP 2 grease", unit: "kg", onHand: 10 })).unit, "kg");
     await assert.rejects(() => consumables.create(asOwner, { name: "Blades", unit: "piece", onHand: -3 }), /negative/);
     const blades = await consumables.create(asOwner, { name: "  Blades  ", unit: "piece", onHand: 12 });
     assert.equal(blades.name, "Blades");

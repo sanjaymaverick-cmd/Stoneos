@@ -17,6 +17,8 @@ export const SYSTEM_LEDGERS: Array<{
   { code: "WIP_STOCK", name: "Opening work in progress", group: "asset", kind: "other" },
   { code: "CONSUMABLE_STOCK", name: "Opening consumables", group: "asset", kind: "other" },
   { code: "STOCK", name: "Finished stock", group: "asset", kind: "other" },
+  { code: "SUPPLIER_ADVANCE", name: "Advances paid to suppliers", group: "asset", kind: "other" },
+  { code: "SECURITY_DEPOSIT", name: "Security deposits paid", group: "asset", kind: "other" },
   { code: "AP", name: "Accounts payable", group: "liability", kind: "ap" },
   { code: "SALES", name: "Sales", group: "income", kind: "sales" },
   { code: "CN_CONTRA", name: "Credit notes", group: "income", kind: "sales" },

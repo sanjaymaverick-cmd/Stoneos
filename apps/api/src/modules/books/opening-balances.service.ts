@@ -9,13 +9,14 @@ import { bankLedgerForMethod } from "./chart";
 import { parseBusinessDate, parseFactoryDate, partyNameKey, rupeesToMinor } from "./money";
 import { ensureParty, postVoucher } from "./posting";
 
-export const OPENING_KINDS = ["RAW_BLOCK", "UNPOLISHED_LOT", "FINISHED_LOT", "CONSUMABLE", "DEBTOR", "CREDITOR", "CASH", "BANK"] as const;
+export const OPENING_KINDS = ["RAW_BLOCK", "UNPOLISHED_LOT", "FINISHED_LOT", "CONSUMABLE", "DEBTOR", "CREDITOR", "CASH", "BANK", "JOB_STOCK", "ADVANCE", "DEPOSIT"] as const;
 export type OpeningRow = {
   ref: string; kind: typeof OPENING_KINDS[number]; name: string; amount: number;
   note?: string; sourceReference?: string; serial?: string; quantity?: number;
   weightTons?: number; sqftPerSlab?: number; unit?: string;
   pendingCash?: number; pendingBank?: number;
   processingStage?: string; workLocation?: string;
+  totalSqft?: number; customerName?: string; jobStage?: string;
 };
 type BatchInput = { title: string; effectiveDate: string; note?: string; lines: OpeningRow[] };
 type SettlementInput = { amount: number; method: string; paidAt: string; note?: string; receivedBy?: string; reference?: string; pendingBucket?: "cash" | "bank"; clientOpId: string };
@@ -45,8 +46,8 @@ function normalize(input: BatchInput) {
     if (seen.has(ref)) throw new BadRequestException("Duplicate line reference");
     seen.add(ref);
     const line: OpeningRow = { ref, kind: row.kind, name: text(row.name, "Name / variety", true, 200), amount: number(row.amount, "Opening value", 20000000), note: text(row.note, "Note"), sourceReference: text(row.sourceReference, "Source reference") };
-    if (["DEBTOR", "CREDITOR", "CASH", "BANK"].includes(row.kind) && !line.amount) throw new BadRequestException("Financial opening amount must be positive");
-    if (["RAW_BLOCK", "UNPOLISHED_LOT", "FINISHED_LOT"].includes(row.kind)) {
+    if (["DEBTOR", "CREDITOR", "CASH", "BANK", "ADVANCE", "DEPOSIT"].includes(row.kind) && !line.amount) throw new BadRequestException("Financial opening amount must be positive");
+    if (["RAW_BLOCK", "UNPOLISHED_LOT", "FINISHED_LOT", "JOB_STOCK"].includes(row.kind)) {
       line.serial = text(row.serial, "Block / lot reference", true, 200);
       const key = `stock:${line.serial}`;
       if (assets.has(key)) throw new BadRequestException("Repeated stock reference in opening batch");
@@ -59,11 +60,29 @@ function normalize(input: BatchInput) {
       line.workLocation = text(row.workLocation, "Machine / work location", false, 200);
     }
     if (["UNPOLISHED_LOT", "FINISHED_LOT"].includes(row.kind)) {
-      line.quantity = number(row.quantity, "Slab count", 1000000, 0, true);
-      line.sqftPerSlab = number(row.sqftPerSlab, "Sqft per slab", 999999.99, 2, true);
+      if (row.totalSqft !== undefined && row.totalSqft !== null) {
+        // No slab count is known: the lot is stored as whole square feet, one unit per sqft.
+        if (row.quantity || row.sqftPerSlab) throw new BadRequestException("Enter either total sqft or slab count with sqft per slab, not both");
+        line.totalSqft = number(row.totalSqft, "Total sqft", 1000000, 0, true);
+      } else {
+        line.quantity = number(row.quantity, "Slab count", 1000000, 0, true);
+        line.sqftPerSlab = number(row.sqftPerSlab, "Sqft per slab", 999999.99, 2, true);
+      }
+    }
+    if (row.kind === "JOB_STOCK") {
+      if (line.amount) throw new BadRequestException("Customer-owned job stock is not a Vedam asset; leave its value at zero");
+      line.totalSqft = number(row.totalSqft, "Total sqft", 100000000, 2, true);
+      if (row.weightTons !== undefined && row.weightTons !== null && row.weightTons !== 0) line.weightTons = number(row.weightTons, "Raw material tons", 100000, 3, true);
+      line.jobStage = text(row.jobStage, "Job stage", true, 100);
+      line.customerName = text(row.customerName, "Customer", false, 200);
+    }
+    if (["ADVANCE", "DEPOSIT"].includes(row.kind)) {
+      const key = `${row.kind}:${partyNameKey(line.name)}`;
+      if (assets.has(key)) throw new BadRequestException("Combine this party's opening into one line");
+      assets.add(key);
     }
     if (row.kind === "CONSUMABLE") {
-      if (!isConsumableUnit(row.unit)) throw new BadRequestException("Consumable unit must be piece or litre");
+      if (!isConsumableUnit(row.unit)) throw new BadRequestException("Consumable unit must be piece, litre or kg");
       line.unit = row.unit;
       line.quantity = number(row.quantity, "Consumable quantity", 1000000, 3, true);
       const key = `consumable:${partyNameKey(line.name)}`;
@@ -89,6 +108,9 @@ function normalize(input: BatchInput) {
 export class OpeningBalancesService {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
+  jobStock(factoryId: string) {
+    return this.prisma.customerOwnedStock.findMany({ where: { factoryId }, orderBy: [{ stage: "asc" }, { reference: "asc" }] });
+  }
   list(factoryId: string) {
     return this.prisma.openingBalanceBatch.findMany({ where: { factoryId }, include, orderBy: { createdAt: "desc" } });
   }
@@ -167,9 +189,9 @@ export class OpeningBalancesService {
           if (await tx.rawBlock.findUnique({ where: { factoryId_serialNumber: { factoryId: user.factoryId, serialNumber: row.serial! } } })) throw new ConflictException(`Stock reference ${row.serial} already exists; reconcile it rather than duplicate it`);
           const code = row.kind === "RAW_BLOCK" ? "RAW_YARD" : row.kind === "FINISHED_LOT" ? "FINISHED_STOCK" : row.processingStage && row.processingStage !== "rough" ? "LPM_WIP" : "UNPOLISHED_STOCK";
           const location = await tx.inventoryLocation.upsert({ where: { factoryId_code: { factoryId: user.factoryId, code } }, update: {}, create: { factoryId: user.factoryId, code, name: code.replaceAll("_", " "), locationType: code as "RAW_YARD" | "FINISHED_STOCK" | "UNPOLISHED_STOCK" | "LPM_WIP" } });
-          const block = await tx.rawBlock.create({ data: { factoryId: user.factoryId, serialNumber: row.serial!, varietyName: row.name, weightTons: row.weightTons, purchaseTaxable: row.amount, purchaseDate: day, openingReference: line.id, qualityNote: [row.processingStage ? `Opening stage: ${row.processingStage}` : "", row.workLocation, row.note, row.sourceReference].filter(Boolean).join(" · "), locationId: location.id, currentStatus: row.kind === "RAW_BLOCK" ? "in_stock" : "cut", goodSlabCount: row.quantity ?? 0, polishedSlabCount: row.kind === "FINISHED_LOT" ? row.quantity! : 0, sqftPerSlab: row.sqftPerSlab, createdAt: day } });
+          const block = await tx.rawBlock.create({ data: { factoryId: user.factoryId, serialNumber: row.serial!, varietyName: row.name, weightTons: row.weightTons, purchaseTaxable: row.amount, purchaseDate: day, openingReference: line.id, qualityNote: [row.totalSqft ? "Aggregate opening lot: 1 unit = 1 sqft, slab count not recorded" : "", row.processingStage ? `Opening stage: ${row.processingStage}` : "", row.workLocation, row.note, row.sourceReference].filter(Boolean).join(" · "), locationId: location.id, currentStatus: row.kind === "RAW_BLOCK" ? "in_stock" : "cut", goodSlabCount: row.quantity ?? row.totalSqft ?? 0, polishedSlabCount: row.kind === "FINISHED_LOT" ? row.quantity ?? row.totalSqft! : 0, sqftPerSlab: row.sqftPerSlab ?? (row.totalSqft ? 1 : undefined), createdAt: day } });
           entityId = block.id;
-          await tx.inventoryMovement.create({ data: { factoryId: user.factoryId, rawBlockId: block.id, movementType: "OPENING_RECEIPT", quantity: row.quantity ?? 1, idempotencyKey: `opening-balance:${line.id}`, actorId: user.id, notes: `Opening ${batch.title}: ${row.note ?? ""}`, createdAt: day } });
+          await tx.inventoryMovement.create({ data: { factoryId: user.factoryId, rawBlockId: block.id, movementType: "OPENING_RECEIPT", quantity: row.quantity ?? row.totalSqft ?? 1, idempotencyKey: `opening-balance:${line.id}`, actorId: user.id, notes: `Opening ${batch.title}: ${row.note ?? ""}`, createdAt: day } });
           ledger = row.kind === "RAW_BLOCK" ? "RAW_STOCK" : row.kind === "FINISHED_LOT" ? "STOCK" : "WIP_STOCK";
         } else if (row.kind === "CONSUMABLE") {
           const matches = (await tx.consumable.findMany({ where: { factoryId: user.factoryId } })).filter(c => partyNameKey(c.name) === partyNameKey(row.name));
@@ -181,6 +203,13 @@ export class OpeningBalancesService {
           await tx.consumableMovement.create({ data: { factoryId: user.factoryId, consumableId: item.id, direction: "receipt", quantity: row.quantity!, reason: `Opening ${batch.title}: ${row.note ?? ""}`, occurredOn: day, actorId: user.id, clientOpId: `opening-balance:${line.id}` } });
           entityId = item.id;
           ledger = "CONSUMABLE_STOCK";
+        } else if (row.kind === "JOB_STOCK") {
+          if (await tx.customerOwnedStock.findUnique({ where: { factoryId_reference: { factoryId: user.factoryId, reference: row.serial! } } })) throw new ConflictException(`Job stock reference ${row.serial} already exists`);
+          const job = await tx.customerOwnedStock.create({ data: { factoryId: user.factoryId, lineId: line.id, reference: row.serial!, customerName: row.customerName || null, material: row.name, stage: row.jobStage!, sqft: row.totalSqft!, weightTons: row.weightTons, asOfDate: day, note: [row.note, row.sourceReference].filter(Boolean).join(" · ") || null } });
+          entityId = job.id;
+        } else if (row.kind === "ADVANCE" || row.kind === "DEPOSIT") {
+          partyId = (await ensureParty(tx, user.factoryId, row.name, "supplier")).id;
+          ledger = row.kind === "ADVANCE" ? "SUPPLIER_ADVANCE" : "SECURITY_DEPOSIT";
         } else if (["DEBTOR", "CREDITOR"].includes(row.kind)) {
           const party = await ensureParty(tx, user.factoryId, row.name, row.kind === "DEBTOR" ? "customer" : "supplier");
           partyId = party.id;
