@@ -1,6 +1,6 @@
 # Handoff for Grok
 
-Latest local work (9 October 2026): [dated arbitrary opening balances](opening-balances.md) and [collection plans with annotated receipts](customer-collection-details.md). Includes unfinished-slab stages and invoice-free settlements. API 183/183 and builds/typechecks passed, plus the focused WIP-stage lifecycle. Desktop/mobile opening and collection browser flows passed 4/4 without retries. Oracle preflight confirmed `35fb22d`, 19 migrations and healthy services. Deployment verification is pending.
+Latest release (9 October 2026): [Oracle opening balances and collection details](releases/2026-10-09-opening-balances.md). Code `15a98e8` is deployed and verified with 21 migrations, healthy services and unchanged existing business-record checksums. API 183/183, focused WIP lifecycle 1/1, browser flows 4/4, and all five PR CI checks passed. [Opening-date/WIP rules](opening-balances.md) and [collection details](customer-collection-details.md). No customer opening figures or production test entries have been entered.
 
 Latest continuation: [6 October 2026 — PR #31 review and local UI/UX work](handoff-2026-10-06.md). Read before resuming; preserves the dirty workspace and distinguishes completed checks from pending sales/mobile verification.
 
