@@ -19,6 +19,8 @@ import { IdempotencyService } from "../src/common/idempotency";
 import { FilesService } from "../src/modules/files/files.service";
 import { OpeningBalancesService, type OpeningRow } from "../src/modules/books/opening-balances.service";
 import { BooksService } from "../src/modules/books/books.service";
+import { TradeService } from "../src/modules/books/trade.service";
+import { ensureParty, postVoucher } from "../src/modules/books/posting";
 import { KhataService } from "../src/modules/books/khata.service";
 import { IntakeService } from "../src/modules/books/intake.service";
 import { MusterService } from "../src/modules/muster/muster.service";
@@ -174,6 +176,42 @@ describe("postgres-backed workflows", () => {
       active: true,
       sessionId: "test",
     };
+  });
+
+  it("trade register balances split settlements, credit, advances, purchases and retry protection", async () => {
+    const { factory, asOwner } = await staffFactory("trade-register");
+    const svc = new TradeService(prisma as never);
+    await inventory.ensureDefaultLocations(factory.id);
+    await prisma.$transaction(async tx => {
+      const p = await ensureParty(tx,factory.id,"Creditor","supplier");
+      await postVoucher(tx,{factoryId:factory.id,type:"journal",source:"manual",clientOpId:"seed-creditor",createdBy:asOwner.id,partyId:p.id,lines:[{ledgerCode:"OPENING_EQUITY",debit:50000,credit:0},{ledgerCode:"AP",debit:0,credit:50000,partyId:p.id}]});
+    });
+    const sale = {kind:"local_sale",reference:"S1",partyName:"Buyer",date:currentFactoryDate(),clientOpId:"s1",materialAmount:1000,lines:[{variety:"Black",sqft:10,rate:100}],payments:[{kind:"funds",account:"Cash",amount:200},{kind:"creditor",account:"Creditor",amount:300},{kind:"vendor_advance",account:"CCTV vendor",amount:100}]};
+    const doc = await svc.create(asOwner,sale);
+    assert.equal((await svc.create(asOwner,sale)).id,doc.id);
+    assert.equal((await svc.list(factory.id))[0]!.outstanding,400);
+    assert.equal(doc.stockStatus,"pending_lot_allocation");
+    await assert.rejects(()=>svc.create(asOwner,{...sale,materialAmount:999}),/different data/);
+    await assert.rejects(()=>svc.create(asOwner,{...sale,clientOpId:"duplicate-ref"}));
+    const foreign = await staffFactory("foreign-trade");
+    await assert.rejects(()=>svc.settle(foreign.asOwner,doc.id,{date:currentFactoryDate(),clientOpId:"p1",payment:{kind:"funds",account:"Cash",amount:1}}),/not found/);
+    await assert.rejects(()=>svc.settle(asOwner,doc.id,{date:currentFactoryDate(),clientOpId:"p1",payment:{kind:"funds",account:"Cash",amount:401}}),/outstanding/);
+    const payment={date:currentFactoryDate(),clientOpId:"p1",payment:{kind:"funds",account:"Jagdish PhonePe",amount:400,note:"received"}};
+    await svc.settle(asOwner,doc.id,payment);await svc.settle(asOwner,doc.id,payment);
+    assert.equal((await svc.list(factory.id))[0]!.outstanding,0);
+    await assert.rejects(()=>svc.settle(asOwner,doc.id,{...payment,payment:{...payment.payment,amount:300}}),/reused/);
+    const purchase={kind:"raw_purchase",reference:"P1",partyName:"Quarry",date:currentFactoryDate(),clientOpId:"r1",materialAmount:1000,invoiceTaxable:500,gstAmount:25,royalty:100,transport:100,lines:[{variety:"Black",serial:"TRADE-1",weightTons:10},{variety:"Black",serial:"TRADE-2",weightTons:20}],payments:[{kind:"funds",account:"ICICI CC",amount:1025}]};
+    await svc.create(asOwner,purchase);
+    assert.equal(await prisma.rawBlock.count({where:{factoryId:factory.id}}),2);
+    await assert.rejects(()=>svc.create(asOwner,{...purchase,reference:"P2",clientOpId:"r2"}));
+    assert.equal(await prisma.tradeDocument.count({where:{factoryId:factory.id}}),2,"duplicate block rolls back document and vouchers");
+    await assert.rejects(()=>svc.create(asOwner,{...sale,reference:"Bad",clientOpId:"bad",date:"2026-02-30"}),/date/);
+    const vouchers=await prisma.voucher.findMany({where:{factoryId:factory.id},include:{lines:true}});
+    for(const v of vouchers) assert.equal(v.lines.reduce((n,l)=>n+l.debit,0),v.lines.reduce((n,l)=>n+l.credit,0));
+    const balances=await books.trialBalance(factory.id);
+    const stock=balances.find(l=>l.code==="RAW_STOCK")!;assert.equal(stock.debit-stock.credit,1200);
+    const report=await new PartyReportService(prisma as never).report(factory.id,{side:"supplier"});
+    assert.ok(report.rows.filter(r=>r.type==="Purchase").length<=1,"trade blocks do not duplicate purchase vouchers in reports");
   });
 
   after(async () => {

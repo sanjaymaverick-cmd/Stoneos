@@ -200,6 +200,7 @@ enum IntakeStatus {
 }
 
 model Factory {
+  tradeDocuments TradeDocument[]
   openingBalanceBatches OpeningBalanceBatch[]
   openingSettlements OpeningSettlement[]
   customerOwnedStock CustomerOwnedStock[]
@@ -259,6 +260,44 @@ model Factory {
   cashSales          CashSale[]
 
   @@map("factory")
+}
+
+/// Dated local bills and raw purchases, including historical quantity records awaiting lot allocation.
+model TradeDocument {
+  id String @id @default(uuid())
+  factoryId String @map("factory_id")
+  factory Factory @relation(fields: [factoryId], references: [id])
+  kind String
+  reference String
+  partyName String @map("party_name")
+  occurredOn DateTime @map("occurred_on") @db.Date
+  materialAmount Decimal @map("material_amount") @db.Decimal(14,2)
+  customerAdjustment Decimal @default(0) @map("customer_adjustment") @db.Decimal(14,2)
+  gstAmount Decimal @default(0) @map("gst_amount") @db.Decimal(14,2)
+  invoiceTaxable Decimal @default(0) @map("invoice_taxable") @db.Decimal(14,2)
+  payload Json
+  stockStatus String @map("stock_status")
+  requestHash String @map("request_hash")
+  clientOpId String @map("client_op_id")
+  createdBy String @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  settlements TradeSettlement[]
+  @@unique([factoryId, clientOpId])
+  @@unique([factoryId, kind, partyName, reference])
+  @@index([factoryId, occurredOn])
+  @@map("trade_document")
+}
+
+model TradeSettlement {
+  id String @id @default(uuid())
+  documentId String @map("document_id")
+  document TradeDocument @relation(fields: [documentId], references: [id])
+  amount Decimal @db.Decimal(14,2)
+  occurredOn DateTime @map("occurred_on") @db.Date
+  payload Json
+  clientOpId String @map("client_op_id")
+  @@unique([documentId, clientOpId])
+  @@map("trade_settlement")
 }
 
 model AppUser {
@@ -420,6 +459,7 @@ model Machine {
 }
 
 model RawBlock {
+  tradeReference String? @map("trade_reference")
   openingReference String? @map("opening_reference")
   id                 String             @id @default(uuid())
   factoryId          String             @map("factory_id")

@@ -304,7 +304,7 @@ export class PartyReportService {
         );
     }
     for (const b of blocks) {
-      if (b.openingReference) continue;
+      if (b.openingReference || b.tradeReference) continue;
       if (b.currentStatus === "reversed") continue;
       let p = parties.find((p) => p.id === "supplier:" + b.supplierId);
       if (!p) {
@@ -513,7 +513,7 @@ export class PartyReportService {
             ? "Payment received"
             : paid
               ? "Payment made"
-              : "Opening / adjustment",
+              : v.type === "sales" ? "Sale" : v.type === "purchase" ? "Purchase" : v.type === "receipt" ? "Payment received" : v.type === "payment" ? "Payment made" : "Opening / adjustment",
           v.id.slice(0, 8),
           v.memo ?? v.type,
           Math.max(0, delta),
