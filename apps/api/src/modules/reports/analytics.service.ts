@@ -56,6 +56,7 @@ export class AnalyticsService {
           settings,
           finished,
           polishing,
+          openingLines,
         ] = await Promise.all([
           tx.salesOrder.findMany({
             where: { factoryId },
@@ -102,6 +103,7 @@ export class AnalyticsService {
             where: { factoryId },
             include: { slabs: { include: { slab: true, rawBlock: true } } },
           }),
+          tx.openingBalanceLine.findMany({ where: { kind: "DEBTOR", batch: { factoryId, status: "APPROVED" } }, include: { batch: true, settlements: true } }),
         ]);
         return {
           orders,
@@ -114,6 +116,7 @@ export class AnalyticsService {
           settings,
           polishing,
           finished,
+          openingLines,
         };
       },
       { isolationLevel: "RepeatableRead", timeout: 20000 },
@@ -127,6 +130,8 @@ export class AnalyticsService {
         ...data.invoices.flatMap((i) =>
           i.payments.map((p) => factoryToday(p.paidAt)),
         ),
+        ...data.openingLines.map(l => day(l.batch.effectiveDate)),
+        ...data.openingLines.flatMap(l => l.settlements.map(p => day(p.paidAt))),
         ...data.expenses.map((e) => day(e.expenseDate)),
         ...data.orders.map((o) =>
           o.cashSale ? day(o.cashSale.saleDate) : factoryToday(o.createdAt),
@@ -193,6 +198,12 @@ export class AnalyticsService {
           (b.daysOverdue ?? -1) - (a.daysOverdue ?? -1) ||
           b.amountDue - a.amountDue,
       );
+    for (const line of data.openingLines.filter(l => day(l.batch.effectiveDate) <= to)) {
+      const due = minor(line.amount) - line.settlements.filter(p => day(p.paidAt) <= to).reduce((n, p) => n + minor(p.amount), 0);
+      if (due <= 0) continue;
+      const payload = line.payload as { name: string; note?: string };
+      balances.push({ id: line.id, number: "Opening · " + line.ref, customerId: line.entityId!, customer: payload.name, invoiceDate: day(line.batch.effectiveDate), dueDate: null, promisedPaymentDate: null, note: payload.note ?? null, amountDue: rupees(due), daysOverdue: null, bucket: "Due date missing", source: addSource("opening:" + line.id, "Opening " + payload.name, "/books/openings") });
+    }
     const collections = {
       totalDue: balances.reduce((n, i) => n + minor(i.amountDue), 0) / 100,
       overdue:
@@ -241,7 +252,7 @@ export class AnalyticsService {
       netSales:
         data.orders.reduce((n, o) => n + orderValue(o, start, end), 0) / 100,
       collections:
-        (data.invoices
+        (data.openingLines.flatMap(l => l.settlements).filter(p => between(p.paidAt, start, end)).reduce((n, p) => n + minor(p.amount), 0) + data.invoices
           .flatMap((i) => i.payments)
           .filter((p) => between(p.paidAt, start, end))
           .reduce((n, p) => n + minor(p.amount), 0) +

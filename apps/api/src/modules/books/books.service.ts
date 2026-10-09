@@ -21,7 +21,8 @@ export class BooksService {
       where: { factoryId, paidAt },
       _sum: { amount: true },
     });
-    return Number(r._sum.amount ?? 0);
+    const opening = await this.prisma.openingSettlement.aggregate({ where: { factoryId, paidAt, line: { kind: "DEBTOR" } }, _sum: { amount: true } });
+    return Number(r._sum.amount ?? 0) + Number(opening._sum.amount ?? 0);
   }
   async collectedCash(factoryId: string, saleDate: Date) {
     const r = await this.prisma.cashSale.aggregate({
@@ -78,6 +79,9 @@ export class BooksService {
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
     input: {
+      note?: string | null;
+      receivedBy?: string | null;
+      reference?: string | null;
       paymentId: string;
       invoiceId: string;
       customerName: string;
@@ -100,7 +104,7 @@ export class BooksService {
       sourceId: input.paymentId,
       partyId: party.id,
       invoiceId: input.invoiceId,
-      memo: `Collection ${input.method}`,
+      memo: [`Collection ${input.method}`, input.receivedBy ? `Received by: ${input.receivedBy}` : "", input.reference ? `Reference: ${input.reference}` : "", input.note].filter(Boolean).join(" · "),
       lines: [
         { ledgerCode: bank, debit: minor, credit: 0 },
         { ledgerCode: "AR", debit: 0, credit: minor, partyId: party.id },

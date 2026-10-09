@@ -57,6 +57,10 @@ export class SalesService {
     user: AuthenticatedUser,
     customerId: string,
     input: {
+      pendingCash?: number;
+      pendingBank?: number;
+      collectionNote?: string | null;
+      baseVersion?: number;
       name?: string;
       contactInfo?: string | null;
       stateCode?: string | null;
@@ -70,7 +74,16 @@ export class SalesService {
     });
     if (!existing) throw new NotFoundException("Customer not found");
 
+    if (input.baseVersion !== undefined && input.baseVersion !== existing.version) throw new ConflictException("Customer changed; refresh before editing");
     const data: Prisma.CustomerUpdateInput = { version: { increment: 1 } };
+    for (const field of ["pendingCash", "pendingBank"] as const) {
+      const value = input[field];
+      if (value !== undefined) {
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 999999999999.99 || Math.abs(value * 100 - Math.round(value * 100)) > 0.0001) throw new BadRequestException(field + " must be a nonnegative rupee amount with at most two decimals");
+        data[field] = value;
+      }
+    }
+    if (input.collectionNote !== undefined) data.collectionNote = cleanCollectionText(input.collectionNote, "Collection note");
 
     if (input.name !== undefined) {
       const name = input.name.trim();
@@ -105,37 +118,41 @@ export class SalesService {
       data.stateCode = fromGstin ?? claimed;
     }
 
-    const updated = await this.prisma.customer.update({ where: { id: existing.id }, data });
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.customer.update({ where: { id: existing.id, version: existing.version }, data }).catch((error) => { if (error.code === "P2025") throw new ConflictException("Customer changed; refresh before editing"); throw error; });
 
-    // Who a bill is made out to, and at what tax, is worth a record when it changes.
-    await this.prisma.auditEvent.create({
-      data: {
-        factoryId: user.factoryId,
-        actorId: user.id,
-        action: "sales.customer_updated",
-        entityType: "customer",
-        entityId: existing.id,
-        payload: {
-          before: {
-            name: existing.name,
-            gstin: existing.gstin,
-            stateCode: existing.stateCode,
-            billingAddress: existing.billingAddress,
-            shippingAddress: existing.shippingAddress,
-            contactInfo: existing.contactInfo,
-          },
-          after: {
-            name: updated.name,
-            gstin: updated.gstin,
-            stateCode: updated.stateCode,
-            billingAddress: updated.billingAddress,
-            shippingAddress: updated.shippingAddress,
-            contactInfo: updated.contactInfo,
+      // Who a bill is made out to, and at what tax, is worth a record when it changes.
+      await tx.auditEvent.create({
+        data: {
+          factoryId: user.factoryId,
+          actorId: user.id,
+          action: "sales.customer_updated",
+          entityType: "customer",
+          entityId: existing.id,
+          payload: {
+            before: {
+              pendingCash: String(existing.pendingCash), pendingBank: String(existing.pendingBank), collectionNote: existing.collectionNote,
+              name: existing.name,
+              gstin: existing.gstin,
+              stateCode: existing.stateCode,
+              billingAddress: existing.billingAddress,
+              shippingAddress: existing.shippingAddress,
+              contactInfo: existing.contactInfo,
+            },
+            after: {
+              pendingCash: String(updated.pendingCash), pendingBank: String(updated.pendingBank), collectionNote: updated.collectionNote,
+              name: updated.name,
+              gstin: updated.gstin,
+              stateCode: updated.stateCode,
+              billingAddress: updated.billingAddress,
+              shippingAddress: updated.shippingAddress,
+              contactInfo: updated.contactInfo,
+            },
           },
         },
-      },
+      });
+      return updated;
     });
-    return updated;
   }
 
   /**
@@ -747,6 +764,10 @@ export class SalesService {
       paidAt: string;
       clientOpId: string;
       baseVersion?: number;
+      note?: string;
+      receivedBy?: string;
+      reference?: string;
+      pendingBucket?: "cash" | "bank";
     },
   ) {
     // Backstop, not the primary gate. The route carries PAYMENT_ROLES, but this method
@@ -757,6 +778,10 @@ export class SalesService {
     if (!Number.isFinite(input.amount) || input.amount <= 0)
       throw new BadRequestException("Amount must be positive");
     if (typeof input.method !== "string" || !input.method.trim()) throw new BadRequestException("Payment mode is required");
+    const note = cleanCollectionText(input.note, "Payment note");
+    const receivedBy = cleanCollectionText(input.receivedBy, "Received by");
+    const reference = cleanCollectionText(input.reference, "Payment reference");
+    if (input.pendingBucket !== undefined && !["cash", "bank"].includes(input.pendingBucket)) throw new BadRequestException("Unknown pending bucket");
     const paidAt = parseBusinessDate(input.paidAt, "paidAt");
     return this.prisma.$transaction(
       async (tx) => {
@@ -802,11 +827,20 @@ export class SalesService {
               factoryId: user.factoryId,
               invoiceId: invoice.id,
               amount: input.amount,
+              note, receivedBy, reference, pendingBucket: input.pendingBucket ?? null,
               method: input.method,
               paidAt,
               idempotencyKey: input.clientOpId,
             },
           });
+          // Customer lock serializes collection-plan reductions across invoices.
+          if (input.pendingBucket) {
+            await tx.$queryRaw`SELECT id FROM customer WHERE id = ${invoice.customerId} AND factory_id = ${user.factoryId} FOR UPDATE`;
+            const buyer = await tx.customer.findFirstOrThrow({ where: { id: invoice.customerId, factoryId: user.factoryId } });
+            const field = input.pendingBucket === "cash" ? "pendingCash" : "pendingBank";
+            if (rupeesToMinor(input.amount) > rupeesToMinor(Number(buyer[field]))) throw new BadRequestException("Receipt exceeds the selected pending amount; update the breakdown or choose no allocation");
+            await tx.customer.update({ where: { id: buyer.id }, data: { [field]: { decrement: input.amount }, version: { increment: 1 } } });
+          }
           await tx.invoice.update({
             where: { id: invoice.id },
             data: { version: { increment: 1 } },
@@ -818,13 +852,14 @@ export class SalesService {
               action: "sales.payment",
               entityType: "payment",
               entityId: payment.id,
-              payload: { invoiceId: invoice.id, amount: input.amount },
+              payload: { invoiceId: invoice.id, amount: input.amount, note, receivedBy, reference, pendingBucket: input.pendingBucket ?? null },
             },
           });
           const customer = await tx.customer.findFirst({
             where: { id: invoice.customerId, factoryId: user.factoryId },
           });
           await this.books.postPayment(tx, user, {
+            note, receivedBy, reference,
             paymentId: payment.id,
             invoiceId: invoice.id,
             customerName: customer?.name ?? "Unknown",
@@ -1170,4 +1205,10 @@ export class SalesService {
 function hashSlabLoad(slabIds: readonly string[]): string {
   const canonical = [...new Set(slabIds)].sort().join(",");
   return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+}
+
+function cleanCollectionText(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.length > 2000) throw new BadRequestException(label + " must be text of at most 2000 characters");
+  return value.trim() || null;
 }

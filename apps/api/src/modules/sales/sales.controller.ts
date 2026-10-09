@@ -51,6 +51,10 @@ export class SalesController {
     @Param("id") id: string,
     @Body()
     body: {
+      pendingCash?: number;
+      pendingBank?: number;
+      collectionNote?: string | null;
+      baseVersion?: number;
       name?: string;
       contactInfo?: string | null;
       stateCode?: string | null;
@@ -171,7 +175,7 @@ export class SalesController {
   pay(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: { amount: number; method: string; paidAt: string; clientOpId: string; baseVersion?: number },
+    @Body() body: { amount: number; method: string; paidAt: string; clientOpId: string; baseVersion?: number; note?: string; receivedBy?: string; reference?: string; pendingBucket?: "cash" | "bank" },
   ) {
     return this.service.pay(user, id, body);
   }

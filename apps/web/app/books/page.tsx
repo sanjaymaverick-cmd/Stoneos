@@ -44,7 +44,7 @@ export default function BooksPage() {
     <AppShell>
       <h1>Books</h1>
       <p>
-        Party statements replace Khatabook. Opening balances are as of 12 Sep 2026. New sales and
+        Party statements replace Khatabook. Opening balances have their own effective date. New sales and
         collections after cutover live only in StoneOS. File GSTR outside; Tally XML is archive-only.
       </p>
       {error ? <p className="error">{error}</p> : null}
@@ -54,7 +54,7 @@ export default function BooksPage() {
         <div className="metric"><span className="hint">Net</span><b>{inr(data?.net ?? 0)}</b></div>
       </div>
       <p>
-        <Link href="/books/rokad">Rokad / cash drawer</Link>
+        <Link href="/books/openings">Opening balances & settlements</Link> · <Link href="/books/rokad">Rokad / cash drawer</Link>
         {" "}· <Link href="/books/gst">GST</Link>
         {canImport ? <> · <Link href="/books/import">Khata import</Link> · <Link href="/tally">Tally archive</Link></> : null}
       </p>
@@ -68,7 +68,7 @@ export default function BooksPage() {
         </div>
       ) : null}
       {parties.length === 0 ? (
-        <EmptyState>No parties yet. Owner or manager imports the Khatabook customer list to seed opening AR/AP.</EmptyState>
+        <EmptyState>No parties yet. Enter a reviewed opening balance batch to start without historical invoices.</EmptyState>
       ) : (
         <table>
           <thead>

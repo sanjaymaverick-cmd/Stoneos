@@ -285,7 +285,7 @@ export class PartyReportService {
           iso(pay.paidAt),
           "Payment received",
           i.invoiceNumber,
-          "Collection",
+          ["Collection", pay.receivedBy ? `Received by: ${pay.receivedBy}` : "", pay.reference ? `Reference: ${pay.reference}` : "", pay.note].filter(Boolean).join(" · "),
           0,
           money(pay.amount),
           pay.method,
@@ -304,6 +304,7 @@ export class PartyReportService {
         );
     }
     for (const b of blocks) {
+      if (b.openingReference) continue;
       if (b.currentStatus === "reversed") continue;
       let p = parties.find((p) => p.id === "supplier:" + b.supplierId);
       if (!p) {
