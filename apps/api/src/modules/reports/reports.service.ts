@@ -157,10 +157,15 @@ export class ReportsService {
       include: { payments: true, creditNotes: true },
     });
     const openingLines = await this.prisma.openingBalanceLine.findMany({ where: { kind: "DEBTOR", batch: { factoryId, status: "APPROVED" } }, include: { settlements: true, batch: true } });
+    const trades = await this.prisma.tradeDocument.findMany({where:{factoryId,kind:"local_sale"},include:{settlements:true}});
+    const tradeDue=trades.reduce((n,t)=>n+Number(t.materialAmount)+Number(t.customerAdjustment)-t.settlements.reduce((a,p)=>a+Number(p.amount),0),0);
+    const tradeCollected=trades.flatMap(t=>t.settlements).reduce((n,p)=>n+Number(p.amount),0);
+    const tradeCollectedMtd=trades.flatMap(t=>t.settlements).filter(p=>p.occurredOn>=dates.gte&&p.occurredOn<dates.lt).reduce((n,p)=>n+Number(p.amount),0);
+    const tradeSalesMtd=trades.filter(t=>t.occurredOn>=dates.gte&&t.occurredOn<dates.lt).reduce((n,t)=>n+Number(t.materialAmount),0);
     const openingDue = openingLines.reduce((n, l) => n + Math.max(0, Number(l.amount) - Number(l.settledAmount)), 0);
     const openingCollected = openingLines.flatMap(l => l.settlements).reduce((n, p) => n + Number(p.amount), 0);
     const openingCollectedMtd = openingLines.flatMap(l => l.settlements).filter(p => p.paidAt >= dates.gte && p.paidAt < dates.lt).reduce((n, p) => n + Number(p.amount), 0);
-    const outstandingAr = openingDue + invoices.reduce(
+    const outstandingAr = openingDue + tradeDue + invoices.reduce(
       (sum, invoice) =>
         sum +
         Math.max(
@@ -189,7 +194,7 @@ export class ReportsService {
     });
     const recovery = factoryRecovery(recoveryRows);
     const invoicedTotal = Number(invoicedAll._sum.amount ?? 0);
-    const collectedTotal = Number(collectedAll._sum.amount ?? 0) + openingCollected;
+    const collectedTotal = Number(collectedAll._sum.amount ?? 0) + openingCollected + tradeCollected;
     const creditedTotal = Number(creditedAll._sum.amount ?? 0);
     const slabsOnHand = lotAwareSlabCount(loosePieces, lotBlocks);
 
@@ -201,9 +206,9 @@ export class ReportsService {
       openBlocks: recovery.openBlocks,
       outstandingAr,
       invoicedMtd: Number(invoicedMtd._sum.amount ?? 0),
-      collectedMtd: Number(collectedMtd._sum.amount ?? 0) + Number(unbilledCashMtd._sum.amount ?? 0) + openingCollectedMtd,
-      expensesMtd: Number(expensesMtd._sum.amount ?? 0),
-      unbilledCashMtd: Number(unbilledCashMtd._sum.amount ?? 0),
+      collectedMtd: Number(collectedMtd._sum.amount ?? 0) + Number(unbilledCashMtd._sum.amount ?? 0) + openingCollectedMtd + tradeCollectedMtd,
+      expensesMtd: Number(expensesMtd._sum.amount ?? 0) + trades.filter(t=>t.occurredOn>=dates.gte&&t.occurredOn<dates.lt).reduce((n,t)=>n+Number((t.payload as {commission?:number}).commission??0),0),
+      unbilledCashMtd: Number(unbilledCashMtd._sum.amount ?? 0) + tradeSalesMtd,
       maintenanceDue,
       openCutting,
       openPolishing,

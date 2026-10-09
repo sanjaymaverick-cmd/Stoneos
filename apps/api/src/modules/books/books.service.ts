@@ -22,7 +22,8 @@ export class BooksService {
       _sum: { amount: true },
     });
     const opening = await this.prisma.openingSettlement.aggregate({ where: { factoryId, paidAt, line: { kind: "DEBTOR" } }, _sum: { amount: true } });
-    return Number(r._sum.amount ?? 0) + Number(opening._sum.amount ?? 0);
+    const trade = await this.prisma.tradeSettlement.aggregate({ where: { occurredOn: paidAt, document: { factoryId, kind: "local_sale" } }, _sum: { amount: true } });
+    return Number(r._sum.amount ?? 0) + Number(opening._sum.amount ?? 0) + Number(trade._sum.amount ?? 0);
   }
   async collectedCash(factoryId: string, saleDate: Date) {
     const r = await this.prisma.cashSale.aggregate({
@@ -558,7 +559,7 @@ export class BooksService {
     const party = await this.prisma.party.findFirst({ where: { id: partyId, factoryId } });
     if (!party) throw new NotFoundException("Party not found");
     const vouchers = await this.prisma.voucher.findMany({
-      where: { factoryId, partyId },
+      where: { factoryId, OR: [{ partyId }, { lines: { some: { partyId } } }] },
       include: { lines: { include: { ledger: true } } },
       orderBy: [{ operationalDate: "asc" }, { createdAt: "asc" }],
     });
