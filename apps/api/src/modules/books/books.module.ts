@@ -5,10 +5,13 @@ import { BooksService } from "./books.service";
 import { CopilotService } from "./copilot.service";
 import { KhataService } from "./khata.service";
 
+import { OpeningBalancesController } from "./opening-balances.controller";
+import { OpeningBalancesService } from "./opening-balances.service";
+
 @Module({
   imports: [FilesModule],
-  controllers: [BooksController],
-  providers: [BooksService, KhataService, CopilotService],
+  controllers: [BooksController, OpeningBalancesController],
+  providers: [BooksService, KhataService, CopilotService, OpeningBalancesService],
   exports: [BooksService],
 })
 export class BooksModule {}

@@ -22,6 +22,10 @@ type Customer = {
   billingAddress?: string | null;
   shippingAddress?: string | null;
   contactInfo?: string | null;
+  pendingCash?: string | number;
+  pendingBank?: string | number;
+  collectionNote?: string | null;
+  version?: number;
 };
 type Slab = {
   id: string;
@@ -279,6 +283,7 @@ export default function SalesPage() {
 
   return (
     <AppShell>
+      <p><Link href="/books/openings">Opening balances and invoice-free collections</Link></p>
       <h1>Sell</h1>
       <p>
         <Link href="/parties">Add / edit buyers & suppliers →</Link>
@@ -364,6 +369,7 @@ export default function SalesPage() {
                   <th>GSTIN</th>
                   <th>State</th>
                   <th>Billing address</th>
+                  <th>Collection plan</th>
                   <th />
                 </tr>
               </thead>
@@ -378,6 +384,7 @@ export default function SalesPage() {
                     <td className="muted">
                       {c.billingAddress ?? "not on file"}
                     </td>
+                    <td>Cash ₹{Number(c.pendingCash ?? 0).toLocaleString("en-IN")} · Bank / UPI ₹{Number(c.pendingBank ?? 0).toLocaleString("en-IN")}<br /><span>{c.collectionNote}</span></td>
                     <td>
                       <button type="button" onClick={() => setEditing(c)}>
                         Edit
@@ -566,7 +573,7 @@ export default function SalesPage() {
               {canCollect && row.invoice && Number(row.invoice.amount) > 0 ? (
                 <PaymentEntry
                   amount={Number(row.invoice.amount)}
-                  onSave={(amount, method, paidAt) =>
+                  onSave={(amount, method, paidAt, details) =>
                     run(async () => {
                       const invoice = row.invoice!;
                       const result = await apiFetch(
@@ -578,6 +585,7 @@ export default function SalesPage() {
                             amount,
                             method,
                             paidAt,
+                            ...details,
                             clientOpId: stableOp(`pay:${invoice.id}`),
                           }),
                         },
@@ -629,16 +637,20 @@ function PaymentEntry({
   onSave,
 }: {
   amount: number;
-  onSave: (amount: number, method: string, date: string) => Promise<void>;
+  onSave: (amount: number, method: string, date: string, details: { note: string; receivedBy: string; reference: string; pendingBucket?: "cash" | "bank" }) => Promise<void>;
 }) {
   const [paid, setPaid] = useState(String(amount));
   const [mode, setMode] = useState("cash");
   const [date, setDate] = useState(todayIst());
+  const [note, setNote] = useState("");
+  const [receivedBy, setReceivedBy] = useState("");
+  const [reference, setReference] = useState("");
+  const [pendingBucket, setPendingBucket] = useState<"" | "cash" | "bank">("");
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        void onSave(Number(paid), mode, date);
+        void onSave(Number(paid), mode, date, { note, receivedBy, reference, pendingBucket: pendingBucket || undefined });
       }}
     >
       <label>
@@ -672,6 +684,10 @@ function PaymentEntry({
           onChange={(e) => setDate(e.target.value)}
         />
       </label>
+      <label>Settles pending portion<select value={pendingBucket} onChange={e => setPendingBucket(e.target.value as "" | "cash" | "bank")}><option value="">No collection-plan allocation</option><option value="cash">Cash pending</option><option value="bank">Bank / UPI pending</option></select></label>
+      <label>Received by / account<input maxLength={2000} value={receivedBy} onChange={e => setReceivedBy(e.target.value)} placeholder="Person or account that received the money" /></label>
+      <label>Payment reference<input maxLength={2000} value={reference} onChange={e => setReference(e.target.value)} placeholder="UTR or transaction ID" /></label>
+      <label>Payment note<textarea maxLength={2000} value={note} onChange={e => setNote(e.target.value)} placeholder="Payment details or instructions" /></label>
       <button type="submit">Record payment</button>
     </form>
   );

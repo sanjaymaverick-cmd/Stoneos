@@ -17,6 +17,7 @@ import { ExpensesService } from "../src/modules/expenses/expenses.service";
 import { AuditService } from "../src/common/audit.service";
 import { IdempotencyService } from "../src/common/idempotency";
 import { FilesService } from "../src/modules/files/files.service";
+import { OpeningBalancesService, type OpeningRow } from "../src/modules/books/opening-balances.service";
 import { BooksService } from "../src/modules/books/books.service";
 import { KhataService } from "../src/modules/books/khata.service";
 import { IntakeService } from "../src/modules/books/intake.service";
@@ -1057,6 +1058,154 @@ describe("postgres-backed workflows", () => {
       where: { factoryId: factory.id, movementType: "PACKING" },
     });
     assert.equal(packingMoves, 1);
+  });
+
+
+  it("opens arbitrary stock and party balances without invoices and settles them with dated notes", async () => {
+    const { factory, asOwner, asManager } = await staffFactory("general-opening");
+    const service = new OpeningBalancesService(prisma as never);
+    const lines: OpeningRow[] = [
+      { ref: "raw", kind: "RAW_BLOCK", name: "Grey", serial: "OP-RAW", weightTons: 20, amount: 200000, note: "Physical count" },
+      { ref: "wip", kind: "UNPOLISHED_LOT", name: "Grey", serial: "OP-WIP", processingStage: "grinding", workLocation: "LPM 1", quantity: 3, sqftPerSlab: 40, amount: 6000 },
+      { ref: "finished", kind: "FINISHED_LOT", name: "Black", serial: "OP-FIN", quantity: 2, sqftPerSlab: 50, amount: 7000 },
+      { ref: "epoxy", kind: "CONSUMABLE", name: "Opening epoxy", unit: "litre", quantity: 10.5, amount: 1000 },
+      { ref: "debtor", kind: "DEBTOR", name: "Customer A", amount: 100000, sourceReference: "September close" },
+      { ref: "creditor", kind: "CREDITOR", name: "Supplier A", amount: 25000 },
+      { ref: "cash", kind: "CASH", name: "Cash drawer", amount: 5000 },
+      { ref: "bank", kind: "BANK", name: "Business bank", amount: 20000 },
+    ];
+    const input = { title: "September closing", effectiveDate: "2026-10-01", note: "Verified closing schedule", lines, clientOpId: "general-opening-create" };
+    const draft = await service.create(asOwner, input);
+    assert.equal((await service.create(asOwner, input)).id, draft.id);
+    const submitted = await service.transition(asOwner, draft.id, draft.version);
+    await assert.rejects(() => service.approve(asOwner, draft.id, { baseVersion: submitted.version, reconciled: true }), /different user/);
+    await assert.rejects(() => service.approve(asManager, draft.id, { baseVersion: submitted.version, reconciled: false }), /reconciled/);
+    const approved = await service.approve(asManager, draft.id, { baseVersion: submitted.version, reconciled: true });
+    await service.approve(asManager, draft.id, { baseVersion: submitted.version, reconciled: true });
+    assert.equal(await prisma.invoice.count({ where: { factoryId: factory.id } }), 0);
+    assert.equal(await prisma.salesOrder.count({ where: { factoryId: factory.id } }), 0);
+    assert.equal(await prisma.voucher.count({ where: { factoryId: factory.id } }), 8);
+    assert.equal((await prisma.factory.findUniqueOrThrow({ where: { id: factory.id } })).goLiveDate!.toISOString().slice(0,10), "2026-10-01");
+    assert.equal((await reports.shopDashboard(factory.id)).slabsOnHand, 5);
+    const available = await lots.availability(factory.id);
+    assert.equal(available.lots.find(l => l.blockSerial === "OP-FIN")!.polishedSlabCount, 2);
+    const openingWip = await prisma.rawBlock.findFirstOrThrow({ where: { factoryId: factory.id, serialNumber: "OP-WIP" }, include: { location: true } });
+    assert.equal(openingWip.polishedSlabCount, 0);
+    assert.equal(openingWip.location!.code, "LPM_WIP");
+    assert.match(openingWip.qualityNote!, /grinding.*LPM 1/);
+    assert.equal(Number((await prisma.consumable.findFirstOrThrow({ where: { factoryId: factory.id } })).onHand), 10.5);
+    const debtor = approved.lines.find(l => l.ref === "debtor")!;
+    const creditor = approved.lines.find(l => l.ref === "creditor")!;
+    await sales.updateCustomer(asOwner, debtor.entityId!, { pendingCash: 50000, pendingBank: 50000, collectionNote: "Later clarification" });
+    const receiptInput = { amount: 50000, method: "UPI", paidAt: "2026-10-02", receivedBy: "Any recipient", note: "PhonePe to receiving person", reference: "UTR-OPEN", pendingBucket: "cash" as const, clientOpId: "general-opening-receipt" };
+    const receipt = await service.settle(asOwner, debtor.id, receiptInput);
+    assert.equal((await service.settle(asOwner, debtor.id, receiptInput)).id, receipt.id);
+    await assert.rejects(() => service.settle(asOwner, debtor.id, { ...receiptInput, amount: 100 }), /different settlement/);
+    await service.settle(asOwner, creditor.id, { amount: 10000, method: "cash", paidAt: "2026-10-02", note: "Paid supplier opening", clientOpId: "general-opening-creditor" });
+    const balances = await books.outstanding(factory.id);
+    assert.equal(balances.youllGet, 50000);
+    assert.equal(balances.youllGive, 15000);
+    const customer = await prisma.customer.findUniqueOrThrow({ where: { id: debtor.entityId! } });
+    assert.equal(Number(customer.pendingCash), 0);
+    assert.equal(Number(customer.pendingBank), 50000);
+    const beforePay = await new PartyReportService(prisma as never).report(factory.id, { to: "2026-10-01", side: "customer" });
+    assert.equal(beforePay.summary.find(p => p.name === "Customer A")!.due, 100000);
+    const afterPay = await new PartyReportService(prisma as never).report(factory.id, { to: "2026-10-02", side: "customer" });
+    assert.equal(afterPay.summary.find(p => p.name === "Customer A")!.due, 50000);
+    assert.ok(afterPay.rows.some(r => r.details.includes("PhonePe to receiving person") && r.details.includes("UTR-OPEN") && r.paidIn === 50000));
+    assert.ok(!afterPay.rows.some(r => r.type === "Purchase" || r.type === "Sale"));
+    const insights = await new AnalyticsService(prisma as never, new AuditService(prisma as never)).snapshot(factory.id, "2026-10-01", "2026-10-02");
+    assert.equal(insights.collections.totalDue, 50000);
+    assert.equal(insights.current.collections, 50000);
+    assert.equal(insights.current.netSales, 0);
+    assert.equal(await books.collectedPayments(factory.id, new Date("2026-10-02")), 50000);
+    const trial = await books.trialBalance(factory.id);
+    assert.equal(trial.reduce((n, l) => n + l.debit, 0), trial.reduce((n, l) => n + l.credit, 0));
+    await assert.rejects(() => service.update(asOwner, draft.id, { ...input, baseVersion: approved.version }), /Only draft/);
+    await assert.rejects(() => service.create(asOwner, { ...input, clientOpId: "second-opening-batch" }), /already approved/);
+  });
+
+
+  it("preserves a live factory's existing records and rolls back duplicate opening stock", async () => {
+    const { factory, asOwner, asManager } = await staffFactory("opening-live");
+    const originalDate = new Date("2026-09-01T01:30:00Z");
+    await prisma.factory.update({ where: { id: factory.id }, data: { operatingStatus: "LIVE", goLiveDate: originalDate } });
+    const existing = await prisma.rawBlock.create({ data: { factoryId: factory.id, serialNumber: "EXISTING", varietyName: "Grey", weightTons: 20, purchaseTaxable: 150000 } });
+    const service = new OpeningBalancesService(prisma as never);
+    const input = { title: "Unrecorded cutover balances", effectiveDate: "2026-10-01", lines: [
+      { ref: "a-debtor", kind: "DEBTOR" as const, name: "Missing debtor", amount: 10000 },
+      { ref: "b-stock", kind: "RAW_BLOCK" as const, name: "Grey", serial: "EXISTING", weightTons: 10, amount: 50000 }
+    ], clientOpId: "live-opening-create" };
+    const draft = await service.create(asOwner, input);
+    const submitted = await service.transition(asOwner, draft.id, draft.version);
+    await assert.rejects(() => service.approve(asManager, draft.id, { baseVersion: submitted.version, reconciled: true }), /already exists/);
+    assert.equal(await prisma.customer.count({ where: { factoryId: factory.id } }), 0, "the debtor preceding duplicate stock was rolled back");
+    assert.equal(await prisma.voucher.count({ where: { factoryId: factory.id } }), 0);
+    const reopened = await service.transition(asOwner, draft.id, submitted.version, true);
+    const changed = await service.update(asOwner, draft.id, { ...input, lines: [input.lines[0]], baseVersion: reopened.version });
+    const resubmitted = await service.transition(asOwner, draft.id, changed.version);
+    await service.approve(asManager, draft.id, { baseVersion: resubmitted.version, reconciled: true });
+    assert.deepEqual(await prisma.rawBlock.findUniqueOrThrow({ where: { id: existing.id } }), existing);
+    assert.equal((await prisma.factory.findUniqueOrThrow({ where: { id: factory.id } })).goLiveDate!.getTime(), originalDate.getTime());
+    assert.equal(await prisma.rawBlock.count({ where: { factoryId: factory.id } }), 1);
+  });
+
+  it("guards opening edits, dates, cross-tenant access and concurrent settlements", async () => {
+    const { factory, asOwner, asManager } = await staffFactory("opening-guards");
+    const other = await staffFactory("opening-other");
+    const service = new OpeningBalancesService(prisma as never);
+    const input = { title: "Opening", effectiveDate: "2026-10-01", lines: [{ ref: "due", kind: "CREDITOR" as const, name: "Supplier", amount: 25000 }], clientOpId: "guard-opening-create" };
+    await assert.rejects(() => service.create({ ...asOwner, role: "operator" }, input), /Insufficient role/);
+    await assert.rejects(() => service.create(asOwner, { ...input, effectiveDate: "2026-02-30" }), /Invalid effective date/);
+    await assert.rejects(() => service.create(asOwner, { ...input, lines: [{ ...input.lines[0], amount: -1 }] }), /nonnegative/);
+    const draft = await service.create(asOwner, input);
+    await assert.rejects(() => service.update(other.asOwner, draft.id, { ...input, baseVersion: 0 }), /not found/);
+    const edited = await service.update(asOwner, draft.id, { ...input, note: "Updated source", baseVersion: draft.version });
+    await assert.rejects(() => service.update(asOwner, draft.id, { ...input, baseVersion: draft.version }), /refresh/);
+    const submitted = await service.transition(asOwner, draft.id, edited.version);
+    const approved = await service.approve(asManager, draft.id, { baseVersion: submitted.version, reconciled: true });
+    const line = approved.lines[0];
+    await assert.rejects(() => service.settle(other.asOwner, line.id, { amount: 1, method: "cash", paidAt: "2026-10-02", clientOpId: "foreign-settlement" }), /not found/);
+    await assert.rejects(() => service.settle(asOwner, line.id, { amount: 1, method: "cash", paidAt: "2026-09-30", clientOpId: "early-settlement" }), /predate/);
+    const attempts = await Promise.allSettled(["a", "b"].map(k => service.settle(asOwner, line.id, { amount: 15000, method: "UPI", paidAt: "2026-10-02", clientOpId: "concurrent-opening-" + k })));
+    assert.equal(attempts.filter(r => r.status === "fulfilled").length, 1);
+    assert.equal(Number((await prisma.openingBalanceLine.findUniqueOrThrow({ where: { id: line.id } })).settledAmount), 15000);
+    assert.equal(await prisma.openingSettlement.count({ where: { factoryId: factory.id } }), 1);
+  });
+
+  it("updates collection plans without posting debt and records annotated receipts exactly once", async () => {
+    const { factory, asOwner } = await staffFactory("collection-plan");
+    const buyer = await sales.createCustomer(asOwner, "Collection Buyer");
+    const order = await sales.createOrder(asOwner, { customerId: buyer.id, orderDate: currentFactoryDate(), clientOpId: "plan-order", lines: [{ quantitySqft: 1, rate: 100000 }] }) as { id: string };
+    const invoice = await sales.invoice(asOwner, order.id, "plan-invoice");
+    const vouchersBefore = await prisma.voucher.count({ where: { factoryId: factory.id } });
+    const plan = await sales.updateCustomer(asOwner, buyer.id, { pendingCash: 50000, pendingBank: 50000, collectionNote: "Customer clarified split", baseVersion: buyer.version });
+    assert.equal(Number(plan.pendingCash), 50000);
+    assert.equal(Number(plan.pendingBank), 50000);
+    assert.equal(await prisma.voucher.count({ where: { factoryId: factory.id } }), vouchersBefore);
+    await assert.rejects(() => sales.updateCustomer(asOwner, buyer.id, { pendingCash: -1 }), /nonnegative/);
+    await assert.rejects(() => sales.updateCustomer(asOwner, buyer.id, { pendingBank: 0.001 }), /two decimals/);
+    await assert.rejects(() => sales.updateCustomer(asOwner, buyer.id, { pendingCash: 0, baseVersion: buyer.version }), /refresh/);
+    const other = await staffFactory("collection-other");
+    await assert.rejects(() => sales.updateCustomer(other.asOwner, buyer.id, { pendingCash: 1 }), /not found/);
+    const input = { amount: 50000, method: "UPI", paidAt: currentFactoryDate(), clientOpId: "plan-pay", note: "PhonePe to receiving agent", receivedBy: "Receiving agent", reference: "UTR-123", pendingBucket: "cash" as const };
+    const payment = await sales.pay(asOwner, invoice.id, input);
+    const retry = await sales.pay(asOwner, invoice.id, input);
+    assert.equal(payment.id, retry.id);
+    assert.equal(payment.note, input.note);
+    assert.equal(payment.receivedBy, input.receivedBy);
+    const stored = await prisma.customer.findUniqueOrThrow({ where: { id: buyer.id } });
+    assert.equal(Number(stored.pendingCash), 0);
+    assert.equal(Number(stored.pendingBank), 50000);
+    assert.equal(await prisma.payment.count({ where: { invoiceId: invoice.id } }), 1);
+    const voucher = await prisma.voucher.findFirstOrThrow({ where: { factoryId: factory.id, source: "sales_pay", sourceId: payment.id } });
+    assert.match(voucher.memo!, /PhonePe to receiving agent/);
+    assert.match(voucher.memo!, /UTR-123/);
+    await assert.rejects(() => sales.pay(asOwner, invoice.id, { ...input, clientOpId: "over-plan", amount: 1 }), /selected pending amount/);
+    assert.equal(await prisma.payment.count({ where: { invoiceId: invoice.id } }), 1, "failed allocation rolls the receipt back");
+    await assert.rejects(() => sales.pay(other.asOwner, invoice.id, { ...input, clientOpId: "foreign-pay" }), /not found/);
+    const entries = await prisma.auditEvent.findMany({ where: { factoryId: factory.id, entityId: buyer.id } });
+    assert.ok(entries.some(e => e.action === "sales.customer_updated"));
   });
 
   it("posts one balanced voucher per invoice, pay, and expense, and retries are no-ops", async () => {

@@ -200,6 +200,8 @@ enum IntakeStatus {
 }
 
 model Factory {
+  openingBalanceBatches OpeningBalanceBatch[]
+  openingSettlements OpeningSettlement[]
   id              String                  @id @default(uuid())
   name            String
   location        String?
@@ -367,6 +369,9 @@ model Supplier {
 }
 
 model Customer {
+  pendingCash Decimal @default(0) @map("pending_cash") @db.Decimal(14, 2)
+  pendingBank Decimal @default(0) @map("pending_bank") @db.Decimal(14, 2)
+  collectionNote String? @map("collection_note")
   id          String       @id @default(uuid())
   factoryId   String       @map("factory_id")
   factory     Factory      @relation(fields: [factoryId], references: [id])
@@ -414,6 +419,7 @@ model Machine {
 }
 
 model RawBlock {
+  openingReference String? @map("opening_reference")
   id                 String             @id @default(uuid())
   factoryId          String             @map("factory_id")
   factory            Factory            @relation(fields: [factoryId], references: [id])
@@ -956,6 +962,10 @@ model InvoiceTaxLine {
 }
 
 model Payment {
+  note String?
+  receivedBy String? @map("received_by")
+  reference String?
+  pendingBucket String? @map("pending_bucket")
   id             String   @id @default(uuid())
   factoryId      String   @map("factory_id")
   factory        Factory  @relation(fields: [factoryId], references: [id])
@@ -1541,4 +1551,61 @@ model FinishedPurchase {
   @@unique([factoryId, clientOpId])
   @@index([factoryId, purchaseDate])
   @@map("finished_purchase")
+}
+
+model OpeningBalanceBatch {
+  id String @id @default(uuid())
+  factoryId String @map("factory_id")
+  factory Factory @relation(fields: [factoryId], references: [id])
+  title String
+  effectiveDate DateTime @map("effective_date") @db.Date
+  note String?
+  status String @default("DRAFT")
+  enteredByIds Json @map("entered_by_ids")
+  approvedById String? @map("approved_by_id")
+  approvedAt DateTime? @map("approved_at")
+  reconciled Boolean @default(false)
+  clientOpId String @map("client_op_id")
+  requestHash String @map("request_hash")
+  version Int @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  lines OpeningBalanceLine[]
+  @@unique([factoryId, clientOpId])
+  @@index([factoryId, status])
+  @@map("opening_balance_batch")
+}
+model OpeningBalanceLine {
+  id String @id @default(uuid())
+  batchId String @map("batch_id")
+  batch OpeningBalanceBatch @relation(fields: [batchId], references: [id])
+  ref String
+  kind String
+  payload Json
+  amount Decimal @default(0) @db.Decimal(14,2)
+  settledAmount Decimal @default(0) @map("settled_amount") @db.Decimal(14,2)
+  entityId String? @map("entity_id")
+  partyId String? @map("party_id")
+  settlements OpeningSettlement[]
+  @@unique([batchId, ref])
+  @@map("opening_balance_line")
+}
+model OpeningSettlement {
+  id String @id @default(uuid())
+  factoryId String @map("factory_id")
+  factory Factory @relation(fields: [factoryId], references: [id])
+  lineId String @map("line_id")
+  line OpeningBalanceLine @relation(fields: [lineId], references: [id])
+  amount Decimal @db.Decimal(14,2)
+  method String
+  paidAt DateTime @map("paid_at") @db.Date
+  note String?
+  receivedBy String? @map("received_by")
+  reference String?
+  pendingBucket String? @map("pending_bucket")
+  clientOpId String @map("client_op_id")
+  requestHash String @map("request_hash")
+  createdAt DateTime @default(now()) @map("created_at")
+  @@unique([factoryId,clientOpId])
+  @@index([factoryId,paidAt])
+  @@map("opening_settlement")
 }

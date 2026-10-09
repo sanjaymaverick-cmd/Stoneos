@@ -156,7 +156,11 @@ export class ReportsService {
       where: { factoryId },
       include: { payments: true, creditNotes: true },
     });
-    const outstandingAr = invoices.reduce(
+    const openingLines = await this.prisma.openingBalanceLine.findMany({ where: { kind: "DEBTOR", batch: { factoryId, status: "APPROVED" } }, include: { settlements: true, batch: true } });
+    const openingDue = openingLines.reduce((n, l) => n + Math.max(0, Number(l.amount) - Number(l.settledAmount)), 0);
+    const openingCollected = openingLines.flatMap(l => l.settlements).reduce((n, p) => n + Number(p.amount), 0);
+    const openingCollectedMtd = openingLines.flatMap(l => l.settlements).filter(p => p.paidAt >= dates.gte && p.paidAt < dates.lt).reduce((n, p) => n + Number(p.amount), 0);
+    const outstandingAr = openingDue + invoices.reduce(
       (sum, invoice) =>
         sum +
         Math.max(
@@ -185,7 +189,7 @@ export class ReportsService {
     });
     const recovery = factoryRecovery(recoveryRows);
     const invoicedTotal = Number(invoicedAll._sum.amount ?? 0);
-    const collectedTotal = Number(collectedAll._sum.amount ?? 0);
+    const collectedTotal = Number(collectedAll._sum.amount ?? 0) + openingCollected;
     const creditedTotal = Number(creditedAll._sum.amount ?? 0);
     const slabsOnHand = lotAwareSlabCount(loosePieces, lotBlocks);
 
@@ -197,7 +201,7 @@ export class ReportsService {
       openBlocks: recovery.openBlocks,
       outstandingAr,
       invoicedMtd: Number(invoicedMtd._sum.amount ?? 0),
-      collectedMtd: Number(collectedMtd._sum.amount ?? 0) + Number(unbilledCashMtd._sum.amount ?? 0),
+      collectedMtd: Number(collectedMtd._sum.amount ?? 0) + Number(unbilledCashMtd._sum.amount ?? 0) + openingCollectedMtd,
       expensesMtd: Number(expensesMtd._sum.amount ?? 0),
       unbilledCashMtd: Number(unbilledCashMtd._sum.amount ?? 0),
       maintenanceDue,

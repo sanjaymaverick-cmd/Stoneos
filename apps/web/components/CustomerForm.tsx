@@ -177,6 +177,10 @@ export type EditableCustomer = {
   billingAddress?: string | null;
   shippingAddress?: string | null;
   contactInfo?: string | null;
+  pendingCash?: string | number;
+  pendingBank?: string | number;
+  collectionNote?: string | null;
+  version?: number;
 };
 
 export function CustomerForm({
@@ -206,6 +210,9 @@ export function CustomerForm({
   const [billingAddress, setBillingAddress] = useState(editing?.billingAddress ?? "");
   const [shippingAddress, setShippingAddress] = useState(editing?.shippingAddress ?? "");
   const [contactInfo, setContactInfo] = useState(editing?.contactInfo ?? "");
+  const [pendingCash, setPendingCash] = useState(String(editing?.pendingCash ?? 0));
+  const [pendingBank, setPendingBank] = useState(String(editing?.pendingBank ?? 0));
+  const [collectionNote, setCollectionNote] = useState(editing?.collectionNote ?? "");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -232,6 +239,7 @@ export function CustomerForm({
       // means "clear it", which is different from not mentioning it.
       const body = editing
         ? {
+            ...(kind === "customer" ? { pendingCash: Number(pendingCash), pendingBank: Number(pendingBank), collectionNote, baseVersion: editing.version } : {}),
             name: name.trim(),
             gstin: typed,
             stateCode: gstinState ?? stateCode,
@@ -365,6 +373,13 @@ export function CustomerForm({
             inputMode="tel"
           />
         </label>
+        {kind === "customer" && editing ? <fieldset>
+          <legend>Pending collection breakdown</legend>
+          <p className="muted">A collection plan only. Actual dues come from invoices and opening books; these amounts do not add debt or record a receipt.</p>
+          <label>Cash pending (₹)<input type="number" min="0" step="0.01" required value={pendingCash} onChange={e => setPendingCash(e.target.value)} /></label>
+          <label>Bank / UPI pending (₹)<input type="number" min="0" step="0.01" required value={pendingBank} onChange={e => setPendingBank(e.target.value)} /></label>
+          <label>Collection note<textarea maxLength={2000} value={collectionNote} onChange={e => setCollectionNote(e.target.value)} /></label>
+        </fieldset> : null}
         <button type="submit" disabled={busy || !name.trim() || !gstinLooksRight}>
           {busy ? "Saving…" : editing ? "Save changes" : kind === "supplier" ? "Add supplier" : "Add customer"}
         </button>
