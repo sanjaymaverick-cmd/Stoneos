@@ -48,7 +48,7 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
 export function rateLimit(req: Request, res: Response, next: NextFunction) {
   if (req.path.startsWith("/health") || req.path.startsWith("/api/docs")) return next();
   const ip = req.ip || req.socket.remoteAddress || "unknown";
-  if (req.path.startsWith("/api/v1/auth/login")) {
+  if (req.method === "POST" && (req.path === "/api/v1/auth/login" || req.path === "/api/v1/setup")) {
     return hit(auth, ip, AUTH_WINDOW_MS, AUTH_MAX, req, res, next);
   }
   const bearer = req.headers.authorization ?? "";

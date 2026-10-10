@@ -8,1667 +8,191 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum UserRole {
-  owner
-  manager
-  admin
-  supervisor
-  operator
-  inventory
-  sales
-  accountant
-  auditor
-}
-
-enum FactoryOperatingStatus {
-  SETUP
-  OPENING_COUNT_IN_PROGRESS
-  OPENING_PENDING_APPROVAL
-  LIVE
-  LOCKED
-}
-
-enum InventoryLocationType {
-  RAW_YARD
-  B21_QUEUE
-  B21_WIP
-  UNPOLISHED_STOCK
-  LPM_QUEUE
-  LPM_WIP
-  FINISHED_STOCK
-  HOLD
-  PACKING
-  DELIVERED
-}
-
-enum InventoryMovementType {
-  OPENING_RECEIPT
-  GOODS_RECEIPT
-  TRANSFER
-  PRODUCTION_ISSUE
-  PRODUCTION_COMPLETION
-  POLISHING_ISSUE
-  POLISHING_COMPLETION
-  SALES_RESERVATION
-  RESERVATION_RELEASE
-  PACKING
-  DELIVERY
-  DISPATCH
-  RETURN
-  ADJUSTMENT
-  REVERSAL
-}
-
-enum OpeningSnapshotStatus {
-  DRAFT
-  SUBMITTED
-  APPROVED
-  REJECTED
-}
-
-enum InventoryKind {
-  RAW_BLOCK
-  UNPOLISHED_SLAB
-  POLISHED_SLAB
-}
-
-enum OwnershipType {
-  COMPANY_OWNED
-  CUSTOMER_OWNED
-  CONSIGNMENT
-}
-
-enum MachineType {
-  CUTTING
-  POLISHING
-}
-
-enum ProductionSessionStatus {
-  IN_PROGRESS
-  COMPLETED
-  ABORTED
-}
-
-enum LpmProcessType {
-  GRINDING
-  RESIN
-  POLISHING
-}
-
-enum SalesOrderStatus {
-  DRAFT
-  CONFIRMED
-  PARTIALLY_DELIVERED
-  DELIVERED
-  CANCELLED
-}
-
-/// How an order is settled. A cash sale raises no invoice and no GST document.
-enum BillingMode {
-  gst_invoice
-  cash_unbilled
-}
-
-enum QuotationStatus {
-  DRAFT
-  SENT
-  ACCEPTED
-  EXPIRED
-  CANCELLED
-}
-
-enum ConflictPolicy {
-  STRICT
-  AUDITED_OVERWRITE
-}
-
-enum LedgerGroup {
-  asset
-  liability
-  income
-  expense
-}
-
-enum LedgerKind {
-  cash
-  bank
-  ar
-  ap
-  sales
-  cogs
-  expense
-  opening_equity
-  gst
-  other
-}
-
-enum PartyKind {
-  customer
-  supplier
-  job
-}
-
-enum VoucherType {
-  opening
-  receipt
-  payment
-  contra
-  journal
-  sales
-  credit_note
-  purchase
-}
-
-enum VoucherSource {
-  khata_opening
-  sales_invoice
-  sales_pay
-  sales_cn
-  cash_sale
-  block_purchase
-  block_purchase_cash
-  expense_create
-  intake_confirm
-  muster_pay
-  interfactory_invoice
-  interfactory_settle
-  copilot_journal
-  stock_write_off
-  manual
-}
-
-enum CashDrawerStatus {
-  open
-  proposed
-  locked
-}
-
-enum IntakeKind {
-  rokad
-  dpr
-  journal
-  supplier_bill
-  delivery_note
-}
-
-enum IntakeStatus {
-  proposed
-  confirmed
-  rejected
-  unreadable
-  reviewed
+enum UserType {
+  OWNER
+  OFFICE
+  YARD
 }
 
 model Factory {
-  tradeDocuments TradeDocument[]
-  openingBalanceBatches OpeningBalanceBatch[]
-  openingSettlements OpeningSettlement[]
-  customerOwnedStock CustomerOwnedStock[]
-  id              String                  @id @default(uuid())
-  name            String
-  location        String?
-  operatingStatus FactoryOperatingStatus  @default(SETUP) @map("operating_status")
-  goLiveDate      DateTime?               @map("go_live_date")
-  createdAt       DateTime                @default(now()) @map("created_at")
-  version         Int                     @default(0)
-
-  analyticsSettings  AnalyticsSettings?
-  consumableMovements ConsumableMovement[]
-  users              AppUser[]
-  sessions           AuthSession[]
-  auditEvents        AuditEvent[]
-  locations          InventoryLocation[]
-  suppliers          Supplier[]
-  customers          Customer[]
-  machines           Machine[]
-  vehicles           Vehicle[]
-  finishedPurchases FinishedPurchase[]
-  rawBlocks          RawBlock[]
-  slabs              Slab[]
-  movements          InventoryMovement[]
-  openingSnapshots   OpeningInventorySnapshot[]
-  stockWriteOffs     StockWriteOff[]
-  cuttingSessions    CuttingSession[]
-  polishingSessions  PolishingSession[]
-  quotations         Quotation[]
-  salesOrders        SalesOrder[]
-  packingLists       PackingList[]
-  deliveries         Delivery[]
-  invoices           Invoice[]
-  payments           Payment[]
-  expenses           Expense[]
-  tallyBatches       TallyImportBatch[]
-  files              StoredFile[]
-  syncOps            SyncOperation[]
-  consumables        Consumable[]
-  maintenanceJobs    MaintenanceJob[]
-  returns            CustomerReturn[]
-  documentSequences  DocumentSequence[]
-  creditNotes        CreditNote[]
-  ledgers            Ledger[]
-  parties            Party[]
-  vouchers           Voucher[]
-  cashDrawerDays     CashDrawerDay[]
-  khataImports       KhataImportBatch[]
-  intakeDrafts       IntakeDraft[]
-  gstProfile         GstProfile?
-  eInvoices          EInvoice[]
-  eWayBills          EWayBill[]
-  workers            Worker[]
-  attendance         Attendance[]
-  wageSheets         WageSheet[]
-  cashSales          CashSale[]
+  id        String          @id @default(uuid())
+  name      String
+  createdAt DateTime        @default(now()) @map("created_at")
+  users     User[]
+  accounts  MoneyAccount[]
+  parties   PartyOpening[]
+  items     StockItem[]
+  blocks    BlockOpening[]
+  slabs     SlabOpening[]
+  store     StoreOpening[]
+  settled   SettledTotal[]
 
   @@map("factory")
 }
 
-/// Dated local bills and raw purchases, including historical quantity records awaiting lot allocation.
-model TradeDocument {
-  id String @id @default(uuid())
-  factoryId String @map("factory_id")
-  factory Factory @relation(fields: [factoryId], references: [id])
-  kind String
-  reference String
-  partyName String @map("party_name")
-  occurredOn DateTime @map("occurred_on") @db.Date
-  materialAmount Decimal @map("material_amount") @db.Decimal(14,2)
-  customerAdjustment Decimal @default(0) @map("customer_adjustment") @db.Decimal(14,2)
-  gstAmount Decimal @default(0) @map("gst_amount") @db.Decimal(14,2)
-  invoiceTaxable Decimal @default(0) @map("invoice_taxable") @db.Decimal(14,2)
-  payload Json
-  stockStatus String @map("stock_status")
-  requestHash String @map("request_hash")
-  clientOpId String @map("client_op_id")
-  createdBy String @map("created_by")
-  createdAt DateTime @default(now()) @map("created_at")
-  settlements TradeSettlement[]
-  @@unique([factoryId, clientOpId])
-  @@unique([factoryId, kind, partyName, reference])
-  @@index([factoryId, occurredOn])
-  @@map("trade_document")
-}
-
-model TradeSettlement {
-  id String @id @default(uuid())
-  documentId String @map("document_id")
-  document TradeDocument @relation(fields: [documentId], references: [id])
-  amount Decimal @db.Decimal(14,2)
-  occurredOn DateTime @map("occurred_on") @db.Date
-  payload Json
-  clientOpId String @map("client_op_id")
-  @@unique([documentId, clientOpId])
-  @@map("trade_settlement")
-}
-
-model AppUser {
-  id                 String   @id @default(uuid())
-  factoryId          String   @map("factory_id")
-  factory            Factory  @relation(fields: [factoryId], references: [id])
-  username           String   @unique
-  email              String?  @unique
-  name               String
-  role               UserRole
-  active             Boolean  @default(true)
-  passwordHash       String   @map("password_hash")
-  mustChangePassword Boolean  @default(true) @map("must_change_password")
-  tokenVersion       Int      @default(0) @map("token_version")
-  createdAt          DateTime @default(now()) @map("created_at")
-  version            Int      @default(0)
-
-  /// Consecutive failed logins since the last success or lockout.
-  failedLoginCount Int       @default(0) @map("failed_login_count")
-  /// Set while a timed lockout is in force. Login is refused until it passes.
-  lockedUntil      DateTime? @map("locked_until")
-  /// Timed lockouts served since the last success. The second round suspends.
-  lockoutCount     Int       @default(0) @map("lockout_count")
-  /// Set when repeated failures suspended the account, to tell that apart from
-  /// an owner deliberately revoking someone. Both leave active = false.
-  suspendedAt      DateTime? @map("suspended_at")
-
-  sessions AuthSession[]
+model User {
+  id           String    @id @default(uuid())
+  factoryId    String    @map("factory_id")
+  factory      Factory   @relation(fields: [factoryId], references: [id])
+  username     String    @unique
+  name         String
+  userType     UserType  @map("user_type")
+  passwordHash String    @map("password_hash")
+  disabled     Boolean   @default(false)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  sessions     Session[]
 
   @@index([factoryId])
   @@map("app_user")
 }
 
-model AuthSession {
+model Session {
   id        String   @id @default(uuid())
-  factoryId String   @map("factory_id")
-  factory   Factory  @relation(fields: [factoryId], references: [id])
   userId    String   @map("user_id")
-  user      AppUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   tokenHash String   @unique @map("token_hash")
   expiresAt DateTime @map("expires_at")
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([userId])
-  @@index([expiresAt])
-  @@map("auth_session")
+  @@map("session")
 }
 
-model AuditEvent {
-  id         String   @id @default(uuid())
-  factoryId  String   @map("factory_id")
-  factory    Factory  @relation(fields: [factoryId], references: [id])
-  actorId    String?  @map("actor_id")
-  action     String
-  entityType String   @map("entity_type")
-  entityId   String?  @map("entity_id")
-  payload    Json
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  @@index([factoryId, createdAt])
-  @@map("audit_event")
+enum AccountKind {
+  CASH
+  BANK
+  UPI
 }
 
-model BootstrapLock {
-  id          String   @id
-  usedAt      DateTime @map("used_at")
-  ownerUserId String   @map("owner_user_id")
-
-  @@map("bootstrap_lock")
+enum PartyKind {
+  CUSTOMER
+  MINE
+  STAFF
+  ADVANCE
 }
 
-model InventoryLocation {
-  id           String                @id @default(uuid())
-  factoryId    String                @map("factory_id")
-  factory      Factory               @relation(fields: [factoryId], references: [id])
-  code         String
-  name         String
-  locationType InventoryLocationType @map("location_type")
-  active       Boolean               @default(true)
-  createdAt    DateTime              @default(now()) @map("created_at")
-
-  rawBlocks RawBlock[]
-  slabs     Slab[]
-
-  @@unique([factoryId, code])
-  @@map("inventory_location")
+enum ItemKind {
+  VARIETY
+  CONSUMABLE
 }
 
-model Supplier {
-  billingAddress String? @map("billing_address")
-  shippingAddress String? @map("shipping_address")
-  id          String     @id @default(uuid())
-  factoryId   String     @map("factory_id")
-  factory     Factory    @relation(fields: [factoryId], references: [id])
-  name        String
-  contactInfo String?    @map("contact_info")
-  /// Two-digit GST state code of the place of supply for purchases from this vendor.
-  stateCode   String?    @map("state_code")
-  /// Without a supplier GSTIN there is no input tax credit to claim.
-  gstin       String?
-  createdAt   DateTime   @default(now()) @map("created_at")
-  version     Int        @default(0)
-  finishedPurchases FinishedPurchase[] @relation("FinishedSupplier")
-  transportedPurchases FinishedPurchase[] @relation("FinishedTransporter")
-  rawBlocks   RawBlock[]
+enum OpeningHead {
+  CAPITAL
+  CONSTRUCTION
+  GST_INPUT_CLAIMED
+  SUBSIDY_RECEIVED
+  ICICI_PRINCIPAL_REPAID
+  ICICI_INTEREST_PAID
+  CC_INTEREST_PAID
+  MARKET_INTEREST_PAID
+  WPPF_WITHDRAWN
+  PPF_WITHDRAWN
+  SOLAR_PAID
+}
+
+model MoneyAccount {
+  id        String      @id @default(uuid())
+  factoryId String      @map("factory_id")
+  factory   Factory     @relation(fields: [factoryId], references: [id])
+  name      String
+  kind      AccountKind
+  balance   Decimal     @db.Decimal(14, 2)
+  createdAt DateTime    @default(now()) @map("created_at")
 
   @@index([factoryId])
-  @@map("supplier")
+  @@map("money_account")
 }
 
-model Customer {
-  pendingCash Decimal @default(0) @map("pending_cash") @db.Decimal(14, 2)
-  pendingBank Decimal @default(0) @map("pending_bank") @db.Decimal(14, 2)
-  collectionNote String? @map("collection_note")
-  id          String       @id @default(uuid())
-  factoryId   String       @map("factory_id")
-  factory     Factory      @relation(fields: [factoryId], references: [id])
-  name        String
-  contactInfo String?      @map("contact_info")
-  /// Where the bill goes. The yard also needs somewhere to send the lorry, which is
-  /// often a different site, so a consignee can be named per invoice as well.
-  billingAddress  String?  @map("billing_address")
-  shippingAddress String?  @map("shipping_address")
-  /// Two-digit GST state code. Decides CGST+SGST vs IGST. Null means a local counter sale.
-  stateCode   String?      @map("state_code")
-  gstin       String?
-  creditLimit Decimal?     @map("credit_limit") @db.Decimal(14, 2)
-  createdAt   DateTime     @default(now()) @map("created_at")
-  version     Int          @default(0)
-  quotations  Quotation[]
-  salesOrders SalesOrder[]
-  invoices    Invoice[]
+model PartyOpening {
+  id            String    @id @default(uuid())
+  factoryId     String    @map("factory_id")
+  factory       Factory   @relation(fields: [factoryId], references: [id])
+  name          String
+  kind          PartyKind
+  bankDue       Decimal   @default(0) @map("bank_due") @db.Decimal(14, 2)
+  cashDue       Decimal   @default(0) @map("cash_due") @db.Decimal(14, 2)
+  royaltyDue    Decimal   @default(0) @map("royalty_due") @db.Decimal(14, 2)
+  transportDue  Decimal   @default(0) @map("transport_due") @db.Decimal(14, 2)
+  createdAt     DateTime  @default(now()) @map("created_at")
 
   @@index([factoryId])
-  @@map("customer")
+  @@map("party_opening")
 }
 
-model Machine {
-  id               String      @id @default(uuid())
-  factoryId        String      @map("factory_id")
-  factory          Factory     @relation(fields: [factoryId], references: [id])
-  name             String
-  machineType      MachineType @map("machine_type")
-  plannedHoursPerDay Decimal? @map("planned_hours_per_day") @db.Decimal(4,2)
-  idealSqftPerHour Decimal? @map("ideal_sqft_per_hour") @db.Decimal(12,3)
-  bladeCount       Int?        @map("blade_count")
-  headCount        Int?        @map("head_count")
-  abrasivesPerHead Int?        @map("abrasives_per_head")
-  active           Boolean     @default(true)
-  createdAt        DateTime    @default(now()) @map("created_at")
+model StockItem {
+  id        String         @id @default(uuid())
+  factoryId String         @map("factory_id")
+  factory   Factory        @relation(fields: [factoryId], references: [id])
+  kind      ItemKind
+  name      String
+  nameKey   String         @map("name_key")
+  unit      String         @default("")
+  createdAt DateTime       @default(now()) @map("created_at")
+  blocks    BlockOpening[]
+  slabs     SlabOpening[]
+  store     StoreOpening[]
 
-  cuttingSessions   CuttingSession[]
-  polishingSessions PolishingSession[]
-  runtimeLogs       MachineRuntimeLog[]
-  maintenanceJobs   MaintenanceJob[]
+  @@unique([factoryId, kind, nameKey])
+  @@index([factoryId])
+  @@map("stock_item")
+}
+
+model BlockOpening {
+  id            String    @id @default(uuid())
+  factoryId     String    @map("factory_id")
+  factory       Factory   @relation(fields: [factoryId], references: [id])
+  itemId        String    @map("item_id")
+  item          StockItem @relation(fields: [itemId], references: [id])
+  blockNumber   String    @map("block_number")
+  tons          Decimal   @db.Decimal(12, 3)
+  ratePerTon    Decimal   @map("rate_per_ton") @db.Decimal(14, 2)
+  royaltyPerTon Decimal   @default(336) @map("royalty_per_ton") @db.Decimal(14, 2)
+  createdAt     DateTime  @default(now()) @map("created_at")
 
   @@index([factoryId])
-  @@map("machine")
+  @@index([itemId])
+  @@map("block_opening")
 }
 
-model RawBlock {
-  tradeReference String? @map("trade_reference")
-  openingReference String? @map("opening_reference")
-  id                 String             @id @default(uuid())
-  factoryId          String             @map("factory_id")
-  factory            Factory            @relation(fields: [factoryId], references: [id])
-  serialNumber       String             @map("serial_number")
-  varietyName        String             @map("variety_name")
-  supplierId         String?            @map("supplier_id")
-  supplier           Supplier?          @relation(fields: [supplierId], references: [id])
-  quarry             String?
-  weightTons         Decimal?           @map("weight_tons") @db.Decimal(10, 3)
-  lengthFt           Decimal?           @map("length_ft") @db.Decimal(8, 2)
-  widthFt            Decimal?           @map("width_ft") @db.Decimal(8, 2)
-  heightFt           Decimal?           @map("height_ft") @db.Decimal(8, 2)
-  volumeCft          Decimal?           @map("volume_cft") @db.Decimal(10, 3)
-  qualityNote        String?            @map("quality_note")
-  blockPricePerTon Decimal? @map("block_price_per_ton") @db.Decimal(14,2)
-  royaltyPerTon Decimal? @map("royalty_per_ton") @db.Decimal(14,2)
-  transportPerTon Decimal? @map("transport_per_ton") @db.Decimal(14,2)
-  costsConfirmedAt   DateTime?          @map("costs_confirmed_at")
-  purchaseDate       DateTime?          @map("purchase_date") @db.Date
-  /// Total on the vendor bill, tax included. What is owed to the supplier.
-  invoicedAmount     Decimal?           @map("invoiced_amount") @db.Decimal(14, 2)
-  actualAmountPaid   Decimal?           @map("actual_amount_paid") @db.Decimal(14, 2)
-  purchasePaymentMethod String?        @map("purchase_payment_method")
-  /// Value before tax. This, never the tax-inclusive total, is the block's cost basis:
-  /// GST paid is recoverable as input credit and is not a cost of the stone.
-  purchaseTaxable    Decimal?           @map("purchase_taxable") @db.Decimal(14, 2)
-  purchaseCgst       Decimal            @default(0) @map("purchase_cgst") @db.Decimal(14, 2)
-  purchaseSgst       Decimal            @default(0) @map("purchase_sgst") @db.Decimal(14, 2)
-  purchaseIgst       Decimal            @default(0) @map("purchase_igst") @db.Decimal(14, 2)
-  /// Frozen at receipt. Rough blocks are 5% (HSN 2516), but the slab is chosen per receipt.
-  purchaseGstRatePct Decimal            @default(0) @map("purchase_gst_rate_pct") @db.Decimal(5, 2)
-  /// Paid in cash outside the GST bill. An unregistered quarry supplier cannot charge
-  /// tax, so there is nothing to claim: this is cost of stone and carries no input
-  /// credit. It sits beside purchaseTaxable in the cost basis, never inside it.
-  purchaseCashAmount Decimal            @default(0) @map("purchase_cash_amount") @db.Decimal(14, 2)
-  supplierInvoiceNo  String?            @map("supplier_invoice_no")
-  supplierGstin      String?            @map("supplier_gstin")
-  placeOfSupply      String?            @map("place_of_supply")
-  ownershipType      OwnershipType      @default(COMPANY_OWNED) @map("ownership_type")
-  currentStatus      String             @default("in_stock") @map("current_status")
-  locationId         String?            @map("location_id")
-  location           InventoryLocation? @relation(fields: [locationId], references: [id])
-  createdAt          DateTime           @default(now()) @map("created_at")
-  version            Int                @default(0)
-
-  /// The lot, counted rather than labelled. The yard thinks in "VG-001 has 87 slabs
-  /// left", and nobody stencils a number on every piece. Available is
-  /// good - broken - sold; it is derived, never stored, so the three movements that
-  /// change it cannot drift apart from a cached total.
-  goodSlabCount   Int      @default(0) @map("good_slab_count")
-  brokenSlabCount Int      @default(0) @map("broken_slab_count")
-  soldSlabCount   Int      @default(0) @map("sold_slab_count")
-  /// How many of the lot have come off the polishing line. Deliberately not part of
-  /// availability: polishing changes what a slab is, not whether the yard still has
-  /// it. Kept so the floor can see VG-001 has 70 left but only 50 of them finished.
-  polishedSlabCount Int    @default(0) @map("polished_slab_count")
-  /// Nominal finished area of one slab off this block, set when the cut is recorded.
-  /// Slabs from one block are sawn to the same size, so a count converts to sqft.
-  sqftPerSlab     Decimal? @map("sqft_per_slab") @db.Decimal(8, 2)
-
-  slabs           Slab[]
-  cuttingSessions CuttingSession[]
-  movements       InventoryMovement[]
-  openingLines    OpeningInventoryLine[]
-  writeOffs       StockWriteOff[]
-  salesLines      SalesLineItem[]
-  deliveryLines   DeliveryLine[]
-  polishingLots   PolishingSessionSlab[]
-
-  @@unique([factoryId, serialNumber])
-  @@map("raw_block")
-}
-
-/// Where a slab broke. Kept because the owner wants to know whether breakage is a
-/// saw problem, a forklift problem or a loading problem.
-enum WriteOffStage {
-  factory_transport
-  loading
-  yard
-  other
-}
-
-/// Slabs destroyed after they reached stock, recorded as a count against their lot.
-///
-/// Deliberately a row of its own rather than a silent decrement: stock leaving the
-/// yard without a sale is the shape of both honest breakage and theft, so every
-/// write-off names a person, a reason and a value, and posts to the ledger.
-model StockWriteOff {
-  id         String        @id @default(uuid())
-  factoryId  String        @map("factory_id")
-  factory    Factory       @relation(fields: [factoryId], references: [id])
-  rawBlockId String        @map("raw_block_id")
-  rawBlock   RawBlock      @relation(fields: [rawBlockId], references: [id])
-  slabCount  Int           @map("slab_count")
-  stage      WriteOffStage
-  reason     String
-  /// Valued at this block's cost per slab. Tax paid on the purchase is recoverable
-  /// and is not part of what the breakage cost.
-  costAmount Decimal       @default(0) @map("cost_amount") @db.Decimal(14, 2)
-  occurredOn DateTime      @map("occurred_on") @db.Date
-  actorId    String        @map("actor_id")
-  clientOpId String        @map("client_op_id")
-  createdAt  DateTime      @default(now()) @map("created_at")
-
-  @@unique([factoryId, clientOpId])
-  @@index([factoryId, occurredOn])
-  @@map("stock_write_off")
-}
-
-model Slab {
-  finishedPurchaseId String? @map("finished_purchase_id")
-  finishedPurchase FinishedPurchase? @relation(fields:[finishedPurchaseId],references:[id])
-  purchaseCost Decimal? @map("purchase_cost") @db.Decimal(14,2)
-  id               String             @id @default(uuid())
-  factoryId        String             @map("factory_id")
-  factory          Factory            @relation(fields: [factoryId], references: [id])
-  parentBlockId    String?            @map("parent_block_id")
-  parentBlock      RawBlock?          @relation(fields: [parentBlockId], references: [id])
-  cuttingSessionId String?            @map("cutting_session_id")
-  cuttingSession   CuttingSession?    @relation(fields: [cuttingSessionId], references: [id])
-  slabSerial       String             @map("slab_serial")
-  varietyName      String             @map("variety_name")
-  thicknessMm      Decimal            @default(18.0) @map("thickness_mm") @db.Decimal(5, 2)
-  lengthFt         Decimal?           @map("length_ft") @db.Decimal(6, 2)
-  widthFt          Decimal?           @map("width_ft") @db.Decimal(6, 2)
-  finish           String?
-  qualityNote      String?            @map("quality_note")
-  salesStatus      String             @default("in_stock") @map("sales_status")
-  locationId       String?            @map("location_id")
-  location         InventoryLocation? @relation(fields: [locationId], references: [id])
-  createdAt        DateTime           @default(now()) @map("created_at")
-  version          Int                @default(0)
-
-  polishingLinks PolishingSessionSlab[]
-  movements      InventoryMovement[]
-  openingLines   OpeningInventoryLine[]
-  quotationLines QuotationLine[]
-  orderLines     SalesLineItem[]
-  packingLines   PackingLine[]
-  deliveryLines  DeliveryLine[]
-  returnLines    CustomerReturnLine[]
-
-  @@unique([factoryId, slabSerial])
-  @@map("slab")
-}
-
-model InventoryMovement {
-  id             String                 @id @default(uuid())
-  factoryId      String                 @map("factory_id")
-  factory        Factory                @relation(fields: [factoryId], references: [id])
-  movementType   InventoryMovementType  @map("movement_type")
-  rawBlockId     String?                @map("raw_block_id")
-  rawBlock       RawBlock?              @relation(fields: [rawBlockId], references: [id])
-  slabId         String?                @map("slab_id")
-  slab           Slab?                  @relation(fields: [slabId], references: [id])
-  quantity       Decimal                @default(1) @db.Decimal(12, 3)
-  idempotencyKey String                 @map("idempotency_key")
-  actorId        String?                @map("actor_id")
-  notes          String?
-  createdAt      DateTime               @default(now()) @map("created_at")
-
-  @@unique([factoryId, idempotencyKey])
-  @@index([factoryId, createdAt])
-  @@map("inventory_movement")
-}
-
-model OpeningInventorySnapshot {
-  id          String                 @id @default(uuid())
-  factoryId   String                 @map("factory_id")
-  factory     Factory                @relation(fields: [factoryId], references: [id])
-  status      OpeningSnapshotStatus  @default(DRAFT)
-  enteredById String                 @map("entered_by_id")
-  approvedById String?               @map("approved_by_id")
-  rejectionReason String?            @map("rejection_reason")
-  createdAt   DateTime               @default(now()) @map("created_at")
-  version     Int                    @default(0)
-  lines       OpeningInventoryLine[]
-
-  @@index([factoryId, status])
-  @@map("opening_inventory_snapshot")
-}
-
-model OpeningInventoryLine {
-  id          String                    @id @default(uuid())
-  snapshotId  String                    @map("snapshot_id")
-  snapshot    OpeningInventorySnapshot  @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
-  kind        InventoryKind
-  enteredById String                    @map("entered_by_id")
-  rawBlockId  String?                   @map("raw_block_id")
-  rawBlock    RawBlock?                 @relation(fields: [rawBlockId], references: [id])
-  slabId      String?                   @map("slab_id")
-  slab        Slab?                     @relation(fields: [slabId], references: [id])
-  payload     Json
-
-  @@map("opening_inventory_line")
-}
-
-model CuttingSession {
-  id                 String                   @id @default(uuid())
-  factoryId          String                   @map("factory_id")
-  factory            Factory                  @relation(fields: [factoryId], references: [id])
-  rawBlockId         String                   @map("raw_block_id")
-  rawBlock           RawBlock                 @relation(fields: [rawBlockId], references: [id])
-  machineId          String                   @map("machine_id")
-  machine            Machine                  @relation(fields: [machineId], references: [id])
-  startedAt          DateTime                 @map("started_at")
-  endedAt            DateTime?                @map("ended_at")
-  status             ProductionSessionStatus  @default(IN_PROGRESS)
-  expectedSlabCount  Int?                     @map("expected_slab_count")
-  totalSlabsCut      Int?                     @map("total_slabs_cut")
-  finalGoodSlabCount Int?                     @map("final_good_slab_count")
-  damagedSlabCount   Int?                     @map("damaged_slab_count")
-  damagedCostAmount  Decimal?                 @map("damaged_cost_amount") @db.Decimal(14, 2)
-  wastageNotes       String?                  @map("wastage_notes")
-  createdAt          DateTime                 @default(now()) @map("created_at")
-  version            Int                      @default(0)
-
-  dayLogs CuttingDayLog[]
-  slabs   Slab[]
-
-  @@index([factoryId, status])
-  @@map("cutting_session")
-}
-
-model CuttingDayLog {
-  id                  String         @id @default(uuid())
-  cuttingSessionId    String         @map("cutting_session_id")
-  session             CuttingSession @relation(fields: [cuttingSessionId], references: [id])
-  operationalDate     DateTime       @map("operational_date") @db.Date
-  runtimeHours        Decimal?       @map("runtime_hours") @db.Decimal(4, 2)
-  downtimeMinutes     Int?           @map("downtime_minutes")
-  downtimeReason      String?        @map("downtime_reason")
-  powerConsumptionKwh Decimal?       @map("power_consumption_kwh") @db.Decimal(10, 2)
-  slabsProducedCount  Int?           @map("slabs_produced_count")
-  operatorId          String?        @map("operator_id")
-  notes               String?
-  createdAt           DateTime       @default(now()) @map("created_at")
-  version             Int            @default(0)
-
-  @@unique([cuttingSessionId, operationalDate])
-  @@map("cutting_day_log")
-}
-
-model PolishingSession {
-  id                  String                  @id @default(uuid())
-  factoryId           String                  @map("factory_id")
-  factory             Factory                 @relation(fields: [factoryId], references: [id])
-  machineId           String                  @map("machine_id")
-  machine             Machine                 @relation(fields: [machineId], references: [id])
-  operationalDate     DateTime                @map("operational_date") @db.Date
-  processType         LpmProcessType          @map("process_type")
-  finishType          String?                 @map("finish_type")
-  runtimeHours        Decimal?                @map("runtime_hours") @db.Decimal(4, 2)
-  downtimeMinutes     Int?                    @map("downtime_minutes")
-  operatorId          String?                 @map("operator_id")
-  notes               String?
-  status              ProductionSessionStatus @default(IN_PROGRESS)
-  createdAt           DateTime                @default(now()) @map("created_at")
-  version             Int                     @default(0)
-
-  slabs PolishingSessionSlab[]
-
-  @@index([factoryId, operationalDate])
-  @@map("polishing_session")
-}
-
-/// A line on a polishing session: either one identified slab, or a count off a lot.
-///
-/// The per-piece path is the older one and is untouched. A lot has no piece
-/// identities at all — a cut records counts against the block and never creates Slab
-/// rows — so a lot line names the block and how many of its slabs went through.
-/// Exactly one of the two is set.
-model PolishingSessionSlab {
-  id                 String           @id @default(uuid())
-  polishingSessionId String           @map("polishing_session_id")
-  session            PolishingSession @relation(fields: [polishingSessionId], references: [id])
-  slabId             String?          @map("slab_id")
-  slab               Slab?            @relation(fields: [slabId], references: [id])
-  rawBlockId         String?          @map("raw_block_id")
-  rawBlock           RawBlock?        @relation(fields: [rawBlockId], references: [id])
-  slabCount          Int?             @map("slab_count")
-
-  @@unique([polishingSessionId, slabId])
-  @@unique([polishingSessionId, rawBlockId])
-  @@map("polishing_session_slab")
-}
-
-model MachineRuntimeLog {
-  id              String   @id @default(uuid())
-  machineId       String   @map("machine_id")
-  machine         Machine  @relation(fields: [machineId], references: [id])
-  operationalDate DateTime @map("operational_date") @db.Date
-  runtimeHours    Decimal  @map("runtime_hours") @db.Decimal(4, 2)
-  downtimeMinutes Int      @default(0) @map("downtime_minutes")
-  notes           String?
-  createdAt       DateTime @default(now()) @map("created_at")
-
-  @@unique([machineId, operationalDate])
-  @@map("machine_runtime_log")
-}
-
-model MaintenanceJob {
+model SlabOpening {
   id          String    @id @default(uuid())
   factoryId   String    @map("factory_id")
   factory     Factory   @relation(fields: [factoryId], references: [id])
-  machineId   String    @map("machine_id")
-  machine     Machine   @relation(fields: [machineId], references: [id])
-  title       String
-  dueOn       DateTime  @map("due_on") @db.Date
-  completedAt DateTime? @map("completed_at")
-  notes       String?
+  itemId      String    @map("item_id")
+  item        StockItem @relation(fields: [itemId], references: [id])
+  finish      String
+  sqft        Decimal   @db.Decimal(14, 2)
+  ratePerSqft Decimal   @map("rate_per_sqft") @db.Decimal(14, 2)
+  jobWork     Boolean   @default(false) @map("job_work")
   createdAt   DateTime  @default(now()) @map("created_at")
 
-  @@index([factoryId, dueOn])
-  @@map("maintenance_job")
-}
-
-model Consumable {
-  movements ConsumableMovement[]
-  id        String   @id @default(uuid())
-  factoryId String   @map("factory_id")
-  factory   Factory  @relation(fields: [factoryId], references: [id])
-  name      String
-  unit      String
-  onHand    Decimal  @default(0) @map("on_hand") @db.Decimal(12, 3)
-  createdAt DateTime @default(now()) @map("created_at")
-
-  @@unique([factoryId, name])
-  @@map("consumable")
-}
-
-model Quotation {
-  id         String          @id @default(uuid())
-  factoryId  String          @map("factory_id")
-  factory    Factory         @relation(fields: [factoryId], references: [id])
-  customerId String          @map("customer_id")
-  customer   Customer        @relation(fields: [customerId], references: [id])
-  status     QuotationStatus @default(DRAFT)
-  validUntil DateTime?       @map("valid_until") @db.Date
-  notes      String?
-  createdAt  DateTime        @default(now()) @map("created_at")
-  version    Int             @default(0)
-  lines      QuotationLine[]
-
   @@index([factoryId])
-  @@map("quotation")
+  @@index([itemId])
+  @@map("slab_opening")
 }
 
-model QuotationLine {
-  id           String    @id @default(uuid())
-  quotationId  String    @map("quotation_id")
-  quotation    Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
-  slabId       String?   @map("slab_id")
-  slab         Slab?     @relation(fields: [slabId], references: [id])
-  description  String
-  quantitySqft Decimal   @map("quantity_sqft") @db.Decimal(12, 3)
-  rate         Decimal   @db.Decimal(14, 2)
-
-  @@map("quotation_line")
-}
-
-model SalesOrder {
-  id          String           @id @default(uuid())
-  factoryId   String           @map("factory_id")
-  factory     Factory          @relation(fields: [factoryId], references: [id])
-  customerId  String           @map("customer_id")
-  customer    Customer         @relation(fields: [customerId], references: [id])
-  status      SalesOrderStatus @default(DRAFT)
-  /// gst_invoice raises a tax invoice; cash_unbilled settles in cash with no invoice.
-  billingMode BillingMode      @default(gst_invoice) @map("billing_mode")
-  promisedDeliveryDate DateTime? @map("promised_delivery_date") @db.Date
-  orderDate   DateTime         @map("order_date") @db.Date
-  createdAt   DateTime         @default(now()) @map("created_at")
-  version     Int              @default(0)
-  lines       SalesLineItem[]
-  packingLists PackingList[]
-  deliveries  Delivery[]
-  invoices    Invoice[]
-  returns     CustomerReturn[]
-  creditNotes CreditNote[]
-  cashSale    CashSale?
-
-  @@index([factoryId, orderDate])
-  @@map("sales_order")
-}
-
-model SalesLineItem {
-  id           String     @id @default(uuid())
-  salesOrderId String     @map("sales_order_id")
-  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
-  slabId       String?    @map("slab_id")
-  slab         Slab?      @relation(fields: [slabId], references: [id])
-  /// A lot sale names the block and how many slabs go, with no piece identities.
-  /// quantitySqft is then slabCount x the block's sqftPerSlab, so invoicing and the
-  /// reports keep working off area exactly as they do for a per-piece line.
-  rawBlockId   String?    @map("raw_block_id")
-  rawBlock     RawBlock?  @relation(fields: [rawBlockId], references: [id])
-  slabCount    Int?       @map("slab_count")
-  /// How many of this line's slabs have actually left the gate. The sale already
-  /// deducted them from stock, so this tracks fulfilment, never availability —
-  /// which is why a dispatch must not touch the lot counts a second time.
-  dispatchedCount Int     @default(0) @map("dispatched_count")
-  /// What the buyer sees on the bill, and the HSN it is classified under. Slabs are
-  /// 6802, rough blocks 2516, and they attract different rates — so the code lives
-  /// on the line, not the invoice, and one bill may carry both.
-  description  String?
-  hsnCode      String?    @map("hsn_code")
-  /// Rate for this line. Null means take the invoice's rate.
-  gstRatePct   Decimal?   @map("gst_rate_pct") @db.Decimal(5, 2)
-  quantitySqft Decimal    @map("quantity_sqft") @db.Decimal(12, 3)
-  rate         Decimal    @db.Decimal(14, 2)
-
-  @@map("sales_line_item")
-}
-
-model PackingList {
-  id           String     @id @default(uuid())
-  factoryId    String     @map("factory_id")
-  factory      Factory    @relation(fields: [factoryId], references: [id])
-  salesOrderId String     @map("sales_order_id")
-  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id])
-  packedAt     DateTime   @default(now()) @map("packed_at")
-  notes        String?
-  version      Int        @default(0)
-  lines        PackingLine[]
-
-  @@map("packing_list")
-}
-
-model PackingLine {
-  id            String      @id @default(uuid())
-  packingListId String      @map("packing_list_id")
-  packingList   PackingList @relation(fields: [packingListId], references: [id], onDelete: Cascade)
-  slabId        String      @map("slab_id")
-  slab          Slab        @relation(fields: [slabId], references: [id])
-
-  @@unique([packingListId, slabId])
-  @@map("packing_line")
-}
-
-model Delivery {
-  id           String         @id @default(uuid())
-  factoryId    String         @map("factory_id")
-  factory      Factory        @relation(fields: [factoryId], references: [id])
-  salesOrderId String         @map("sales_order_id")
-  salesOrder   SalesOrder     @relation(fields: [salesOrderId], references: [id])
-  dispatchedAt DateTime       @map("dispatched_at")
-  notes        String?
-  version      Int            @default(0)
-  lines        DeliveryLine[]
-
-  @@map("delivery")
-}
-
-model DeliveryLine {
-  id         String    @id @default(uuid())
-  deliveryId String    @map("delivery_id")
-  delivery   Delivery  @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
-  /// A piece dispatch names the slab. A lot dispatch names the block and a count
-  /// instead, because the goods going out of the gate have no piece identities —
-  /// exactly one of the two is set.
-  slabId     String?   @map("slab_id")
-  slab       Slab?     @relation(fields: [slabId], references: [id])
-  rawBlockId String?   @map("raw_block_id")
-  rawBlock   RawBlock? @relation(fields: [rawBlockId], references: [id])
-  slabCount  Int?      @map("slab_count")
-
-  @@unique([deliveryId, slabId])
-  @@unique([deliveryId, rawBlockId])
-  @@map("delivery_line")
-}
-
-model Invoice {
-  id             String     @id @default(uuid())
-  factoryId      String     @map("factory_id")
-  factory        Factory    @relation(fields: [factoryId], references: [id])
-  salesOrderId   String     @map("sales_order_id")
-  salesOrder     SalesOrder @relation(fields: [salesOrderId], references: [id])
-  customerId     String     @map("customer_id")
-  customer       Customer   @relation(fields: [customerId], references: [id])
-  invoiceNumber  String     @map("invoice_number")
-  dueDate        DateTime?  @map("due_date") @db.Date
-  promisedPaymentDate DateTime? @map("promised_payment_date") @db.Date
-  collectionNote String? @map("collection_note")
-  invoiceDate    DateTime?  @map("invoice_date") @db.Date
-  /// Total payable: taxable value plus tax. AR and payments settle against this.
-  amount         Decimal    @db.Decimal(14, 2)
-  /// Value before tax: sum of quantity x rate, since rates are quoted ex-GST.
-  taxableAmount  Decimal    @default(0) @map("taxable_amount") @db.Decimal(14, 2)
-  cgstAmount     Decimal    @default(0) @map("cgst_amount") @db.Decimal(14, 2)
-  sgstAmount     Decimal    @default(0) @map("sgst_amount") @db.Decimal(14, 2)
-  igstAmount     Decimal    @default(0) @map("igst_amount") @db.Decimal(14, 2)
-  /// Charges billed outside the taxable value (pure reimbursements). Added to the payable untaxed.
-  exemptAmount   Decimal    @default(0) @map("exempt_amount") @db.Decimal(14, 2)
-  /// Frozen at issue. Tax is a historical fact and is never recomputed from live profile rows.
-  gstRatePct     Decimal    @default(0) @map("gst_rate_pct") @db.Decimal(5, 2)
-  placeOfSupply  String?    @map("place_of_supply")
-  supplierState  String?    @map("supplier_state")
-  /// Consignee, copied onto the document at issue. A tax invoice must show where the
-  /// goods actually went, and the customer's address can be edited later — a bill
-  /// already given to a buyer must not change under them.
-  shipToName      String?   @map("ship_to_name")
-  shipToAddress   String?   @map("ship_to_address")
-  shipToGstin     String?   @map("ship_to_gstin")
-  shipToStateCode String?   @map("ship_to_state_code")
-  /// Seller identity frozen at issue, for the same reason.
-  sellerLegalName String?   @map("seller_legal_name")
-  sellerGstin     String?   @map("seller_gstin")
-  idempotencyKey String     @map("idempotency_key")
-  createdAt      DateTime   @default(now()) @map("created_at")
-  version        Int        @default(0)
-  payments       Payment[]
-  creditNotes    CreditNote[]
-  charges        InvoiceCharge[]
-  taxLines       InvoiceTaxLine[]
-  eInvoice       EInvoice?
-
-  @@index([factoryId, invoiceDate], map: "invoice_factory_date_idx")
-  @@unique([factoryId, invoiceNumber])
-  @@unique([factoryId, idempotencyKey])
-  @@map("invoice")
-}
-
-/// One row per (HSN, rate) on an invoice: the HSN summary a tax invoice must carry,
-/// and the only honest way to total a bill that mixes 18% slabs with 5% blocks.
-/// The invoice's own cgst/sgst/igst columns are the sum of these.
-model InvoiceTaxLine {
-  id            String  @id @default(uuid())
-  invoiceId     String  @map("invoice_id")
-  invoice       Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  hsnCode       String  @map("hsn_code")
-  gstRatePct    Decimal @map("gst_rate_pct") @db.Decimal(5, 2)
-  taxableAmount Decimal @map("taxable_amount") @db.Decimal(14, 2)
-  cgstAmount    Decimal @default(0) @map("cgst_amount") @db.Decimal(14, 2)
-  sgstAmount    Decimal @default(0) @map("sgst_amount") @db.Decimal(14, 2)
-  igstAmount    Decimal @default(0) @map("igst_amount") @db.Decimal(14, 2)
-
-  @@unique([invoiceId, hsnCode, gstRatePct])
-  @@map("invoice_tax_line")
-}
-
-model Payment {
-  note String?
-  receivedBy String? @map("received_by")
-  reference String?
-  pendingBucket String? @map("pending_bucket")
-  id             String   @id @default(uuid())
-  factoryId      String   @map("factory_id")
-  factory        Factory  @relation(fields: [factoryId], references: [id])
-  invoiceId      String   @map("invoice_id")
-  invoice        Invoice  @relation(fields: [invoiceId], references: [id])
-  amount         Decimal  @db.Decimal(14, 2)
-  paidAt         DateTime @map("paid_at") @db.Date
-  method         String
-  idempotencyKey String   @map("idempotency_key")
-  createdAt      DateTime @default(now()) @map("created_at")
-
-  @@unique([factoryId, idempotencyKey])
-  @@map("payment")
-}
-
-model DocumentSequence {
-  factoryId   String  @map("factory_id")
-  factory     Factory @relation(fields: [factoryId], references: [id])
-  kind        String
-  fiscalYear  Int     @map("fiscal_year")
-  nextNumber  Int     @map("next_number")
-
-  @@id([factoryId, kind, fiscalYear])
-  @@map("document_sequence")
-}
-
-model CreditNote {
-  id               String          @id @default(uuid())
-  factoryId        String          @map("factory_id")
-  factory          Factory         @relation(fields: [factoryId], references: [id])
-  salesOrderId     String          @map("sales_order_id")
-  salesOrder       SalesOrder      @relation(fields: [salesOrderId], references: [id])
-  invoiceId        String          @map("invoice_id")
-  invoice          Invoice         @relation(fields: [invoiceId], references: [id])
-  customerReturnId String?         @unique @map("customer_return_id")
-  customerReturn   CustomerReturn? @relation(fields: [customerReturnId], references: [id])
-  creditNoteNumber String          @map("credit_note_number")
-  /// Total credited: taxable value plus the tax being reversed.
-  amount           Decimal         @db.Decimal(14, 2)
-  taxableAmount    Decimal         @default(0) @map("taxable_amount") @db.Decimal(14, 2)
-  cgstAmount       Decimal         @default(0) @map("cgst_amount") @db.Decimal(14, 2)
-  sgstAmount       Decimal         @default(0) @map("sgst_amount") @db.Decimal(14, 2)
-  igstAmount       Decimal         @default(0) @map("igst_amount") @db.Decimal(14, 2)
-  gstRatePct       Decimal         @default(0) @map("gst_rate_pct") @db.Decimal(5, 2)
-  placeOfSupply    String?         @map("place_of_supply")
-  supplierState    String?         @map("supplier_state")
-  reason           String
-  idempotencyKey   String          @map("idempotency_key")
-  createdAt        DateTime        @default(now()) @map("created_at")
-  version          Int             @default(0)
-  eInvoice         EInvoice?
-
-  @@unique([factoryId, creditNoteNumber])
-  @@unique([factoryId, idempotencyKey])
-  @@map("credit_note")
-}
-
-model CustomerReturn {
-  id           String               @id @default(uuid())
-  factoryId    String               @map("factory_id")
-  factory      Factory              @relation(fields: [factoryId], references: [id])
-  salesOrderId String               @map("sales_order_id")
-  salesOrder   SalesOrder           @relation(fields: [salesOrderId], references: [id])
-  reason       String
-  createdAt    DateTime             @default(now()) @map("created_at")
-  lines        CustomerReturnLine[]
-  creditNote   CreditNote?
-
-  @@map("customer_return")
-}
-
-model CustomerReturnLine {
-  id       String         @id @default(uuid())
-  returnId String         @map("return_id")
-  parent   CustomerReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
-  slabId   String         @map("slab_id")
-  slab     Slab           @relation(fields: [slabId], references: [id])
-
-  @@map("customer_return_line")
-}
-
-model Vehicle {
+model StoreOpening {
   id        String    @id @default(uuid())
   factoryId String    @map("factory_id")
   factory   Factory   @relation(fields: [factoryId], references: [id])
-  name      String
-  active    Boolean   @default(true)
+  itemId    String    @map("item_id")
+  item      StockItem @relation(fields: [itemId], references: [id])
+  quantity  Decimal   @db.Decimal(14, 3)
+  rate      Decimal   @db.Decimal(14, 2)
   createdAt DateTime  @default(now()) @map("created_at")
-  expenses  Expense[]
-  eWayBills EWayBill[]
 
+  @@unique([factoryId, itemId])
   @@index([factoryId])
-  @@map("vehicle")
+  @@map("store_opening")
 }
 
-model Expense {
-  id             String               @id @default(uuid())
-  factoryId      String               @map("factory_id")
-  factory        Factory              @relation(fields: [factoryId], references: [id])
-  category       String
-  amount         Decimal              @db.Decimal(14, 2)
-  expenseDate    DateTime             @map("expense_date") @db.Date
-  vehicleId      String?              @map("vehicle_id")
-  vehicle        Vehicle?             @relation(fields: [vehicleId], references: [id])
-  toWhom         String?              @map("to_whom")
-  /// Value before tax. The expense ledger carries this; the tax is input credit.
-  taxableAmount  Decimal?             @map("taxable_amount") @db.Decimal(14, 2)
-  cgstAmount     Decimal              @default(0) @map("cgst_amount") @db.Decimal(14, 2)
-  sgstAmount     Decimal              @default(0) @map("sgst_amount") @db.Decimal(14, 2)
-  igstAmount     Decimal              @default(0) @map("igst_amount") @db.Decimal(14, 2)
-  /// Frozen when booked. Consumables and services sit on several slabs.
-  gstRatePct     Decimal              @default(0) @map("gst_rate_pct") @db.Decimal(5, 2)
-  supplierGstin  String?              @map("supplier_gstin")
-  idempotencyKey String?              @map("idempotency_key")
-  createdAt      DateTime             @default(now()) @map("created_at")
-  version        Int                  @default(0)
-  allocations    ExpenseAllocation[]
+model SettledTotal {
+  id        String      @id @default(uuid())
+  factoryId String      @map("factory_id")
+  factory   Factory     @relation(fields: [factoryId], references: [id])
+  head      OpeningHead
+  amount    Decimal     @db.Decimal(14, 2)
 
-  @@unique([factoryId, idempotencyKey])
-  @@map("expense")
-}
-
-model ExpenseAllocation {
-  costComponent String @default("other") @map("cost_component")
-  id               String  @id @default(uuid())
-  expenseId        String  @map("expense_id")
-  expense          Expense @relation(fields: [expenseId], references: [id])
-  rawBlockId       String? @map("raw_block_id")
-  allocatedAmount  Decimal @map("allocated_amount") @db.Decimal(14, 2)
-  allocationBatchKey String @map("allocation_batch_key")
-
-  @@unique([expenseId, allocationBatchKey, rawBlockId])
-  @@map("expense_allocation")
-}
-
-model TallyImportBatch {
-  id          String   @id @default(uuid())
-  factoryId   String   @map("factory_id")
-  factory     Factory  @relation(fields: [factoryId], references: [id])
-  kind        String
-  fileName    String   @map("file_name")
-  importedBy  String   @map("imported_by")
-  createdAt   DateTime @default(now()) @map("created_at")
-  summary     Json
-
-  @@index([factoryId])
-  @@map("tally_import_batch")
-}
-
-model StoredFile {
-  id          String   @id @default(uuid())
-  factoryId   String   @map("factory_id")
-  factory     Factory  @relation(fields: [factoryId], references: [id])
-  key         String
-  contentType String   @map("content_type")
-  uploadedBy  String   @map("uploaded_by")
-  createdAt   DateTime @default(now()) @map("created_at")
-
-  @@unique([factoryId, key])
-  @@map("stored_file")
-}
-
-model SyncOperation {
-  id           String         @id @default(uuid())
-  factoryId    String         @map("factory_id")
-  factory      Factory        @relation(fields: [factoryId], references: [id])
-  clientOpId   String         @map("client_op_id")
-  actorId      String         @map("actor_id")
-  method       String
-  path         String
-  requestHash  String         @map("request_hash")
-  statusCode   Int            @map("status_code")
-  response     Json
-  conflictPolicy ConflictPolicy @default(STRICT) @map("conflict_policy")
-  createdAt    DateTime       @default(now()) @map("created_at")
-
-  @@unique([factoryId, clientOpId])
-  @@map("sync_operation")
-}
-
-model Ledger {
-  id        String     @id @default(uuid())
-  factoryId String     @map("factory_id")
-  factory   Factory    @relation(fields: [factoryId], references: [id])
-  code      String
-  name      String
-  group     LedgerGroup
-  kind      LedgerKind
-  isSystem  Boolean    @default(true) @map("is_system")
-  lines     VoucherLine[]
-
-  @@unique([factoryId, code])
-  @@map("ledger")
-}
-
-model Party {
-  id              String    @id @default(uuid())
-  factoryId       String    @map("factory_id")
-  factory         Factory   @relation(fields: [factoryId], references: [id])
-  name            String
-  nameKey         String    @map("name_key")
-  phone           String?
-  kind            PartyKind @default(customer)
-  khataSourceName String?   @map("khata_source_name")
-  notes           String?
-  createdAt       DateTime  @default(now()) @map("created_at")
-  vouchers        Voucher[]
-  lines           VoucherLine[]
-  khataLines      ImportedKhataLine[]
-
-  @@unique([factoryId, nameKey])
-  @@index([factoryId, kind])
-  @@map("party")
-}
-
-model Voucher {
-  id                String         @id @default(uuid())
-  factoryId         String         @map("factory_id")
-  factory           Factory        @relation(fields: [factoryId], references: [id])
-  type              VoucherType
-  operationalDate   DateTime       @map("operational_date") @db.Date
-  clientOpId        String         @map("client_op_id")
-  source            VoucherSource
-  sourceId          String?        @map("source_id")
-  partyId           String?        @map("party_id")
-  party             Party?         @relation(fields: [partyId], references: [id])
-  invoiceId         String?        @map("invoice_id")
-  fileId            String?        @map("file_id")
-  memo              String?
-  createdBy         String         @map("created_by")
-  reversedVoucherId String?        @map("reversed_voucher_id")
-  createdAt         DateTime       @default(now()) @map("created_at")
-  lines             VoucherLine[]
-
-  @@unique([factoryId, clientOpId])
-  @@index([factoryId, operationalDate])
-  @@index([factoryId, partyId])
-  @@map("voucher")
-}
-
-model VoucherLine {
-  id        String   @id @default(uuid())
-  voucherId String   @map("voucher_id")
-  voucher   Voucher  @relation(fields: [voucherId], references: [id], onDelete: Cascade)
-  ledgerId  String   @map("ledger_id")
-  ledger    Ledger   @relation(fields: [ledgerId], references: [id])
-  partyId   String?  @map("party_id")
-  party     Party?   @relation(fields: [partyId], references: [id])
-  debit     Int      @default(0)
-  credit    Int      @default(0)
-
-  @@index([voucherId])
-  @@index([ledgerId])
-  @@map("voucher_line")
-}
-
-model CashDrawerDay {
-  id             String           @id @default(uuid())
-  factoryId      String           @map("factory_id")
-  factory        Factory          @relation(fields: [factoryId], references: [id])
-  operationalDate DateTime        @map("operational_date") @db.Date
-  openingCash    Int              @default(0) @map("opening_cash")
-  countedClose   Int?             @map("counted_close")
-  proposedBy     String?          @map("proposed_by")
-  confirmedBy    String?          @map("confirmed_by")
-  sourceFileId   String?          @map("source_file_id")
-  status         CashDrawerStatus @default(open)
-  createdAt      DateTime         @default(now()) @map("created_at")
-
-  @@unique([factoryId, operationalDate])
-  @@map("cash_drawer_day")
-}
-
-model KhataImportBatch {
-  id          String   @id @default(uuid())
-  factoryId   String   @map("factory_id")
-  factory     Factory  @relation(fields: [factoryId], references: [id])
-  fileName    String   @map("file_name")
-  fileId      String?  @map("file_id")
-  importedBy  String   @map("imported_by")
-  partyCount  Int      @map("party_count")
-  arMinor     Int      @map("ar_minor")
-  apMinor     Int      @map("ap_minor")
-  createdAt   DateTime @default(now()) @map("created_at")
-  lines       ImportedKhataLine[]
-
-  @@index([factoryId])
-  @@map("khata_import_batch")
-}
-
-model ImportedKhataLine {
-  id            String           @id @default(uuid())
-  batchId       String           @map("batch_id")
-  batch         KhataImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  partyId       String           @map("party_id")
-  party         Party            @relation(fields: [partyId], references: [id])
-  lineDate      DateTime?        @map("line_date") @db.Date
-  details       String
-  debitMinor    Int              @default(0) @map("debit_minor")
-  creditMinor   Int              @default(0) @map("credit_minor")
-  balanceAfter  Int?             @map("balance_after")
-  sourceFileId  String?          @map("source_file_id")
-
-  @@index([partyId])
-  @@map("imported_khata_line")
-}
-
-model IntakeDraft {
-  id               String        @id @default(uuid())
-  factoryId        String        @map("factory_id")
-  factory          Factory       @relation(fields: [factoryId], references: [id])
-  kind             IntakeKind
-  operationalDate  DateTime      @map("operational_date") @db.Date
-  status           IntakeStatus  @default(proposed)
-  clientOpId       String        @map("client_op_id")
-  sourceFileId     String?       @map("source_file_id")
-  parsed           Json
-  mismatch         Json?
-  proposedBy       String        @map("proposed_by")
-  confirmedBy      String?       @map("confirmed_by")
-  error            String?
-  createdAt        DateTime      @default(now()) @map("created_at")
-
-  @@unique([factoryId, clientOpId])
-  @@index([factoryId, operationalDate])
-  @@map("intake_draft")
-}
-
-enum GstDocStatus {
-  draft
-  mock
-  live
-  failed
-}
-
-model GstProfile {
-  id          String   @id @default(uuid())
-  factoryId   String   @unique @map("factory_id")
-  factory     Factory  @relation(fields: [factoryId], references: [id])
-  gstin       String
-  legalName   String   @map("legal_name")
-  stateCode   String   @map("state_code")
-  irpSandbox  Boolean  @default(true) @map("irp_sandbox")
-  createdAt   DateTime @default(now()) @map("created_at")
-
-  @@map("gst_profile")
-}
-
-model EInvoice {
-  id            String       @id @default(uuid())
-  factoryId     String       @map("factory_id")
-  factory       Factory      @relation(fields: [factoryId], references: [id])
-  invoiceId     String?      @unique @map("invoice_id")
-  invoice       Invoice?     @relation(fields: [invoiceId], references: [id])
-  creditNoteId  String?      @unique @map("credit_note_id")
-  creditNote    CreditNote?  @relation(fields: [creditNoteId], references: [id])
-  irn           String
-  ackNo         String       @map("ack_no")
-  signedQr      String       @map("signed_qr")
-  status        GstDocStatus @default(mock)
-  source        String       @default("mock")
-  payload       Json
-  createdAt     DateTime     @default(now()) @map("created_at")
-
-  @@index([factoryId])
-  @@map("e_invoice")
-}
-
-model EWayBill {
-  id            String       @id @default(uuid())
-  factoryId     String       @map("factory_id")
-  factory       Factory      @relation(fields: [factoryId], references: [id])
-  invoiceId     String?      @map("invoice_id")
-  deliveryId    String?      @map("delivery_id")
-  vehicleId     String?      @map("vehicle_id")
-  vehicle       Vehicle?     @relation(fields: [vehicleId], references: [id])
-  ewbNo         String       @map("ewb_no")
-  distanceKm    Int          @default(0) @map("distance_km")
-  fromGstin     String?      @map("from_gstin")
-  toGstin       String?      @map("to_gstin")
-  fromPin       String?      @map("from_pin")
-  toPin         String?      @map("to_pin")
-  status        GstDocStatus @default(mock)
-  source        String       @default("mock")
-  clientOpId    String       @map("client_op_id")
-  createdAt     DateTime     @default(now()) @map("created_at")
-
-  @@unique([factoryId, clientOpId])
-  @@index([factoryId])
-  @@map("e_way_bill")
-}
-
-enum WorkerKind {
-  cutter
-  polisher
-  helper
-  driver
-  other
-}
-
-enum AttendanceStatus {
-  present
-  absent
-  half
-  ot
-}
-
-enum WageSheetStatus {
-  draft
-  confirmed
-  paid
-}
-
-model Worker {
-  id              String     @id @default(uuid())
-  factoryId       String     @map("factory_id")
-  factory         Factory    @relation(fields: [factoryId], references: [id])
-  name            String
-  nameKey         String     @map("name_key")
-  kind            WorkerKind @default(other)
-  dailyWageMinor  Int?       @map("daily_wage_minor")
-  active          Boolean    @default(true)
-  createdAt       DateTime   @default(now()) @map("created_at")
-  attendance      Attendance[]
-  wageLines       WageLine[]
-
-  @@unique([factoryId, nameKey])
-  @@index([factoryId])
-  @@map("worker")
-}
-
-model Attendance {
-  id               String            @id @default(uuid())
-  factoryId        String            @map("factory_id")
-  factory          Factory           @relation(fields: [factoryId], references: [id])
-  workerId         String            @map("worker_id")
-  worker           Worker            @relation(fields: [workerId], references: [id])
-  operationalDate  DateTime          @map("operational_date") @db.Date
-  status           AttendanceStatus
-  otHours          Decimal?          @map("ot_hours") @db.Decimal(6, 2)
-  createdAt        DateTime          @default(now()) @map("created_at")
-
-  @@unique([workerId, operationalDate])
-  @@index([factoryId, operationalDate])
-  @@map("attendance")
-}
-
-model WageSheet {
-  id            String          @id @default(uuid())
-  factoryId     String          @map("factory_id")
-  factory       Factory         @relation(fields: [factoryId], references: [id])
-  periodStart   DateTime        @map("period_start") @db.Date
-  periodEnd     DateTime        @map("period_end") @db.Date
-  status        WageSheetStatus @default(draft)
-  clientOpId    String          @map("client_op_id")
-  proposedBy    String          @map("proposed_by")
-  confirmedBy   String?         @map("confirmed_by")
-  paidVoucherId String?         @map("paid_voucher_id")
-  createdAt     DateTime        @default(now()) @map("created_at")
-  lines         WageLine[]
-
-  @@unique([factoryId, clientOpId])
-  @@index([factoryId])
-  @@map("wage_sheet")
-}
-
-model WageLine {
-  id           String    @id @default(uuid())
-  sheetId      String    @map("sheet_id")
-  sheet        WageSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
-  workerId     String    @map("worker_id")
-  worker       Worker    @relation(fields: [workerId], references: [id])
-  days         Decimal   @db.Decimal(6, 2)
-  ot           Decimal   @default(0) @db.Decimal(6, 2)
-  amountMinor  Int       @map("amount_minor")
-
-  @@unique([sheetId, workerId])
-  @@map("wage_line")
-}
-
-/// A charge billed alongside the slabs: packaging, demurrage, labour, handling.
-/// Section 15 makes ancillary charges part of the transaction value, so these are
-/// taxed with the principal supply unless explicitly marked otherwise.
-model InvoiceCharge {
-  id        String   @id @default(uuid())
-  invoiceId String   @map("invoice_id")
-  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  label     String
-  amount    Decimal  @db.Decimal(14, 2)
-  /// False only for a genuine pure-agent reimbursement. Default is taxed.
-  taxable   Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at")
-
-  @@index([invoiceId])
-  @@map("invoice_charge")
-}
-
-/// A counter sale settled in cash against no invoice. Stock still leaves the yard and
-/// the cash is still booked, so the movement is auditable; it simply carries no GST
-/// document and is therefore absent from GSTR-1. Under GST a taxable supply attracts
-/// tax whether or not an invoice was raised: this records the decision, it does not
-/// discharge the liability.
-model CashSale {
-  id           String     @id @default(uuid())
-  factoryId    String     @map("factory_id")
-  factory      Factory    @relation(fields: [factoryId], references: [id])
-  salesOrderId String     @unique @map("sales_order_id")
-  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id])
-  buyerName    String?    @map("buyer_name")
-  amount       Decimal    @db.Decimal(14, 2)
-  saleDate     DateTime   @map("sale_date") @db.Date
-  note         String?
-  clientOpId   String     @map("client_op_id")
-  recordedBy   String     @map("recorded_by")
-  createdAt    DateTime   @default(now()) @map("created_at")
-
-  @@unique([factoryId, clientOpId])
-  @@index([factoryId, saleDate])
-  @@map("cash_sale")
-}
-
-model ConsumableMovement {
-  id String @id @default(uuid())
-  factoryId String @map("factory_id")
-  factory Factory @relation(fields: [factoryId], references: [id])
-  consumableId String @map("consumable_id")
-  consumable Consumable @relation(fields: [consumableId], references: [id])
-  direction String
-  quantity Decimal @db.Decimal(12,3)
-  reason String
-  occurredOn DateTime @map("occurred_on") @db.Date
-  actorId String @map("actor_id")
-  clientOpId String @map("client_op_id")
-  createdAt DateTime @default(now()) @map("created_at")
-  @@unique([factoryId,clientOpId])
-  @@index([factoryId,occurredOn])
-  @@map("consumable_movement")
-}
-model AnalyticsSettings {
-  factoryId String @id @map("factory_id")
-  factory Factory @relation(fields: [factoryId], references: [id])
-  targets Json?
-  openaiKeyEncrypted String? @map("openai_key_encrypted")
-  updatedAt DateTime @updatedAt @map("updated_at")
-  @@map("analytics_settings")
-}
-
-model FinishedPurchase {
-  supplierGstin          String?   @map("supplier_gstin")
-  transportSupplierGstin String?   @map("transport_supplier_gstin")
-  id                     String    @id @default(uuid())
-  factoryId              String    @map("factory_id")
-  factory                Factory   @relation(fields: [factoryId], references: [id])
-  reference              String
-  kind                   String
-  varietyName            String    @map("variety_name")
-  supplierId             String    @map("supplier_id")
-  supplier               Supplier  @relation("FinishedSupplier", fields: [supplierId], references: [id])
-  invoiceNo              String    @map("invoice_no")
-  purchaseDate           DateTime  @map("purchase_date") @db.Date
-  goodsTaxable           Decimal   @map("goods_taxable") @db.Decimal(14, 2)
-  gstRatePct             Decimal   @map("gst_rate_pct") @db.Decimal(5, 2)
-  cgst                   Decimal   @db.Decimal(14, 2)
-  sgst                   Decimal   @db.Decimal(14, 2)
-  igst                   Decimal   @db.Decimal(14, 2)
-  paidAmount             Decimal   @map("paid_amount") @db.Decimal(14, 2)
-  paymentMethod          String    @map("payment_method")
-  transportTaxable       Decimal   @map("transport_taxable") @db.Decimal(14, 2)
-  transportGstRatePct    Decimal   @map("transport_gst_rate_pct") @db.Decimal(5, 2)
-  transportCgst          Decimal   @map("transport_cgst") @db.Decimal(14, 2)
-  transportSgst          Decimal   @map("transport_sgst") @db.Decimal(14, 2)
-  transportIgst          Decimal   @map("transport_igst") @db.Decimal(14, 2)
-  transportSupplierId    String?   @map("transport_supplier_id")
-  transportSupplier      Supplier? @relation("FinishedTransporter", fields: [transportSupplierId], references: [id])
-  transportInvoiceNo     String?   @map("transport_invoice_no")
-  transportPaidAmount    Decimal   @map("transport_paid_amount") @db.Decimal(14, 2)
-  transportPaymentMethod String    @map("transport_payment_method")
-  clientOpId             String    @map("client_op_id")
-  createdAt              DateTime  @default(now()) @map("created_at")
-  slabs                  Slab[]
-
-  @@unique([factoryId, reference])
-  @@unique([factoryId, clientOpId])
-  @@index([factoryId, purchaseDate])
-  @@map("finished_purchase")
-}
-
-model OpeningBalanceBatch {
-  id String @id @default(uuid())
-  factoryId String @map("factory_id")
-  factory Factory @relation(fields: [factoryId], references: [id])
-  title String
-  effectiveDate DateTime @map("effective_date") @db.Date
-  note String?
-  status String @default("DRAFT")
-  enteredByIds Json @map("entered_by_ids")
-  approvedById String? @map("approved_by_id")
-  approvedAt DateTime? @map("approved_at")
-  reconciled Boolean @default(false)
-  clientOpId String @map("client_op_id")
-  requestHash String @map("request_hash")
-  version Int @default(0)
-  createdAt DateTime @default(now()) @map("created_at")
-  lines OpeningBalanceLine[]
-  @@unique([factoryId, clientOpId])
-  @@index([factoryId, status])
-  @@map("opening_balance_batch")
-}
-model OpeningBalanceLine {
-  id String @id @default(uuid())
-  batchId String @map("batch_id")
-  batch OpeningBalanceBatch @relation(fields: [batchId], references: [id])
-  ref String
-  kind String
-  payload Json
-  amount Decimal @default(0) @db.Decimal(14,2)
-  settledAmount Decimal @default(0) @map("settled_amount") @db.Decimal(14,2)
-  entityId String? @map("entity_id")
-  partyId String? @map("party_id")
-  settlements OpeningSettlement[]
-  customerOwnedStock CustomerOwnedStock[]
-  @@unique([batchId, ref])
-  @@map("opening_balance_line")
-}
-model OpeningSettlement {
-  id String @id @default(uuid())
-  factoryId String @map("factory_id")
-  factory Factory @relation(fields: [factoryId], references: [id])
-  lineId String @map("line_id")
-  line OpeningBalanceLine @relation(fields: [lineId], references: [id])
-  amount Decimal @db.Decimal(14,2)
-  method String
-  paidAt DateTime @map("paid_at") @db.Date
-  note String?
-  receivedBy String? @map("received_by")
-  reference String?
-  pendingBucket String? @map("pending_bucket")
-  clientOpId String @map("client_op_id")
-  requestHash String @map("request_hash")
-  createdAt DateTime @default(now()) @map("created_at")
-  @@unique([factoryId,clientOpId])
-  @@index([factoryId,paidAt])
-  @@map("opening_settlement")
-}
-
-/// Material a customer sent for job work. Never the factory's asset: it has no ledger value
-/// and is kept out of raw_block, so sales, stock valuation and reports cannot see it.
-model CustomerOwnedStock {
-  id String @id @default(uuid())
-  factoryId String @map("factory_id")
-  factory Factory @relation(fields: [factoryId], references: [id])
-  lineId String? @map("line_id")
-  line OpeningBalanceLine? @relation(fields: [lineId], references: [id])
-  reference String
-  customerName String? @map("customer_name")
-  material String
-  stage String
-  sqft Decimal @db.Decimal(12,2)
-  weightTons Decimal? @map("weight_tons") @db.Decimal(10,3)
-  asOfDate DateTime @map("as_of_date") @db.Date
-  note String?
-  createdAt DateTime @default(now()) @map("created_at")
-  @@unique([factoryId,reference])
-  @@map("customer_owned_stock")
+  @@unique([factoryId, head])
+  @@map("settled_total")
 }

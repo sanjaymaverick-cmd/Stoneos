@@ -1,59 +1,16 @@
-import {AnalyticsController} from "./modules/reports/analytics.controller";
-import {AnalyticsService} from "./modules/reports/analytics.service";
-import {OpenaiService} from "./modules/reports/openai.service";
 import { Module } from "@nestjs/common";
-import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
-import { IdempotencyInterceptor } from "./common/idempotency";
+import { APP_GUARD } from "@nestjs/core";
 import { CommonModule } from "./common/common.module";
 import { SessionGuard } from "./common/session.guard";
 import { HealthController } from "./health.controller";
-import { AdminModule } from "./modules/admin/admin.module";
 import { AuthModule } from "./modules/auth/auth.module";
-import { ExpensesModule } from "./modules/expenses/expenses.module";
-import { InventoryModule } from "./modules/inventory/inventory.module";
-import { ProductionModule } from "./modules/production/production.module";
-import { ReportsController } from "./modules/reports/reports.controller";
-import { ReportsService } from "./modules/reports/reports.service";
-import { PartyReportService } from "./modules/reports/party-report.service";
-import { DailyReportService } from "./modules/reports/daily-report.service";
-import { LotsController } from "./modules/lots/lots.controller";
-import { LotsService } from "./modules/lots/lots.service";
-import { SalesModule } from "./modules/sales/sales.module";
-import { TallyModule } from "./modules/tally/tally.module";
-import { FilesModule } from "./modules/files/files.module";
-import { MaintenanceModule } from "./modules/maintenance/maintenance.module";
-import { BooksModule } from "./modules/books/books.module";
-import { IntakeModule } from "./modules/books/intake.module";
-import { MusterModule } from "./modules/muster/muster.module";
-import { GstModule } from "./modules/gst/gst.module";
+import { SetupModule } from "./modules/setup/setup.module";
+import { OpeningModule } from "./modules/opening/opening.module";
+import { UsersModule } from "./modules/users/users.module";
 
 @Module({
-  imports: [
-    CommonModule,
-    AuthModule,
-    AdminModule,
-    InventoryModule,
-    ProductionModule,
-    BooksModule,
-    SalesModule,
-    ExpensesModule,
-    TallyModule,
-    FilesModule,
-    MaintenanceModule,
-    IntakeModule,
-    MusterModule,
-    GstModule,
-  ],
-  controllers: [HealthController, ReportsController, LotsController, AnalyticsController],
-  providers: [
-    AnalyticsService,
-    OpenaiService,
-    ReportsService,
-    PartyReportService,
-    LotsService,
-    DailyReportService,
-    { provide: APP_GUARD, useClass: SessionGuard },
-    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
-  ],
+  imports: [CommonModule, AuthModule, SetupModule, UsersModule, OpeningModule],
+  controllers: [HealthController],
+  providers: [{ provide: APP_GUARD, useClass: SessionGuard }],
 })
 export class AppModule {}

@@ -8,7 +8,7 @@
     "start": "next start --port 3000",
     "typecheck": "tsc --noEmit",
     "lint": "echo 'web lint uses tsc'",
-    "test": "node --import tsx --test lib/routePolicy.test.ts lib/serviceWorker.test.ts",
+    "test": "node --import tsx --test lib/labels.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
