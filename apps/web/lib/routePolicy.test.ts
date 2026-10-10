@@ -3,10 +3,10 @@ import { describe, it } from "node:test";
 import { visibleRoutes, canAccessPath } from "./routePolicy.ts";
 import type { Role } from "@stoneos/contracts";
 describe("yard navigation", () => {
-  it("has exactly five primary destinations in order", () =>
+  it("includes Books in primary destinations", () =>
     assert.deepEqual(
       visibleRoutes("owner").map((r) => r.label),
-      ["Today", "Yard", "Cut", "Sell", "Money"],
+      ["Today", "Yard", "Cut", "Sell", "Money", "Books"],
     ));
   it("keeps supervisor out of Settings and money", () => {
     for (const p of ["/admin/users", "/admin/audit", "/expenses", "/books"])
@@ -79,9 +79,9 @@ describe("lot screens", () => {
     }
   });
 
-  it("adds no sixth tab", () => {
-    // The five primary destinations are the point of the Today/Yard/Cut/Sell/Money
-    // layout. The lot screens hang off Yard and Sell instead of crowding the bar.
+  it("keeps lot screens out of primary tabs", () => {
+    // The primary destinations keep lot screens under Yard and Sell.
+    // Books remains directly available for financial work.
     const tabs = visibleRoutes("owner").map((r) => r.href);
     assert.equal(tabs.includes("/lots"), false);
     assert.equal(tabs.includes("/lots/sell"), false);
@@ -93,12 +93,12 @@ it("keeps financial insights owner-only without adding a primary tab", () => {
   assert.equal(canAccessPath("owner", "/analytics"), true);
   for (const role of ["supervisor", "operator", "manager", "auditor"] as Role[])
     assert.equal(canAccessPath(role, "/analytics"), false);
-  assert.equal(visibleRoutes("owner").length, 5);
+  assert.equal(visibleRoutes("owner").length, 6);
 });
 
 it("makes materials and recovery discoverable with floor-only access", () => {
   for (const path of ["/consumables", "/recovery-ratio"])
     for (const role of ["owner", "supervisor", "operator", "auditor"] as Role[])
       assert.equal(canAccessPath(role, path), role !== "auditor");
-  assert.equal(visibleRoutes("owner").length, 5);
+  assert.equal(visibleRoutes("owner").length, 6);
 });

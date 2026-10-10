@@ -123,7 +123,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     "/sales/reports",
                     "/lots",
                     "/lots/dispatch",
-                    "/books",
                     "/analytics",
                     "/muster",
                     "/maintenance",
