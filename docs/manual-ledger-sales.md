@@ -1,0 +1,11 @@
+# Manual ledger sales
+
+Books → Manual ledger sales lets authorized accounting users enter a dated sale, customer, reference, material quantities/rates, supplied GST head/amount, loading income and notes. The server computes and validates the material total in paise; the UI requires review before posting. Posting updates the full customer receivable and balanced material/GST/loading ledgers. It does not collect money, pay labour, dispatch slabs, calculate an assumed tax rate or generate a tax invoice.
+
+Printed source invoice figures may be retained separately. A difference requires explanatory notes and remains visible for invoice/tax reconciliation. Collection cash/bank plans describe intended collection only. Later actual payments use the received-payment form, with date, named account and notes; normal tenant, date, cash-day and overpayment guards apply.
+
+Audited historical manual-sale vouchers appear as Previously recorded ledger entries. Review and link existing entry creates the register record and associates the existing voucher, preserving its id, date and all financial lines. It does not post another sale or receipt. Source quantities/rates and ledger amounts must match. Same-party references cannot be reposted through either the manual or local-sale path. Repeated identical operations are idempotent; changed retries are refused.
+
+Migration 20261010090000_ledger_sales expands the trade kind check without rewriting financial records. Roll back application code if needed while retaining the added kind and records; do not narrow the check or delete recorded sales. Older application versions must not write to ledger-sale documents. Deployment requires a verified database backup. Existing unlinked vouchers remain in Books until a user explicitly links them through the screen.
+
+Operational data entry by assistants must use available UI screens, as recorded in AGENTS.md. If a screen is missing, build the user workflow first. Schema migrations and read-only verification are allowed; user-authorized database deletion remains the stated exception. Do not use ad hoc business-data import scripts.

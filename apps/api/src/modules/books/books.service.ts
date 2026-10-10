@@ -22,7 +22,7 @@ export class BooksService {
       _sum: { amount: true },
     });
     const opening = await this.prisma.openingSettlement.aggregate({ where: { factoryId, paidAt, line: { kind: "DEBTOR" } }, _sum: { amount: true } });
-    const trade = await this.prisma.tradeSettlement.aggregate({ where: { occurredOn: paidAt, document: { factoryId, kind: "local_sale" } }, _sum: { amount: true } });
+    const trade = await this.prisma.tradeSettlement.aggregate({ where: { occurredOn: paidAt, document: { factoryId, kind: { in: ["local_sale", "ledger_sale"] } } }, _sum: { amount: true } });
     return Number(r._sum.amount ?? 0) + Number(opening._sum.amount ?? 0) + Number(trade._sum.amount ?? 0);
   }
   async collectedCash(factoryId: string, saleDate: Date) {

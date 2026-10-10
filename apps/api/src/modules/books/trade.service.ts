@@ -13,13 +13,17 @@ const money = z.number().finite().min(0).max(20000000).refine(n => Math.abs(n * 
 const payment = z.object({ kind: z.enum(["funds", "creditor", "vendor_advance", "customer_advance"]), account: text, amount: money.refine(n => n > 0), note: z.string().max(1000).optional() }).strict();
 const line = z.object({ variety: text, sqft: z.number().finite().positive().max(1000000).optional(), rate: money.optional(), quantityPending: z.boolean().optional(), sourceAmount: money.optional(), serial: text.optional(), weightTons: z.number().finite().positive().max(100).optional(), stage: z.enum(["finished","rough"]).optional() }).strict();
 export const tradeSchema = z.object({
-  kind: z.enum(["local_sale", "raw_purchase"]), reference: text, partyName: text,
+  kind: z.enum(["local_sale", "raw_purchase", "ledger_sale"]), reference: text, partyName: text,
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), clientOpId: text,
   materialAmount: money.refine(n => n > 0), customerAdjustment: money.default(0),
   gstAmount: money.default(0), invoiceTaxable: money.default(0), supplierGstin: z.string().regex(/^[0-9A-Z]{15}$/).optional(),
   quotedWeightTons: z.number().finite().positive().optional(), quotedRate: money.optional(),
   royalty: money.default(0), transport: money.default(0), commission: money.default(0),
   collectionCashAdjustment: money.default(0), note: z.string().max(3000).default(""),
+  gstHead: z.enum(["none", "igst", "cgst_sgst"]).optional(),
+  printedInvoice: z.object({ taxable: money, gst: money, total: money, sqft: z.number().finite().nonnegative() }).strict().optional(),
+  collectionPlan: z.object({ cash: money, bank: money, note: z.string().max(1000) }).strict().optional(),
+  legacyVoucherId: text.optional(),
   lines: z.array(line).min(1).max(100), payments: z.array(payment).max(30).default([]),
 }).strict();
 export type TradeInput = z.input<typeof tradeSchema>;
@@ -70,6 +74,21 @@ export class TradeService {
     const rows = await this.prisma.tradeDocument.findMany({ where: { factoryId }, include: { settlements: true }, orderBy: [{ occurredOn: "desc" }, { reference: "asc" }] });
     return rows.map(r => ({ ...r, outstanding: (rupeesToMinor(Number(r.materialAmount)+Number(r.customerAdjustment)+Number(r.gstAmount)) - r.settlements.reduce((s,p) => s+rupeesToMinor(Number(p.amount)),0))/100 }));
   }
+  async ledgerSales(factoryId: string) {
+    const documents = (await this.list(factoryId)).filter(d => d.kind === "ledger_sale");
+    const audits = await this.prisma.auditEvent.findMany({ where: { factoryId, action: "books.historical_credit_sale_recorded", entityType: "voucher" } });
+    const linked = new Set(documents.map(d => (d.payload as {legacyVoucherId?:string}).legacyVoucherId));
+    const legacy = [];
+    for (const audit of audits) {
+      if(!audit.entityId) continue;
+      if (linked.has(audit.entityId)) continue;
+      const voucher = await this.prisma.voucher.findFirst({where:{id:audit.entityId,factoryId,source:"manual",type:"sales"},include:{party:true}});
+      if (!voucher?.party || voucher.sourceId) continue;
+      const a = audit.payload as {reference:string;material:number;gst:number;loadingIncome:number;printedInvoice:{sqft:number;taxable:number;igst:number;total:number};lines:Array<{material:string;sqft:number;rate:number}>;cashReceivable:number};
+      legacy.push({ voucherId:voucher.id, partyId:voucher.party.id, partyName:voucher.party.name, reference:a.reference, date:voucher.operationalDate.toISOString().slice(0,10), materialAmount:a.material, gstAmount:a.gst, customerAdjustment:a.loadingIncome, gstHead:"igst", printedInvoice:{taxable:a.printedInvoice.taxable,gst:a.printedInvoice.igst,total:a.printedInvoice.total,sqft:a.printedInvoice.sqft}, lines:a.lines.map(l=>({variety:l.material,sqft:l.sqft,rate:l.rate})), collectionPlan:{cash:a.cashReceivable,bank:0,note:"Other collection routes not confirmed"}, note:voucher.memo ?? "" });
+    }
+    return {documents,legacy};
+  }
   async destination(tx: Prisma.TransactionClient, user: AuthenticatedUser, p: Payment, customerName: string): Promise<PostLine> {
     const debit = rupeesToMinor(p.amount);
     if (p.kind === "funds") return { ledgerCode: await this.ensureFunds(tx,user.factoryId,p.account), debit, credit: 0 };
@@ -86,11 +105,24 @@ export class TradeService {
     const input = parse(tradeSchema,raw);
     const at = date(input.date);
     const requestHash = hash(input);
+    const sale = input.kind !== "raw_purchase";
     const amount = rupeesToMinor(input.materialAmount), adjustment = rupeesToMinor(input.customerAdjustment), gst = rupeesToMinor(input.gstAmount);
     if (amount+adjustment+gst+rupeesToMinor(input.royalty+input.transport)>2000000000) throw new BadRequestException("Bill exceeds supported voucher limit");
     if (input.kind === "local_sale" && (gst || input.invoiceTaxable || input.royalty || input.transport)) throw new BadRequestException("Local sales do not accept GST or vendor charges");
+    if(input.kind !== "ledger_sale" && (input.gstHead || input.printedInvoice || input.collectionPlan || input.legacyVoucherId)) throw new BadRequestException("Ledger-sale fields require a ledger sale");
+    if(input.kind === "ledger_sale") {
+      if(input.royalty || input.transport || input.commission || input.collectionCashAdjustment) throw new BadRequestException("Record cash expenses separately");
+      if(!input.gstHead || (gst>0 && input.gstHead === "none") || (gst===0 && input.gstHead !== "none")) throw new BadRequestException("Check GST head and supplied tax amount");
+      if(input.lines.some(l=>!l.sqft || l.rate===undefined || l.quantityPending)) throw new BadRequestException("Ledger sales require quantity and rate for every line");
+      const calculated=input.lines.reduce((n,l)=>n+Math.round(l.sqft!*l.rate!*100),0);
+      if(calculated!==amount) throw new BadRequestException("Material total must equal the line amounts");
+      if(input.collectionPlan && rupeesToMinor(input.collectionPlan.cash)+rupeesToMinor(input.collectionPlan.bank)>amount+adjustment+gst) throw new BadRequestException("Collection plan exceeds total due");
+      if(input.printedInvoice && rupeesToMinor(input.printedInvoice.taxable)+rupeesToMinor(input.printedInvoice.gst)!==rupeesToMinor(input.printedInvoice.total)) throw new BadRequestException("Printed invoice total does not balance");
+      if(input.printedInvoice && rupeesToMinor(input.printedInvoice.taxable)!==amount && !input.note.trim()) throw new BadRequestException("Explain the printed invoice difference in notes");
+      if(input.legacyVoucherId && input.payments.length) throw new BadRequestException("Link the existing entry first; record payments separately");
+    }
     if (input.kind === "raw_purchase" && (adjustment || input.commission || input.collectionCashAdjustment || input.invoiceTaxable > input.materialAmount)) throw new BadRequestException("Invalid purchase amounts");
-    if (input.kind === "local_sale" && input.lines.some(l => (!l.sqft && !(l.quantityPending && l.sourceAmount)) || l.serial || l.weightTons)) throw new BadRequestException("Sales require sqft or an explicitly pending source quantity");
+    if (sale && input.lines.some(l => (!l.sqft && !(l.quantityPending && l.sourceAmount)) || l.serial || l.weightTons)) throw new BadRequestException("Sales require sqft or an explicitly pending source quantity");
     if (input.kind === "raw_purchase" && input.lines.some(l => !l.serial || !l.weightTons || l.sqft)) throw new BadRequestException("Purchases require block numbers and weights");
     if (input.kind === "raw_purchase" && input.payments.some(p => p.kind !== "funds")) throw new BadRequestException("Purchase payments require a funds account");
     if (input.payments.reduce((s,p) => s+rupeesToMinor(p.amount),0) > amount+adjustment+gst) throw new BadRequestException("Settlement exceeds bill amount");
@@ -102,15 +134,35 @@ export class TradeService {
       if(factory.goLiveDate && input.date<factory.goLiveDate.toISOString().slice(0,10)) throw new BadRequestException("Trade date precedes factory opening");
       const old = await tx.tradeDocument.findUnique({ where: { factoryId_clientOpId: { factoryId: user.factoryId, clientOpId: input.clientOpId } }, include: { settlements: true } });
       if (old) { if(old.requestHash !== requestHash) throw new ConflictException("Operation already used with different data"); return old; }
-      if(await tx.tradeDocument.findFirst({where:{factoryId:user.factoryId,kind:input.kind,reference:input.reference,partyName:{equals:input.partyName,mode:"insensitive"}}})) throw new ConflictException("This party's bill reference is already recorded");
+      if(await tx.tradeDocument.findFirst({where:{factoryId:user.factoryId,kind:sale?{in:["local_sale","ledger_sale"]}:input.kind,reference:{equals:input.reference,mode:"insensitive"},partyName:{equals:input.partyName,mode:"insensitive"}}})) throw new ConflictException("This party's bill reference is already recorded");
       await this.chart(tx,user.factoryId);
-      const party = await ensureParty(tx,user.factoryId,input.partyName,input.kind === "local_sale" ? "customer" : "supplier");
-      if (input.kind === "local_sale") {
+      const party = await ensureParty(tx,user.factoryId,input.partyName,sale ? "customer" : "supplier");
+      let legacy: {id:string} | null = null;
+      if(sale) {
+        if(await tx.invoice.findFirst({where:{factoryId:user.factoryId,invoiceNumber:{equals:input.reference,mode:"insensitive"},customer:{name:{equals:input.partyName,mode:"insensitive"}}}})) throw new ConflictException("This invoice already exists in Sales");
+        const existing = await tx.voucher.findFirst({where:{factoryId:user.factoryId,type:"sales",source:"manual",partyId:party.id,OR:[{memo:{startsWith:input.reference+" dated",mode:"insensitive"}},{memo:{startsWith:input.reference+" ·",mode:"insensitive"}}]},include:{lines:{include:{ledger:true}}}});
+        if(input.legacyVoucherId) {
+          if(!existing || existing.id!==input.legacyVoucherId || existing.sourceId || existing.operationalDate.toISOString().slice(0,10)!==input.date) throw new ConflictException("Existing entry does not match; no sale posted");
+          const audit=await tx.auditEvent.findFirst({where:{factoryId:user.factoryId,entityId:existing.id,action:"books.historical_credit_sale_recorded"}});
+          if(!audit) throw new BadRequestException("This entry cannot be linked automatically");
+          const source=audit.payload as {lines:Array<{material:string;sqft:number;rate:number}>};
+          if(hash(input.lines.map(l=>({variety:l.variety,sqft:l.sqft,rate:l.rate})))!==hash(source.lines.map(l=>({variety:l.material,sqft:l.sqft,rate:l.rate})))) throw new BadRequestException("Material lines differ from the existing source");
+          const balance=(code:string)=>existing.lines.filter(l=>l.ledger.code===code).reduce((n,l)=>n+l.credit-l.debit,0);
+          const expectedHead=input.gstHead==="igst"?"GST_OUTPUT_IGST":"GST_OUTPUT_CGST";
+          if(balance("AR")!==-(amount+adjustment+gst) || balance("SALES")!==amount || balance("LOADING_INCOME")!==adjustment || (input.gstHead==="cgst_sgst"?(balance(expectedHead)!==Math.floor(gst/2)||balance("GST_OUTPUT_SGST")!==gst-Math.floor(gst/2)):balance(expectedHead)!==gst) || existing.lines.reduce((n,l)=>n+l.debit,0)!==amount+adjustment+gst) throw new BadRequestException("Amounts differ from the existing ledger entry");
+          legacy=existing;
+        } else if(existing) throw new ConflictException("Already recorded in Books. Use Link existing entry instead of posting again");
+      }
+      if (sale) {
         if (!await tx.customer.findFirst({ where: { factoryId:user.factoryId,name:{equals:input.partyName,mode:"insensitive"} } })) await tx.customer.create({data:{factoryId:user.factoryId,name:input.partyName}});
       }
-      const document = await tx.tradeDocument.create({ data: { factoryId:user.factoryId,kind:input.kind,reference:input.reference,partyName:input.partyName,occurredOn:at,materialAmount:input.materialAmount,customerAdjustment:input.customerAdjustment,gstAmount:input.gstAmount,invoiceTaxable:input.invoiceTaxable,payload: input as Prisma.InputJsonValue,stockStatus:input.kind === "local_sale" ? "pending_lot_allocation" : "received",requestHash,clientOpId:input.clientOpId,createdBy:user.id } });
+      const document = await tx.tradeDocument.create({ data: { factoryId:user.factoryId,kind:input.kind,reference:input.reference,partyName:input.partyName,occurredOn:at,materialAmount:input.materialAmount,customerAdjustment:input.customerAdjustment,gstAmount:input.gstAmount,invoiceTaxable:input.invoiceTaxable,payload: input as Prisma.InputJsonValue,stockStatus:sale ? "pending_lot_allocation" : "received",requestHash,clientOpId:input.clientOpId,createdBy:user.id } });
       const voucher = (suffix: string, lines: PostLine[], type: "sales"|"purchase"|"receipt"|"payment"|"journal", memo: string) => postVoucher(tx,{factoryId:user.factoryId,type,source:"manual",sourceId:document.id,partyId:party.id,createdBy:user.id,clientOpId:`trade:${input.clientOpId}:${suffix}`,operationalDate:at,memo:`${input.reference} · ${memo}`,lines:lines.filter(l => l.debit || l.credit)});
-      if (input.kind === "local_sale") {
+      if (input.kind === "ledger_sale") {
+        await tx.ledger.upsert({where:{factoryId_code:{factoryId:user.factoryId,code:"LOADING_INCOME"}},update:{},create:{factoryId:user.factoryId,code:"LOADING_INCOME",name:"Loading charges income",group:"income",kind:"other",isSystem:false}});
+        if(legacy) await tx.voucher.update({where:{id:legacy.id},data:{sourceId:document.id}});
+        else await voucher("bill",[{ledgerCode:"AR",debit:amount+adjustment+gst,credit:0,partyId:party.id},{ledgerCode:"SALES",debit:0,credit:amount},{ledgerCode:"LOADING_INCOME",debit:0,credit:adjustment},...(input.gstHead==="igst"?[{ledgerCode:"GST_OUTPUT_IGST",debit:0,credit:gst}]:[{ledgerCode:"GST_OUTPUT_CGST",debit:0,credit:Math.floor(gst/2)},{ledgerCode:"GST_OUTPUT_SGST",debit:0,credit:gst-Math.floor(gst/2)}])],"sales",`Ledger sale · ${input.partyName} · ${input.note}`);
+      } else if (input.kind === "local_sale") {
         await voucher("bill",[{ledgerCode:"AR",debit:amount+adjustment,credit:0,partyId:party.id},{ledgerCode:"SALES_UNBILLED",debit:0,credit:amount},{ledgerCode:"CUSTOMER_COLLECTION_CLEARING",debit:0,credit:adjustment}],"sales",`Local sale · ${input.partyName}`);
       } else {
         await voucher("bill",[{ledgerCode:"RAW_STOCK",debit:amount,credit:0},{ledgerCode:"GST_INPUT_CGST",debit:Math.floor(gst/2),credit:0},{ledgerCode:"GST_INPUT_SGST",debit:gst-Math.floor(gst/2),credit:0},{ledgerCode:"AP",debit:0,credit:amount+gst,partyId:party.id}],"purchase",`Raw purchase · ${input.partyName}`);
@@ -133,8 +185,8 @@ export class TradeService {
         const p = input.payments[i]!;
         const settlement = await tx.tradeSettlement.create({data:{documentId:document.id,amount:p.amount,occurredOn:at,payload:p as Prisma.InputJsonValue,clientOpId:`initial:${i}`}});
         const value = rupeesToMinor(p.amount);
-        const destination = input.kind === "local_sale" ? await this.destination(tx,user,p,input.partyName) : {ledgerCode:await this.ensureFunds(tx,user.factoryId,p.account),debit:0,credit:value};
-        await voucher(`settle:${settlement.id}`,[destination,{ledgerCode:input.kind === "local_sale" ? "AR" : "AP",debit:input.kind === "raw_purchase" ? value : 0,credit:input.kind === "local_sale" ? value : 0,partyId:party.id}],input.kind === "local_sale" ? "receipt" : "payment",`${p.kind} · ${p.account}${p.note ? " · "+p.note : ""}`);
+        const destination = sale ? await this.destination(tx,user,p,input.partyName) : {ledgerCode:await this.ensureFunds(tx,user.factoryId,p.account),debit:0,credit:value};
+        await voucher(`settle:${settlement.id}`,[destination,{ledgerCode:sale ? "AR" : "AP",debit:input.kind === "raw_purchase" ? value : 0,credit:sale ? value : 0,partyId:party.id} ],sale ? "receipt" : "payment",`${p.kind} · ${p.account}${p.note ? " · "+p.note : ""}`);
       }
       if(input.commission) await voucher("commission",[{ledgerCode:"EXP_MISC",debit:rupeesToMinor(input.commission),credit:0},{ledgerCode:"CASH",debit:0,credit:rupeesToMinor(input.commission)}],"payment","Sales commission");
       if(input.collectionCashAdjustment) await voucher("collection-adjustment",[{ledgerCode:"CUSTOMER_COLLECTION_CLEARING",debit:rupeesToMinor(input.collectionCashAdjustment),credit:0},{ledgerCode:"CASH",debit:0,credit:rupeesToMinor(input.collectionCashAdjustment)}],"payment","Same-day non-material collection adjustment");
@@ -157,10 +209,10 @@ export class TradeService {
       const due = rupeesToMinor(Number(doc.materialAmount)+Number(doc.customerAdjustment)+Number(doc.gstAmount))-doc.settlements.reduce((s,p)=>s+rupeesToMinor(Number(p.amount)),0);
       const amount = rupeesToMinor(input.payment.amount);
       if(amount>due) throw new BadRequestException("Payment exceeds outstanding");
-      const party = await ensureParty(tx,user.factoryId,doc.partyName,doc.kind === "local_sale" ? "customer" : "supplier");
-      const destination = doc.kind === "local_sale" ? await this.destination(tx,user,input.payment,doc.partyName) : {ledgerCode:await this.ensureFunds(tx,user.factoryId,input.payment.account),debit:0,credit:amount};
+      const party = await ensureParty(tx,user.factoryId,doc.partyName,doc.kind !== "raw_purchase" ? "customer" : "supplier");
+      const destination = doc.kind !== "raw_purchase" ? await this.destination(tx,user,input.payment,doc.partyName) : {ledgerCode:await this.ensureFunds(tx,user.factoryId,input.payment.account),debit:0,credit:amount};
       const row = await tx.tradeSettlement.create({data:{documentId:id,clientOpId:input.clientOpId,amount:input.payment.amount,occurredOn:at,payload:input.payment as Prisma.InputJsonValue}});
-      await postVoucher(tx,{factoryId:user.factoryId,type:doc.kind === "local_sale"?"receipt":"payment",source:"manual",sourceId:id,partyId:party.id,createdBy:user.id,clientOpId:`trade-payment:${id}:${input.clientOpId}`,operationalDate:at,memo:`${doc.reference} · ${input.payment.account} · ${input.payment.note ?? ""}`,lines:[destination,{ledgerCode:doc.kind === "local_sale" ? "AR":"AP",debit:doc.kind === "raw_purchase"?amount:0,credit:doc.kind === "local_sale"?amount:0,partyId:party.id}]});
+      await postVoucher(tx,{factoryId:user.factoryId,type:doc.kind !== "raw_purchase"?"receipt":"payment",source:"manual",sourceId:id,partyId:party.id,createdBy:user.id,clientOpId:`trade-payment:${id}:${input.clientOpId}`,operationalDate:at,memo:`${doc.reference} · ${input.payment.account} · ${input.payment.note ?? ""}`,lines:[destination,{ledgerCode:doc.kind !== "raw_purchase" ? "AR":"AP",debit:doc.kind === "raw_purchase"?amount:0,credit:doc.kind !== "raw_purchase"?amount:0,partyId:party.id}]});
       await tx.auditEvent.create({data:{factoryId:user.factoryId,actorId:user.id,action:"books.trade_settlement",entityType:"trade_document",entityId:id,payload:input as Prisma.InputJsonValue}});
       return row;
     },{timeout:30000});

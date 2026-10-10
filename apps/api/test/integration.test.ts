@@ -214,6 +214,41 @@ describe("postgres-backed workflows", () => {
     assert.ok(report.rows.filter(r=>r.type==="Purchase").length<=1,"trade blocks do not duplicate purchase vouchers in reports");
   });
 
+  it("manual ledger sale posts supplied tax and loading, and links an existing voucher without another debt", async () => {
+    const {factory,asOwner}=await staffFactory("ledger-sale");
+    const svc=new TradeService(prisma as never);
+    const input={kind:"ledger_sale",reference:"L1",partyName:"Ledger buyer",date:currentFactoryDate(),clientOpId:"ledger-1",materialAmount:1000,customerAdjustment:50,gstAmount:180,gstHead:"igst",lines:[{variety:"Black",sqft:10,rate:100}],collectionPlan:{cash:300,bank:0,note:"Remaining route pending"},printedInvoice:{taxable:900,gst:180,total:1080,sqft:9},note:"Source invoice differs; retain full value for reconciliation",payments:[]};
+    const doc=await svc.create(asOwner,input);
+    assert.equal((await svc.create(asOwner,input)).id,doc.id);
+    assert.equal((await svc.list(factory.id))[0]!.outstanding,1230);
+    const trial=await books.trialBalance(factory.id);
+    assert.equal(trial.find(l=>l.code==="SALES")!.credit,1000);
+    assert.equal(trial.find(l=>l.code==="GST_OUTPUT_IGST")!.credit,180);
+    assert.equal(trial.find(l=>l.code==="LOADING_INCOME")!.credit,50);
+    assert.equal(trial.find(l=>l.code==="CASH")!.debit,0,"plans and loading income do not move cash");
+    await assert.rejects(()=>svc.create(asOwner,{...input,reference:"Wrong",clientOpId:"wrong",materialAmount:999}),/line amounts/);
+    await assert.rejects(()=>svc.create(asOwner,{...input,reference:"Plan",clientOpId:"plan",collectionPlan:{cash:1500,bank:0,note:""}}),/plan exceeds/);
+    await assert.rejects(()=>svc.create(asOwner,{...input,reference:"GST",clientOpId:"gst",gstHead:"none"}),/GST head/);
+    await svc.settle(asOwner,doc.id,{clientOpId:"cash-received",date:currentFactoryDate(),payment:{kind:"funds",account:"Cash",amount:300,note:"Actual receipt"}});
+    assert.equal((await svc.list(factory.id))[0]!.outstanding,930);
+    const legacy=await prisma.$transaction(async tx=>{
+      const party=await ensureParty(tx,factory.id,"Earlier buyer","customer");
+      const v=await postVoucher(tx,{factoryId:factory.id,type:"sales",source:"manual",clientOpId:"earlier",createdBy:asOwner.id,partyId:party.id,operationalDate:new Date(currentFactoryDate()+"T02:30:00Z"),memo:"OLD-1 dated historical source",lines:[{ledgerCode:"AR",debit:123000,credit:0,partyId:party.id},{ledgerCode:"SALES",debit:0,credit:100000},{ledgerCode:"GST_OUTPUT_IGST",debit:0,credit:18000},{ledgerCode:"LOADING_INCOME",debit:0,credit:5000}]});
+      await tx.auditEvent.create({data:{factoryId:factory.id,actorId:asOwner.id,action:"books.historical_credit_sale_recorded",entityType:"voucher",entityId:v.id,payload:{reference:"OLD-1",material:1000,gst:180,loadingIncome:50,printedInvoice:{sqft:10,taxable:1000,igst:180,total:1180},lines:[{material:"Black",sqft:10,rate:100}],cashReceivable:0}}});return v;
+    });
+    assert.equal((await svc.ledgerSales(factory.id)).legacy.length,1);
+    const link={...input,reference:"OLD-1",partyName:"Earlier buyer",clientOpId:"link-earlier",legacyVoucherId:legacy.id};
+    await assert.rejects(()=>svc.create(asOwner,{...link,legacyVoucherId:undefined}),/Already recorded/);
+    const before=await prisma.voucher.count({where:{factoryId:factory.id}});
+    const linked=await svc.create(asOwner,link);
+    assert.equal(await prisma.voucher.count({where:{factoryId:factory.id}}),before,"linking must not post another voucher");
+    assert.equal((await prisma.voucher.findUniqueOrThrow({where:{id:legacy.id}})).sourceId,linked.id);
+    assert.equal((await svc.ledgerSales(factory.id)).legacy.length,0);
+    await assert.rejects(()=>svc.create(asOwner,{...link,clientOpId:"repeat-link"}),/already recorded/);
+    const foreign=await staffFactory("ledger-foreign");
+    assert.equal((await svc.ledgerSales(foreign.factory.id)).documents.length,0);
+  });
+
   after(async () => {
     await prisma?.$disconnect();
     await pg?.stop();

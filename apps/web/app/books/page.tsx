@@ -54,7 +54,7 @@ export default function BooksPage() {
         <div className="metric"><span className="hint">Net</span><b>{inr(data?.net ?? 0)}</b></div>
       </div>
       <p>
-        <Link href="/books/openings">Opening balances & settlements</Link> · <Link href="/books/trades">Local sales & raw purchases</Link> · <Link href="/books/rokad">Rokad / cash drawer</Link>
+        <Link href="/books/openings">Opening balances & settlements</Link> · <Link href="/books/trades">Local sales & raw purchases</Link> · <Link href="/books/ledger-sales">Manual ledger sales</Link> · <Link href="/books/rokad">Rokad / cash drawer</Link>
         {" "}· <Link href="/books/gst">GST</Link>
         {canImport ? <> · <Link href="/books/import">Khata import</Link> · <Link href="/tally">Tally archive</Link></> : null}
       </p>

@@ -21,6 +21,8 @@ export type CeoBriefInput = {
   slabsOnHand: number;
   /** Cash counter sales this month that carry no invoice and no GST document. */
   unbilledCashMtd?: number;
+  /** Historical ledger-sale revenue; no generated invoice is implied. */
+  ledgerSalesMtd?: number;
   /** Blocks whose recovery is still undecided. Drives RECOVERY_NOT_MEASURABLE. */
   openBlocks?: number;
   /** Blocks the recovery ratio is measured over. */
