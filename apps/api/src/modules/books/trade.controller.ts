@@ -10,6 +10,8 @@ export class TradeController {
   constructor(@Inject(TradeService) private service: TradeService) {}
   @Get() @Roles(...BOOKS_STATEMENT_ROLES)
   list(@CurrentUser() user: AuthenticatedUser) { return this.service.list(user.factoryId); }
+  @Get("ledger-sales") @Roles(...BOOKS_STATEMENT_ROLES)
+  ledgerSales(@CurrentUser() user: AuthenticatedUser) { return this.service.ledgerSales(user.factoryId); }
   @Get("accounts") @Roles(...BOOKS_STATEMENT_ROLES)
   accounts(@CurrentUser() user: AuthenticatedUser) { return this.service.funds(user.factoryId); }
   @Post() @Roles(...HISTORICAL_IMPORT_ROLES)

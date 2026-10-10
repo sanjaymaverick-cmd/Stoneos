@@ -105,7 +105,7 @@ export class AnalyticsService {
             include: { slabs: { include: { slab: true, rawBlock: true } } },
           }),
           tx.openingBalanceLine.findMany({ where: { kind: "DEBTOR", batch: { factoryId, status: "APPROVED" } }, include: { batch: true, settlements: true } }),
-          tx.tradeDocument.findMany({where:{factoryId,kind:"local_sale"},include:{settlements:true}}),
+          tx.tradeDocument.findMany({where:{factoryId,kind:{in:["local_sale","ledger_sale"]}},include:{settlements:true}}),
         ]);
         return {
           orders,
@@ -209,8 +209,8 @@ export class AnalyticsService {
       balances.push({ id: line.id, number: "Opening · " + line.ref, customerId: line.entityId!, customer: payload.name, invoiceDate: day(line.batch.effectiveDate), dueDate: null, promisedPaymentDate: null, note: payload.note ?? null, amountDue: rupees(due), daysOverdue: null, bucket: "Due date missing", source: addSource("opening:" + line.id, "Opening " + payload.name, "/books/openings") });
     }
     for (const t of data.trades.filter(t => day(t.occurredOn)<=to)) {
-      const due=minor(t.materialAmount)+minor(t.customerAdjustment)-t.settlements.filter(p=>day(p.occurredOn)<=to).reduce((n,p)=>n+minor(p.amount),0);
-      if(due>0) balances.push({id:t.id,number:t.reference,customerId:t.id,customer:t.partyName,invoiceDate:day(t.occurredOn),dueDate:null,promisedPaymentDate:null,note:(t.payload as {note?:string}).note??null,amountDue:rupees(due),daysOverdue:null,bucket:"Due date missing",source:addSource("trade:"+t.id,t.reference,"/books/trades")});
+      const due=minor(t.materialAmount)+minor(t.customerAdjustment)+minor(t.gstAmount)-t.settlements.filter(p=>day(p.occurredOn)<=to).reduce((n,p)=>n+minor(p.amount),0);
+      if(due>0) balances.push({id:t.id,number:t.reference,customerId:t.id,customer:t.partyName,invoiceDate:day(t.occurredOn),dueDate:null,promisedPaymentDate:null,note:(t.payload as {note?:string}).note??null,amountDue:rupees(due),daysOverdue:null,bucket:"Due date missing",source:addSource("trade:"+t.id,t.reference,t.kind==="ledger_sale"?"/books/ledger-sales":"/books/trades")});
     }
     const collections = {
       totalDue: balances.reduce((n, i) => n + minor(i.amountDue), 0) / 100,
@@ -258,7 +258,7 @@ export class AnalyticsService {
         : 0);
     const totalsFor = (start: string, end: string) => ({
       netSales:
-        (data.orders.reduce((n, o) => n + orderValue(o, start, end), 0) + data.trades.filter(t=>between(t.occurredOn,start,end)).reduce((n,t)=>n+minor(t.materialAmount),0)) / 100,
+        (data.orders.reduce((n, o) => n + orderValue(o, start, end), 0) + data.trades.filter(t=>between(t.occurredOn,start,end)).reduce((n,t)=>n+minor(t.materialAmount)+(t.kind==="ledger_sale"?minor(t.customerAdjustment):0),0)) / 100,
       collections:
         (data.trades.flatMap(t=>t.settlements).filter(p=>between(p.occurredOn,start,end)).reduce((n,p)=>n+minor(p.amount),0) + data.openingLines.flatMap(l => l.settlements).filter(p => between(p.paidAt, start, end)).reduce((n, p) => n + minor(p.amount), 0) + data.invoices
           .flatMap((i) => i.payments)
