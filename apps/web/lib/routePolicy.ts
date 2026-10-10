@@ -38,6 +38,7 @@ export const routes: Array<{
     nav: false,
   },
   { href: "/expenses", label: "Money", roles: money },
+  { href: "/books", label: "Books", roles: money },
   {
     href: "/parties",
     label: "Buyers & suppliers",
@@ -64,7 +65,6 @@ export const routes: Array<{
     },
     { href: "/admin/users", label: "Team", roles: owners },
     { href: "/admin/audit", label: "Audit", roles: money },
-    { href: "/books", label: "Archive", roles: money },
     { href: "/books/openings", label: "Opening balances", roles: money },
     { href: "/books/import", label: "Import", roles: owners },
     { href: "/muster/payroll", label: "Payroll", roles: owners },
